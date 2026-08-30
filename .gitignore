@@ -1,0 +1,13 @@
+# Go server
+server/server.exe
+server/data/
+*.db
+*.db-wal
+*.db-shm
+
+# Release artifacts
+dist/
+
+# OS
+Thumbs.db
+Desktop.ini

@@ -1,0 +1,249 @@
+package api
+
+import (
+	"database/sql"
+	"net/http"
+
+	"elixir/server/internal/domain"
+)
+
+type CaisseSession struct {
+	ID           string  `json:"id"`
+	UserID       string  `json:"user_id"`
+	UserName     string  `json:"user_name"`
+	Status       string  `json:"status"`
+	OpenedAt     string  `json:"opened_at"`
+	ClosedAt     *string `json:"closed_at"`
+	OpeningCash  int64   `json:"opening_cash"`
+	ExpectedCash *int64  `json:"expected_cash"`
+	CountedCash  *int64  `json:"counted_cash"`
+	Notes        *string `json:"notes"`
+}
+
+// CaisseReport is the X/Z content: what happened since opening.
+type CaisseReport struct {
+	OpeningCash int64 `json:"opening_cash"`
+	TicketCount int64 `json:"ticket_count"`
+	TotalSales  int64 `json:"total_sales"`
+	CashSales   int64 `json:"cash_sales"`
+	CardSales   int64 `json:"card_sales"`
+	CreditSales int64 `json:"credit_sales"`
+	OtherSales  int64 `json:"other_sales"`
+	CashIn      int64 `json:"cash_in"`  // encaissements espèces
+	CashOut     int64 `json:"cash_out"` // règlements espèces
+	ExpectedCash int64 `json:"expected_cash"`
+}
+
+const sessionCols = `cs.id, cs.user_id, COALESCE(u.full_name, u.username, ''), cs.status,
+	cs.opened_at, cs.closed_at, cs.opening_cash, cs.expected_cash, cs.counted_cash, cs.notes`
+
+func scanSession(row interface{ Scan(...any) error }) (CaisseSession, error) {
+	var c CaisseSession
+	err := row.Scan(&c.ID, &c.UserID, &c.UserName, &c.Status, &c.OpenedAt,
+		&c.ClosedAt, &c.OpeningCash, &c.ExpectedCash, &c.CountedCash, &c.Notes)
+	return c, err
+}
+
+func (s *Server) openSessionRow() (*CaisseSession, error) {
+	c, err := scanSession(s.db.QueryRow(`SELECT ` + sessionCols + `
+		FROM caisse_sessions cs LEFT JOIN users u ON u.id = cs.user_id
+		WHERE cs.status = 'open' ORDER BY cs.opened_at DESC LIMIT 1`))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+func (s *Server) caisseCurrent(w http.ResponseWriter, r *http.Request) {
+	if !s.can(r, "pos") {
+		forbid(w)
+		return
+	}
+	c, err := s.openSessionRow()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"session": c})
+}
+
+func (s *Server) caisseOpen(w http.ResponseWriter, r *http.Request) {
+	if !s.can(r, "pos") {
+		forbid(w)
+		return
+	}
+	var in struct {
+		OpeningCash int64 `json:"opening_cash"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if existing, err := s.openSessionRow(); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	} else if existing != nil {
+		writeErr(w, http.StatusConflict, "une session de caisse est déjà ouverte")
+		return
+	}
+	u := authFrom(r)
+	id, now := domain.NewID(), domain.NowISO()
+	if _, err := s.db.Exec(`INSERT INTO caisse_sessions
+		(id, user_id, status, opened_at, opening_cash) VALUES (?, ?, 'open', ?, ?)`,
+		id, u.ID, now, in.OpeningCash); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	c, err := s.openSessionRow()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"session": c})
+}
+
+// report computes cash and sales activity between two instants.
+func (s *Server) buildReport(openingCash int64, from string, to string) (*CaisseReport, error) {
+	rep := &CaisseReport{OpeningCash: openingCash}
+	rows, err := s.db.Query(`SELECT COALESCE(payment_method,''), COUNT(*), COALESCE(SUM(total_ttc),0)
+		FROM documents
+		WHERE status='posted' AND doc_type IN ('SALE_TICKET','SALE_INVOICE')
+		  AND posted_at >= ? AND posted_at <= ?
+		GROUP BY payment_method`, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var method string
+		var count, sum int64
+		if err := rows.Scan(&method, &count, &sum); err != nil {
+			return nil, err
+		}
+		rep.TicketCount += count
+		rep.TotalSales += sum
+		switch method {
+		case "cash":
+			rep.CashSales += sum
+		case "cib", "edahabia":
+			rep.CardSales += sum
+		case "credit":
+			rep.CreditSales += sum
+		default:
+			rep.OtherSales += sum
+		}
+	}
+
+	q := func(docType string) (int64, error) {
+		var v int64
+		err := s.db.QueryRow(`SELECT COALESCE(SUM(amount),0) FROM documents
+			WHERE status='posted' AND doc_type=? AND payment_method='cash'
+			  AND posted_at >= ? AND posted_at <= ?`, docType, from, to).Scan(&v)
+		return v, err
+	}
+	if rep.CashIn, err = q("PAYMENT_IN"); err != nil {
+		return nil, err
+	}
+	if rep.CashOut, err = q("PAYMENT_OUT"); err != nil {
+		return nil, err
+	}
+	rep.ExpectedCash = openingCash + rep.CashSales + rep.CashIn - rep.CashOut
+	return rep, nil
+}
+
+// caisseReport returns the X report of the currently open session.
+func (s *Server) caisseReport(w http.ResponseWriter, r *http.Request) {
+	if !s.can(r, "pos") {
+		forbid(w)
+		return
+	}
+	c, err := s.openSessionRow()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if c == nil {
+		writeErr(w, http.StatusConflict, "aucune session de caisse ouverte")
+		return
+	}
+	rep, err := s.buildReport(c.OpeningCash, c.OpenedAt, domain.NowISO())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"session": c, "report": rep})
+}
+
+func (s *Server) caisseClose(w http.ResponseWriter, r *http.Request) {
+	if !s.can(r, "pos") {
+		forbid(w)
+		return
+	}
+	var in struct {
+		CountedCash int64   `json:"counted_cash"`
+		Notes       *string `json:"notes"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	c, err := s.openSessionRow()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if c == nil {
+		writeErr(w, http.StatusConflict, "aucune session de caisse ouverte")
+		return
+	}
+	now := domain.NowISO()
+	rep, err := s.buildReport(c.OpeningCash, c.OpenedAt, now)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if _, err := s.db.Exec(`UPDATE caisse_sessions
+		SET status='closed', closed_at=?, expected_cash=?, counted_cash=?, notes=?
+		WHERE id=?`,
+		now, rep.ExpectedCash, in.CountedCash, in.Notes, c.ID); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	closed, err := scanSession(s.db.QueryRow(`SELECT `+sessionCols+`
+		FROM caisse_sessions cs LEFT JOIN users u ON u.id = cs.user_id
+		WHERE cs.id = ?`, c.ID))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"session": closed, "report": rep})
+}
+
+// caisseSessions lists past sessions (Z history).
+func (s *Server) caisseSessions(w http.ResponseWriter, r *http.Request) {
+	if !s.can(r, "pos") {
+		forbid(w)
+		return
+	}
+	rows, err := s.db.Query(`SELECT ` + sessionCols + `
+		FROM caisse_sessions cs LEFT JOIN users u ON u.id = cs.user_id
+		ORDER BY cs.opened_at DESC LIMIT 60`)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer rows.Close()
+	items := []CaisseSession{}
+	for rows.Next() {
+		c, err := scanSession(rows)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		items = append(items, c)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
