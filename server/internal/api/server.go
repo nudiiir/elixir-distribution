@@ -76,6 +76,8 @@ func New(db *sql.DB, dbPath string) http.Handler {
 
 		r.Get("/backups", s.listBackups)
 		r.Post("/backups/run", s.runBackupNow)
+
+		r.Get("/cloud/status", s.cloudStatus)
 	})
 	return r
 }

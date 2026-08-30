@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
+import '../api/cloud.dart';
 import '../api/models.dart';
 import '../theme/tokens.dart';
 
@@ -35,6 +36,27 @@ class _AssistantScreenState extends State<AssistantScreen> {
   final List<_Msg> _messages = [];
   bool _thinking = false;
 
+  /// When the shop is connected to the cloud we use stock-llm, which reasons
+  /// over the same data through the relay. Otherwise the built-in rule-based
+  /// assistant answers locally — the shop keeps working without internet.
+  CloudConfig? _cloud;
+  String _runningTool = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCloud();
+  }
+
+  Future<void> _loadCloud() async {
+    try {
+      final c = await widget.api.cloudStatus();
+      if (mounted) setState(() => _cloud = c);
+    } catch (_) {}
+  }
+
+  bool get _useCloud => _cloud?.llmReady == true && widget.api.token != null;
+
   static const _suggestions = [
     'Produits en rupture',
     "Ventes d'aujourd'hui",
@@ -59,8 +81,15 @@ class _AssistantScreenState extends State<AssistantScreen> {
     setState(() {
       _messages.add(_Msg.user(q));
       _thinking = true;
+      _runningTool = '';
     });
     _scrollDown();
+
+    if (_useCloud) {
+      await _sendCloud(q);
+      return;
+    }
+
     try {
       final answer = await _Brain(widget.api).answer(q);
       if (mounted) setState(() => _messages.add(answer));
@@ -71,6 +100,62 @@ class _AssistantScreenState extends State<AssistantScreen> {
       }
     } finally {
       if (mounted) setState(() => _thinking = false);
+      _scrollDown();
+      _focus.requestFocus();
+    }
+  }
+
+  /// Streams an answer from stock-llm, falling back to the local assistant if
+  /// the cloud is unreachable — a shop mid-sale should never hit a dead end.
+  Future<void> _sendCloud(String q) async {
+    final client = CloudClient(config: _cloud!, token: widget.api.token!);
+    final history = [
+      for (final m in _messages.where((m) => m.text.isNotEmpty))
+        (role: m.isUser ? 'user' : 'model', content: m.text)
+    ];
+    var streaming = false;
+    try {
+      await for (final (kind, value) in client.chat(history)) {
+        if (!mounted) return;
+        if (kind == 'tool') {
+          setState(() => _runningTool = value);
+          continue;
+        }
+        setState(() {
+          if (!streaming) {
+            _messages.add(_Msg.bot(value));
+            streaming = true;
+            _thinking = false;
+            _runningTool = '';
+          } else {
+            final last = _messages.removeLast();
+            _messages.add(_Msg.bot(last.text + value));
+          }
+        });
+        _scrollDown();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      if (!streaming) {
+        // Cloud unavailable — answer locally rather than failing.
+        try {
+          final answer = await _Brain(widget.api).answer(q);
+          if (mounted) setState(() => _messages.add(answer));
+        } catch (_) {
+          if (mounted) {
+            setState(() => _messages.add(_Msg.bot(
+                'Assistant indisponible : $e\nVérifiez la connexion internet du magasin.')));
+          }
+        }
+      }
+    } finally {
+      client.close();
+      if (mounted) {
+        setState(() {
+          _thinking = false;
+          _runningTool = '';
+        });
+      }
       _scrollDown();
       _focus.requestFocus();
     }
@@ -223,7 +308,9 @@ class _AssistantScreenState extends State<AssistantScreen> {
                   padding: const EdgeInsets.fromLTRB(0, 24, 0, 12),
                   itemCount: _messages.length + (_thinking ? 1 : 0),
                   itemBuilder: (context, i) {
-                    if (i == _messages.length) return const _TypingBubble();
+                    if (i == _messages.length) {
+                      return _TypingBubble(tool: _runningTool);
+                    }
                     return _Bubble(msg: _messages[i]);
                   },
                 ),
@@ -392,8 +479,22 @@ class _Bubble extends StatelessWidget {
   }
 }
 
+const _toolLabels = {
+  'search_products': 'Recherche des produits…',
+  'get_stock_summary': 'Analyse du stock…',
+  'get_low_stock': 'Vérification des ruptures…',
+  'get_stock_movements': 'Lecture des mouvements…',
+  'get_sales_summary': 'Calcul des ventes…',
+  'list_documents': 'Lecture des documents…',
+  'get_document_detail': 'Ouverture du document…',
+  'get_customer_credits': 'Lecture des crédits clients…',
+  'search_partners': 'Recherche du partenaire…',
+  'get_caisse_state': 'État de la caisse…',
+};
+
 class _TypingBubble extends StatefulWidget {
-  const _TypingBubble();
+  const _TypingBubble({this.tool = ''});
+  final String tool;
 
   @override
   State<_TypingBubble> createState() => _TypingBubbleState();
@@ -449,6 +550,11 @@ class _TypingBubbleState extends State<_TypingBubble>
                         shape: BoxShape.circle,
                       ),
                     ),
+                  if (widget.tool.isNotEmpty) ...[
+                    const SizedBox(width: 10),
+                    Text(_toolLabels[widget.tool] ?? 'Consultation…',
+                        style: T.small.copyWith(fontSize: 11.5)),
+                  ],
                 ],
               ),
             ),

@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -59,18 +60,33 @@ type reqMsg struct {
 	Key     string            `json:"key"`
 }
 
-// Run supervises the relay connection until ctx is cancelled. Safe to call in a
-// goroutine; it never returns while enabled unless ctx ends.
-func Run(ctx context.Context, cfg Config) {
-	if !cfg.Enabled || cfg.URL == "" || cfg.BindingID == "" {
-		return
-	}
+var connected atomic.Bool
+
+// Connected reports whether the tunnel is currently up (for the UI indicator).
+func Connected() bool { return connected.Load() }
+
+// Run supervises the relay connection until ctx is cancelled. The config is
+// re-read before every attempt, so enabling the relay in Paramètres connects
+// without restarting the Windows service.
+func Run(ctx context.Context, load func() Config) {
 	backoff := 2 * time.Second
 	for ctx.Err() == nil {
+		cfg := load()
+		if !cfg.Enabled || cfg.URL == "" || cfg.BindingID == "" {
+			// Not configured yet — idle cheaply and look again.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(10 * time.Second):
+			}
+			continue
+		}
+
 		started := time.Now()
 		if err := session(ctx, cfg); err != nil && ctx.Err() == nil {
 			log.Printf("relay: %v", err)
 		}
+		connected.Store(false)
 		if ctx.Err() != nil {
 			return
 		}
@@ -151,6 +167,7 @@ func session(ctx context.Context, cfg Config) error {
 		}
 		switch m.T {
 		case "ready":
+			connected.Store(true)
 			log.Printf("relay: ready (key=%s)", m.Key)
 		case "denied":
 			log.Printf("relay: server denied auth — check binding_id/token")

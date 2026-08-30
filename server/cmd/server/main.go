@@ -47,25 +47,33 @@ func (p *program) run() {
 	}
 	api.StartBackupScheduler(db, p.dbPath)
 
-	// Optional outbound relay: lets off-LAN clients (mobile app, LLM service)
+	// Optional outbound relay: lets off-LAN clients (mobile app, stock-llm)
 	// reach this server's API through relay.example.com/t/<sub>/*.
 	// The Authorization header is forwarded through, so this server's own auth
-	// stays the gate over the tunnel. Configured via env.
+	// stays the gate over the tunnel. Settings come from the database (editable
+	// in Paramètres); environment variables override them for development.
 	localPort := p.addr
 	if i := strings.LastIndex(localPort, ":"); i >= 0 {
 		localPort = "http://127.0.0.1" + localPort[i:]
 	}
-	relayCfg := relay.Config{
-		Enabled:   os.Getenv("RELAY_ENABLED") == "1",
-		URL:       os.Getenv("RELAY_URL"),
-		BindingID: os.Getenv("RELAY_BINDING_ID"),
-		Token:     os.Getenv("RELAY_TOKEN"),
-		LocalAddr: localPort,
+	pick := func(env, key string, cfg map[string]string) string {
+		if v := os.Getenv(env); v != "" {
+			return v
+		}
+		return cfg[key]
 	}
-	if relayCfg.Enabled {
-		go relay.Run(context.Background(), relayCfg)
-		log.Printf("relay client enabled → %s", relayCfg.URL)
+	loadRelay := func() relay.Config {
+		cfg := api.LoadCloudSettings(db)
+		return relay.Config{
+			Enabled:   pick("RELAY_ENABLED", "relay_enabled", cfg) == "1",
+			URL:       pick("RELAY_URL", "relay_url", cfg),
+			BindingID: pick("RELAY_BINDING_ID", "relay_binding_id", cfg),
+			Token:     pick("RELAY_TOKEN", "relay_token", cfg),
+			LocalAddr: localPort,
+		}
 	}
+	api.SetRelayStateFn(relay.Connected)
+	go relay.Run(context.Background(), loadRelay)
 
 	log.Printf("elixir server listening on %s (db=%s)", p.addr, p.dbPath)
 	if err := http.ListenAndServe(p.addr, api.New(db, p.dbPath)); err != nil {

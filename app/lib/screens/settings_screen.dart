@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
+import '../api/cloud.dart';
 import '../api/models.dart';
 import '../theme/tokens.dart';
 import '../util/config.dart';
@@ -17,6 +18,18 @@ const _companyFields = [
   ('company_nis', 'NIS'),
   ('company_rc', 'Registre de commerce (RC)'),
   ('company_ai', "Article d'imposition (AI)"),
+];
+
+/// Cloud wiring. These let the shop be reached from outside the LAN (mobile
+/// app, assistant, invoice scanning) — everything still works without them,
+/// the shop simply stays local-only.
+const _cloudFields = [
+  ('relay_url', 'Adresse du relais (wss://…/agent-ws)'),
+  ('relay_subdomain', 'Identifiant du magasin'),
+  ('relay_binding_id', 'Binding ID'),
+  ('relay_token', 'Jeton du relais'),
+  ('llm_url', "Service assistant (https://…)"),
+  ('invoice_url', 'Service factures (https://…)'),
 ];
 
 class SettingsScreen extends StatefulWidget {
@@ -36,7 +49,12 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   final Map<String, TextEditingController> _ctrls = {
     for (final (key, _) in _companyFields) key: TextEditingController(),
+    for (final (key, _) in _cloudFields) key: TextEditingController(),
   };
+  bool _relayEnabled = false;
+  bool _cloudBusy = false;
+  String? _cloudMsg;
+  CloudConfig? _cloudStatus;
   final _newWarehouse = TextEditingController();
   List<Warehouse> _warehouses = const [];
   List<User> _users = const [];
@@ -128,10 +146,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
           for (final (key, _) in _companyFields) {
             _ctrls[key]!.text = settings[key] ?? '';
           }
+          for (final (key, _) in _cloudFields) {
+            _ctrls[key]!.text = settings[key] ?? '';
+          }
+          _relayEnabled = settings['relay_enabled'] == '1';
           _warehouses = results[1] as List<Warehouse>;
         });
       }
     } catch (_) {}
+    _refreshCloudStatus();
+  }
+
+  Future<void> _refreshCloudStatus() async {
+    try {
+      final st = await widget.api.cloudStatus();
+      if (mounted) setState(() => _cloudStatus = st);
+    } catch (_) {}
+  }
+
+  Future<void> _saveCloud() async {
+    setState(() {
+      _cloudBusy = true;
+      _cloudMsg = null;
+    });
+    try {
+      await widget.api.saveSettings({
+        for (final (key, _) in _cloudFields) key: _ctrls[key]!.text.trim(),
+        'relay_enabled': _relayEnabled ? '1' : '0',
+      });
+      setState(() => _cloudMsg =
+          'Enregistré. La connexion au relais s’établit dans quelques secondes.');
+    } on ApiException catch (e) {
+      setState(() => _cloudMsg = e.message);
+    } finally {
+      if (mounted) setState(() => _cloudBusy = false);
+      // Give the server a moment to pick up the new settings, then re-check.
+      await Future<void>.delayed(const Duration(seconds: 3));
+      _refreshCloudStatus();
+    }
   }
 
   Future<void> _save() async {
@@ -317,6 +369,113 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ]),
                           ),
                         ),
+                    ],
+                  ),
+                ),
+              ],
+              if (_isAdmin) ...[
+                const SizedBox(height: 14),
+                // ---- Cloud services ----
+                Card14(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(children: [
+                        const Expanded(child: MicroLabel('Services cloud')),
+                        if (_cloudStatus != null)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 9, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: _cloudStatus!.relayConnected
+                                  ? T.mintTint
+                                  : T.cream,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Row(mainAxisSize: MainAxisSize.min, children: [
+                              Container(
+                                width: 7,
+                                height: 7,
+                                decoration: BoxDecoration(
+                                  color: _cloudStatus!.relayConnected
+                                      ? T.mint
+                                      : T.ghost,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 7),
+                              Text(
+                                  _cloudStatus!.relayConnected
+                                      ? 'Relais connecté'
+                                      : _relayEnabled
+                                          ? 'Connexion…'
+                                          : 'Hors ligne',
+                                  style: T.label.copyWith(
+                                      fontSize: 9.5,
+                                      color: _cloudStatus!.relayConnected
+                                          ? T.mintDark
+                                          : T.faint)),
+                            ]),
+                          ),
+                      ]),
+                      const SizedBox(height: 4),
+                      Text(
+                          'Permet au téléphone et à l’assistant d’atteindre ce '
+                          'magasin depuis l’extérieur. Le magasin fonctionne '
+                          'normalement sans ces réglages.',
+                          style: T.bodyMuted),
+                      const SizedBox(height: 12),
+                      InkWell(
+                        onTap: () =>
+                            setState(() => _relayEnabled = !_relayEnabled),
+                        child: Row(children: [
+                          Icon(
+                              _relayEnabled
+                                  ? Icons.toggle_on
+                                  : Icons.toggle_off_outlined,
+                              size: 28,
+                              color: _relayEnabled ? T.mintDeep : T.ghost),
+                          const SizedBox(width: 8),
+                          Text(
+                              _relayEnabled
+                                  ? 'Accès à distance activé'
+                                  : 'Accès à distance désactivé',
+                              style: T.body),
+                        ]),
+                      ),
+                      const SizedBox(height: 12),
+                      for (var i = 0; i < _cloudFields.length; i += 2)
+                        Row(children: [
+                          Expanded(
+                              child: _SettingField(
+                                  label: _cloudFields[i].$2,
+                                  controller: _ctrls[_cloudFields[i].$1]!)),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: i + 1 < _cloudFields.length
+                                ? _SettingField(
+                                    label: _cloudFields[i + 1].$2,
+                                    controller:
+                                        _ctrls[_cloudFields[i + 1].$1]!)
+                                : const SizedBox(),
+                          ),
+                        ]),
+                      Row(children: [
+                        if (_cloudMsg != null)
+                          Expanded(
+                            child: Text(_cloudMsg!,
+                                style: T.small.copyWith(color: T.mintDark)),
+                          )
+                        else
+                          const Spacer(),
+                        SizedBox(
+                          width: 150,
+                          child: PrimaryButton(
+                            label: _cloudBusy ? '…' : 'Enregistrer',
+                            onPressed: _cloudBusy ? null : _saveCloud,
+                          ),
+                        ),
+                      ]),
                     ],
                   ),
                 ),

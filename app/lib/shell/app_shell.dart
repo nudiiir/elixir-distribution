@@ -6,6 +6,7 @@ import '../api/client.dart';
 import '../api/models.dart';
 import '../screens/assistant_screen.dart';
 import '../screens/dashboard_screen.dart';
+import '../screens/inbox_screen.dart';
 import '../screens/partners_screen.dart';
 import '../screens/pos_screen.dart';
 import '../screens/products_screen.dart';
@@ -18,8 +19,10 @@ import '../util/config.dart';
 import '../widgets/ui.dart';
 
 class _Module {
-  const _Module(this.key, this.icon, this.title, {this.enabled = true});
-  final String key; // permission key ('' = always visible)
+  const _Module(this.key, this.icon, this.title, {this.enabled = true, String? perm})
+      : perm = perm ?? key;
+  final String key; // which screen to build
+  final String perm; // permission that reveals it (defaults to key)
   final IconData icon;
   final String title;
   final bool enabled;
@@ -30,6 +33,8 @@ const _allModules = [
   _Module('pos', Icons.point_of_sale_rounded, 'Caisse'),
   _Module('sales', Icons.receipt_long_outlined, 'Ventes'),
   _Module('purchases', Icons.local_shipping_outlined, 'Achats'),
+  _Module('inbox', Icons.document_scanner_outlined, 'Factures scannées',
+      perm: 'purchases'),
   _Module('stock', Icons.inventory_2_outlined, 'Stock'),
   _Module('products', Icons.category_outlined, 'Produits'),
   _Module('partners', Icons.people_alt_outlined, 'Partenaires'),
@@ -68,7 +73,7 @@ class _AppShellState extends State<AppShell> {
 
   late final List<_Module> _visible = [
     for (final m in _allModules)
-      if (m.key == 'delivery' || user.can(m.key)) m,
+      if (m.key == 'delivery' || user.can(m.perm)) m,
   ];
 
   @override
@@ -125,6 +130,7 @@ class _AppShellState extends State<AppShell> {
                 user.fullName.isEmpty ? user.username : user.fullName),
         'sales' => SalesScreen(api: widget.api),
         'purchases' => PurchasesScreen(api: widget.api),
+        'inbox' => InboxScreen(api: widget.api),
         'stock' => StockScreen(api: widget.api, session: widget.session),
         'products' => ProductsScreen(
             api: widget.api,

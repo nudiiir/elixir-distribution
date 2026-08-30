@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'cloud.dart';
 import 'models.dart';
 
 class ApiException implements Exception {
@@ -201,6 +202,10 @@ class ApiClient {
     });
     return postDocument(draft.id);
   }
+
+  /// Cloud service configuration, as the server knows it.
+  Future<CloudConfig> cloudStatus() async =>
+      CloudConfig.fromJson(await _get('/api/v1/cloud/status'));
 
   Future<Map<String, String>> settings() async {
     final j = await _get('/api/v1/settings') as Map<String, dynamic>;
