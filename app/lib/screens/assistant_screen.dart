@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -12,10 +14,26 @@ class _Msg {
       : isUser = true,
         rows = const [];
   _Msg.bot(this.text, {this.rows = const []}) : isUser = false;
+  _Msg._(this.isUser, this.text, this.rows);
 
   final bool isUser;
   final String text;
   final List<(String, String)> rows;
+
+  Map<String, dynamic> toJson() => {
+        'u': isUser,
+        't': text,
+        'r': [for (final (l, v) in rows) [l, v]],
+      };
+
+  static _Msg fromJson(Map<String, dynamic> j) => _Msg._(
+        j['u'] == true,
+        (j['t'] as String?) ?? '',
+        [
+          for (final e in (j['r'] as List? ?? const []))
+            ((e as List)[0].toString(), e[1].toString())
+        ],
+      );
 }
 
 /// L'assistant Elixir — styled after the phone app's Elixir AI screen:
@@ -46,6 +64,47 @@ class _AssistantScreenState extends State<AssistantScreen> {
   void initState() {
     super.initState();
     _loadCloud();
+    _loadHistory();
+  }
+
+  // ---- History: the conversation survives an app restart. ----
+
+  static File _historyFile() {
+    final appData = Platform.environment['APPDATA'] ?? '.';
+    return File('$appData\\ElixirGestion\\assistant_history.json');
+  }
+
+  Future<void> _loadHistory() async {
+    try {
+      final f = _historyFile();
+      if (!await f.exists()) return;
+      final list = jsonDecode(await f.readAsString()) as List;
+      if (!mounted) return;
+      setState(() {
+        _messages
+          ..clear()
+          ..addAll(list.map((e) => _Msg.fromJson(e as Map<String, dynamic>)));
+      });
+      _scrollDown();
+    } catch (_) {}
+  }
+
+  Future<void> _saveHistory() async {
+    try {
+      final f = _historyFile();
+      await f.parent.create(recursive: true);
+      // Keep the file bounded: the last 200 messages are plenty of context.
+      final tail = _messages.length > 200
+          ? _messages.sublist(_messages.length - 200)
+          : _messages;
+      await f.writeAsString(jsonEncode([for (final m in tail) m.toJson()]));
+    } catch (_) {}
+  }
+
+  void _newConversation() {
+    setState(() => _messages.clear());
+    _saveHistory();
+    _focus.requestFocus();
   }
 
   Future<void> _loadCloud() async {
@@ -100,6 +159,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
       }
     } finally {
       if (mounted) setState(() => _thinking = false);
+      _saveHistory();
       _scrollDown();
       _focus.requestFocus();
     }
@@ -156,6 +216,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
           _runningTool = '';
         });
       }
+      _saveHistory();
       _scrollDown();
       _focus.requestFocus();
     }
@@ -378,6 +439,35 @@ class _AssistantScreenState extends State<AssistantScreen> {
         else
           const SizedBox(height: 10),
       ]),
+      // New-conversation chip, floating over the transcript.
+      if (!empty)
+        PositionedDirectional(
+          top: 10,
+          end: 16,
+          child: InkWell(
+            onTap: _thinking ? null : _newConversation,
+            borderRadius: BorderRadius.circular(999),
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: T.border),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.add_comment_outlined,
+                    size: 14, color: T.mintDark),
+                const SizedBox(width: 6),
+                Text('Nouvelle conversation',
+                    style: T.small.copyWith(
+                        fontSize: 11,
+                        color: T.mintDark,
+                        fontWeight: FontWeight.w700)),
+              ]),
+            ),
+          ),
+        ),
     ]);
   }
 }

@@ -32,9 +32,25 @@ List<String> listPrinters() {
   return names;
 }
 
+/// Virtual printers (PDF/XPS/OneNote/Fax) cannot interpret raw ESC/POS —
+/// they wrap the bytes into a corrupted file. Only real hardware qualifies.
+bool isVirtualPrinter(String name) {
+  final n = name.toLowerCase();
+  return n.contains('pdf') ||
+      n.contains('xps') ||
+      n.contains('onenote') ||
+      n.contains('fax');
+}
+
 /// Sends raw bytes (ESC/POS) straight to a Windows printer queue.
 /// Throws with a readable message on failure.
 Future<void> rawPrint(String printerName, List<int> bytes) async {
+  if (isVirtualPrinter(printerName)) {
+    throw Exception(
+        '« $printerName » est une imprimante virtuelle — elle ne peut pas '
+        'imprimer un ticket thermique. Choisissez l’imprimante à tickets dans '
+        'Paramètres, ou utilisez le bouton PDF du document.');
+  }
   final hPrinter = calloc<HANDLE>();
   final name = printerName.toNativeUtf16();
   try {

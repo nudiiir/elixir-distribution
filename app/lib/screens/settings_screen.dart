@@ -371,7 +371,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                         Text('Aucune — pas d’impression')),
                                 for (final p in _printers)
                                   DropdownMenuItem<String?>(
-                                      value: p, child: Text(p)),
+                                    value: p,
+                                    enabled: !isVirtualPrinter(p),
+                                    child: Text(
+                                      isVirtualPrinter(p)
+                                          ? '$p — virtuelle, incompatible'
+                                          : p,
+                                      style: isVirtualPrinter(p)
+                                          ? T.bodyMuted
+                                              .copyWith(color: T.ghost)
+                                          : null,
+                                    ),
+                                  ),
                               ],
                               onChanged: (v) async {
                                 widget.config.ticketPrinter = v;

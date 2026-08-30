@@ -191,7 +191,7 @@ class _PosScreenState extends State<PosScreen> {
     if (q.trim().isEmpty) return;
     try {
       final items = await widget.api.products(q: q.trim(), limit: 5);
-      final exact = items.where((p) => p.barcode == q.trim()).toList();
+      final exact = items.where((p) => p.matchesBarcode(q.trim())).toList();
       final pick = exact.isNotEmpty
           ? exact.first
           : (items.length == 1 ? items.first : null);
@@ -309,6 +309,21 @@ class _PosScreenState extends State<PosScreen> {
     }
     if (!mounted) return;
 
+    // Gift card: validate + debit BEFORE posting; refund if the post fails.
+    String? giftUseId;
+    if (_paymentMethod == 'gift') {
+      final use = await showDialog<String>(
+        context: context,
+        builder: (_) => _GiftRedeemDialog(api: widget.api, total: _totalTTC),
+      );
+      if (use == null) {
+        _searchFocus.requestFocus();
+        return;
+      }
+      giftUseId = use;
+    }
+    if (!mounted) return;
+
     int? received;
     if (_paymentMethod == 'cash') {
       received = await showDialog<int>(
@@ -320,15 +335,16 @@ class _PosScreenState extends State<PosScreen> {
         return; // cancelled
       }
     }
-    await _checkout(received: received);
+    await _checkout(received: received, giftUseId: giftUseId);
   }
 
-  Future<void> _checkout({int? received}) async {
+  Future<void> _checkout({int? received, String? giftUseId}) async {
     setState(() => _checkingOut = true);
     try {
       final posted = await widget.api.checkoutTicket(
         warehouseId: _warehouseId!,
-        paymentMethod: _paymentMethod,
+        // A gift-card sale is not cash in the drawer: no method, no timbre.
+        paymentMethod: _paymentMethod == 'gift' ? null : _paymentMethod,
         partnerId: _client?.id,
         caisseSessionId: _session?.id,
         lines: [
@@ -354,6 +370,12 @@ class _PosScreenState extends State<PosScreen> {
       _printTicket(posted, received: received, change: change);
       await _showSuccess(posted, change);
     } on ApiException catch (e) {
+      // The card was debited but the sale never posted — give the money back.
+      if (giftUseId != null) {
+        try {
+          await widget.api.refundGiftCardUse(giftUseId);
+        } catch (_) {}
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         backgroundColor: T.danger,
@@ -514,6 +536,17 @@ class _PosScreenState extends State<PosScreen> {
                     ]),
                   ),
                   const SizedBox(width: 6),
+                  Tooltip(
+                    message: 'Vendre une carte cadeau',
+                    child: IconButton(
+                      onPressed: () => showDialog<void>(
+                        context: context,
+                        builder: (_) => _GiftSellDialog(api: widget.api),
+                      ).then((_) => _searchFocus.requestFocus()),
+                      icon: const Icon(Icons.card_giftcard,
+                          size: 17, color: T.muted),
+                    ),
+                  ),
                   Tooltip(
                     message: 'Rapport X (état de caisse)',
                     child: IconButton(
@@ -751,14 +784,14 @@ class _PosScreenState extends State<PosScreen> {
                           selected: _paymentMethod == 'cash',
                           onTap: () =>
                               setState(() => _paymentMethod = 'cash')),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
                       _PayChoice(
                           label: 'CIB',
                           icon: Icons.credit_card,
                           selected: _paymentMethod == 'cib',
                           onTap: () =>
                               setState(() => _paymentMethod = 'cib')),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
                       _PayChoice(
                           label: 'Crédit',
                           icon: Icons.menu_book_outlined,
@@ -767,6 +800,13 @@ class _PosScreenState extends State<PosScreen> {
                             setState(() => _paymentMethod = 'credit');
                             if (_client == null) _pickClient();
                           }),
+                      const SizedBox(width: 6),
+                      _PayChoice(
+                          label: 'Cadeau',
+                          icon: Icons.card_giftcard,
+                          selected: _paymentMethod == 'gift',
+                          onTap: () =>
+                              setState(() => _paymentMethod = 'gift')),
                     ]),
                     const SizedBox(height: 12),
                     SizedBox(
@@ -884,6 +924,10 @@ class _ProductTileState extends State<_ProductTile> {
                   ),
                 ),
                 const Spacer(),
+                if (p.promoActive) ...[
+                  const MintChip('promo', color: T.warnTint, fg: T.warnDark),
+                  const SizedBox(width: 4),
+                ],
                 if (out)
                   const MintChip('rupture',
                       color: T.dangerTint, fg: T.dangerDark)
@@ -902,11 +946,24 @@ class _ProductTileState extends State<_ProductTile> {
                       height: 1.2,
                       color: T.ink)),
               const SizedBox(height: 4),
-              Text(fmtDA(p.priceRetail),
-                  style: T.monoBody.copyWith(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: T.mintDark)),
+              Row(children: [
+                Text(fmtDA(p.effectivePriceTTC),
+                    style: T.monoBody.copyWith(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: p.promoActive ? T.warnDark : T.mintDark)),
+                if (p.promoActive) ...[
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(fmtDA(p.priceRetail),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: T.monoSmall.copyWith(
+                            fontSize: 10,
+                            decoration: TextDecoration.lineThrough)),
+                  ),
+                ],
+              ]),
             ],
           ),
         ),
@@ -976,7 +1033,8 @@ class _CartRowState extends State<_CartRow> {
                         color: T.ink)),
                 const SizedBox(height: 2),
                 Text(
-                    '${fmtDA(line.product.priceRetail)} × ${fmtQty(line.qtyMilli)}',
+                    '${fmtDA(line.product.effectivePriceTTC)} × ${fmtQty(line.qtyMilli)}'
+                    '${line.product.promoActive ? '  · promo' : ''}',
                     style: T.monoSmall.copyWith(fontSize: 10.5)),
               ],
             ),
@@ -1555,6 +1613,338 @@ class _ZSummaryDialog extends StatelessWidget {
                 label: 'OK',
                 onPressed: () => Navigator.of(context).pop(),
               ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ================= Gift card dialogs =================
+
+/// Sell a card: pick the amount, the server mints the code, the cashier
+/// collects the money and hands the code to the customer.
+class _GiftSellDialog extends StatefulWidget {
+  const _GiftSellDialog({required this.api});
+  final ApiClient api;
+
+  @override
+  State<_GiftSellDialog> createState() => _GiftSellDialogState();
+}
+
+class _GiftSellDialogState extends State<_GiftSellDialog> {
+  final _amount = TextEditingController();
+  GiftCard? _created;
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _amount.dispose();
+    super.dispose();
+  }
+
+  Future<void> _sell() async {
+    final cents = parseDA(_amount.text);
+    if (cents == null || cents <= 0) {
+      setState(() => _error = 'Montant invalide.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final card = await widget.api.createGiftCard(cents);
+      if (mounted) setState(() => _created = card);
+    } on ApiException catch (e) {
+      setState(() => _error = e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final card = _created;
+    return Dialog(
+      backgroundColor: T.surface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      child: SizedBox(
+        width: 380,
+        child: Padding(
+          padding: const EdgeInsets.all(22),
+          child: card != null
+              ? Column(mainAxisSize: MainAxisSize.min, children: [
+                  Container(
+                    width: 54,
+                    height: 54,
+                    decoration: const BoxDecoration(
+                        color: T.mintTint2, shape: BoxShape.circle),
+                    child: const Icon(Icons.card_giftcard,
+                        size: 26, color: T.mintDark),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(fmtDA(card.initialAmount),
+                      style: const TextStyle(
+                          fontFamily: T.sans,
+                          fontSize: 24,
+                          fontWeight: FontWeight.w800,
+                          color: T.ink)),
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: T.bg,
+                      borderRadius: BorderRadius.circular(T.rInner),
+                      border: Border.all(color: T.border),
+                    ),
+                    child: Text(card.code,
+                        style: const TextStyle(
+                            fontFamily: T.mono,
+                            fontSize: 19,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 2,
+                            color: T.ink)),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                      'Encaissez ${fmtDA(card.initialAmount)} et remettez ce '
+                      'code au client. Notez-le : il ne sera plus affiché.',
+                      textAlign: TextAlign.center,
+                      style: T.small),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: 140,
+                    child: PrimaryButton(
+                        label: 'Terminer',
+                        onPressed: () => Navigator.of(context).pop()),
+                  ),
+                ])
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const MicroLabel('Vendre une carte cadeau'),
+                    const SizedBox(height: 14),
+                    const MicroLabel('Montant (DA)'),
+                    const SizedBox(height: 6),
+                    Container(
+                      height: 54,
+                      decoration: BoxDecoration(
+                        color: T.bg,
+                        borderRadius: BorderRadius.circular(T.rInner),
+                        border: Border.all(color: T.border),
+                      ),
+                      child: TextField(
+                        controller: _amount,
+                        autofocus: true,
+                        textAlign: TextAlign.center,
+                        style: T.monoBig.copyWith(fontSize: 22),
+                        onSubmitted: (_) => _sell(),
+                        decoration: InputDecoration(
+                          border: InputBorder.none,
+                          hintText: '0,00',
+                          hintStyle: T.monoBig
+                              .copyWith(fontSize: 22, color: T.ghost),
+                          contentPadding:
+                              const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                      ),
+                    ),
+                    if (_error != null) ...[
+                      const SizedBox(height: 8),
+                      Text(_error!,
+                          style: T.small.copyWith(color: T.dangerDark)),
+                    ],
+                    const SizedBox(height: 16),
+                    Row(children: [
+                      Expanded(
+                        child: TextButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          child: Text('Annuler',
+                              style: T.small.copyWith(color: T.muted)),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        flex: 2,
+                        child: PrimaryButton(
+                          label: _busy ? '…' : 'Créer la carte',
+                          big: true,
+                          onPressed: _busy ? null : _sell,
+                        ),
+                      ),
+                    ]),
+                  ],
+                ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Redeem at checkout: enter the code, see the balance, debit the total.
+/// Pops with the use id on success (so a failed post can be refunded).
+class _GiftRedeemDialog extends StatefulWidget {
+  const _GiftRedeemDialog({required this.api, required this.total});
+  final ApiClient api;
+  final int total;
+
+  @override
+  State<_GiftRedeemDialog> createState() => _GiftRedeemDialogState();
+}
+
+class _GiftRedeemDialogState extends State<_GiftRedeemDialog> {
+  final _code = TextEditingController();
+  GiftCard? _card;
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _code.dispose();
+    super.dispose();
+  }
+
+  Future<void> _check() async {
+    if (_code.text.trim().isEmpty) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final card = await widget.api.giftCard(_code.text.trim());
+      if (!mounted) return;
+      setState(() => _card = card);
+      if (!card.usable) {
+        _error = 'Carte ${card.status == 'depleted' ? 'épuisée' : card.status}.';
+      } else if (card.balance < widget.total) {
+        _error =
+            'Solde insuffisant : ${fmtDA(card.balance)} pour un ticket de ${fmtDA(widget.total)}.';
+      }
+      setState(() {});
+    } on ApiException catch (e) {
+      setState(() {
+        _card = null;
+        _error = e.message;
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _redeem() async {
+    final card = _card;
+    if (card == null || !card.usable || card.balance < widget.total) return;
+    setState(() => _busy = true);
+    try {
+      final (useId, _) =
+          await widget.api.redeemGiftCard(card.code, widget.total);
+      if (mounted) Navigator.of(context).pop(useId);
+    } on ApiException catch (e) {
+      setState(() {
+        _error = e.message;
+        _busy = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final card = _card;
+    final ok = card != null && card.usable && card.balance >= widget.total;
+    return Dialog(
+      backgroundColor: T.surface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      child: SizedBox(
+        width: 380,
+        child: Padding(
+          padding: const EdgeInsets.all(22),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(children: [
+                const Icon(Icons.card_giftcard, size: 18, color: T.mintDeep),
+                const SizedBox(width: 8),
+                const Expanded(child: MicroLabel('Payer par carte cadeau')),
+                Text(fmtDA(widget.total),
+                    style: T.monoBody.copyWith(fontWeight: FontWeight.w600)),
+              ]),
+              const SizedBox(height: 14),
+              const MicroLabel('Code de la carte'),
+              const SizedBox(height: 6),
+              Container(
+                height: 50,
+                decoration: BoxDecoration(
+                  color: T.bg,
+                  borderRadius: BorderRadius.circular(T.rInner),
+                  border: Border.all(color: T.border),
+                ),
+                child: TextField(
+                  controller: _code,
+                  autofocus: true,
+                  textAlign: TextAlign.center,
+                  textCapitalization: TextCapitalization.characters,
+                  style: T.monoBody.copyWith(fontSize: 16, letterSpacing: 2),
+                  onSubmitted: (_) => _check(),
+                  decoration: InputDecoration(
+                    border: InputBorder.none,
+                    hintText: 'XXXX-XXXX-XXXX',
+                    hintStyle: T.monoSmall.copyWith(color: T.ghost),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 13),
+                  ),
+                ),
+              ),
+              if (card != null && ok) ...[
+                const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: T.mintTint,
+                    borderRadius: BorderRadius.circular(T.rInner),
+                  ),
+                  child: Row(children: [
+                    Expanded(
+                        child: Text('Solde disponible',
+                            style: T.bodyMuted.copyWith(fontSize: 12.5))),
+                    Text(fmtDA(card.balance),
+                        style: T.monoBody.copyWith(
+                            color: T.mintDark, fontWeight: FontWeight.w700)),
+                  ]),
+                ),
+              ],
+              if (_error != null) ...[
+                const SizedBox(height: 8),
+                Text(_error!, style: T.small.copyWith(color: T.dangerDark)),
+              ],
+              const SizedBox(height: 16),
+              Row(children: [
+                Expanded(
+                  child: TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: Text('Annuler',
+                        style: T.small.copyWith(color: T.muted)),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  flex: 2,
+                  child: PrimaryButton(
+                    label: _busy
+                        ? '…'
+                        : ok
+                            ? 'Débiter ${fmtDA(widget.total)}'
+                            : 'Vérifier la carte',
+                    big: true,
+                    onPressed: _busy ? null : (ok ? _redeem : _check),
+                  ),
+                ),
+              ]),
             ],
           ),
         ),

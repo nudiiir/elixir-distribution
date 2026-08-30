@@ -237,9 +237,10 @@ class ApiClient {
   }
 
   /// Creates a draft sale ticket and posts it. Returns the full posted document.
+  /// [paymentMethod] null = paid by gift card (not cash in the drawer).
   Future<DocDetail> checkoutTicket({
     required String warehouseId,
-    required String paymentMethod,
+    required String? paymentMethod,
     required List<Map<String, dynamic>> lines,
     String? partnerId,
     String? caisseSessionId,
@@ -255,6 +256,34 @@ class ApiClient {
     });
     final posted = await _post('/api/v1/documents/${draft['id']}/post');
     return DocDetail.fromJson(posted);
+  }
+
+  // ---- Gift cards ----
+
+  Future<GiftCard> createGiftCard(int amount,
+      {String? expiresAt, String? notes}) async {
+    return GiftCard.fromJson(await _post('/api/v1/gift-cards', {
+      'amount': amount,
+      'expires_at': expiresAt,
+      'notes': notes,
+    }));
+  }
+
+  Future<GiftCard> giftCard(String code) async =>
+      GiftCard.fromJson(await _get('/api/v1/gift-cards/code/$code'));
+
+  /// Debits the card; returns (useId, newBalance).
+  Future<(String, int)> redeemGiftCard(String code, int amount,
+      {String? documentId}) async {
+    final j = await _post('/api/v1/gift-cards/code/$code/redeem', {
+      'amount': amount,
+      'document_id': documentId,
+    });
+    return (j['use_id'] as String, (j['balance'] as num).toInt());
+  }
+
+  Future<void> refundGiftCardUse(String useId) async {
+    await _post('/api/v1/gift-card-uses/$useId/refund');
   }
 
   // ---- Caisse sessions ----

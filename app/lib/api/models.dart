@@ -45,6 +45,12 @@ class Product {
   final int priceRetail; // centimes TTC
   final int minStockMilli;
   final bool active;
+  final int? promoPrice; // centimes TTC, active between promoStart/promoEnd
+  final String? promoStart; // YYYY-MM-DD inclusive
+  final String? promoEnd; // YYYY-MM-DD inclusive
+  final String? parentProductId;
+  final String? variantLabel;
+  final List<String> barcodes; // additional barcodes
 
   Product.fromJson(Map<String, dynamic> j)
       : id = j['id'] as String,
@@ -57,11 +63,39 @@ class Product {
         purchasePrice = (j['purchase_price'] as num?)?.toInt() ?? 0,
         priceRetail = (j['price_retail'] as num?)?.toInt() ?? 0,
         minStockMilli = (j['min_stock_milli'] as num?)?.toInt() ?? 0,
-        active = j['active'] == true;
+        active = j['active'] == true,
+        promoPrice = (j['promo_price'] as num?)?.toInt(),
+        promoStart = j['promo_start'] as String?,
+        promoEnd = j['promo_end'] as String?,
+        parentProductId = j['parent_product_id'] as String?,
+        variantLabel = j['variant_label'] as String?,
+        barcodes = [
+          for (final b in (j['barcodes'] as List? ?? const [])) b.toString()
+        ];
 
-  /// Unit price HT in centimes, derived from the TTC retail price.
+  /// Is the promotion running today?
+  bool get promoActive {
+    if (promoPrice == null || promoPrice! <= 0) return false;
+    final today = DateTime.now().toIso8601String().substring(0, 10);
+    if (promoStart != null && promoStart!.isNotEmpty && today.compareTo(promoStart!) < 0) {
+      return false;
+    }
+    if (promoEnd != null && promoEnd!.isNotEmpty && today.compareTo(promoEnd!) > 0) {
+      return false;
+    }
+    return true;
+  }
+
+  /// What the customer pays today (TTC centimes).
+  int get effectivePriceTTC => promoActive ? promoPrice! : priceRetail;
+
+  /// Unit price HT in centimes, derived from today's effective TTC price.
   int get unitPriceHT =>
-      ((priceRetail * 10000) + (10000 + vatRate) ~/ 2) ~/ (10000 + vatRate);
+      ((effectivePriceTTC * 10000) + (10000 + vatRate) ~/ 2) ~/
+      (10000 + vatRate);
+
+  bool matchesBarcode(String code) =>
+      barcode == code || barcodes.contains(code);
 }
 
 class StockLevel {
@@ -274,6 +308,25 @@ class BackupInfo {
       : name = j['name'] as String,
         sizeBytes = (j['size_bytes'] as num?)?.toInt() ?? 0,
         modTime = (j['mod_time'] as String?) ?? '';
+}
+
+class GiftCard {
+  final String id;
+  final String code;
+  final int initialAmount;
+  final int balance;
+  final String status; // active | depleted | cancelled | expired
+  final String? expiresAt;
+
+  GiftCard.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as String,
+        code = j['code'] as String,
+        initialAmount = (j['initial_amount'] as num?)?.toInt() ?? 0,
+        balance = (j['balance'] as num?)?.toInt() ?? 0,
+        status = (j['status'] as String?) ?? 'active',
+        expiresAt = j['expires_at'] as String?;
+
+  bool get usable => status == 'active' && balance > 0;
 }
 
 class StockMovement {

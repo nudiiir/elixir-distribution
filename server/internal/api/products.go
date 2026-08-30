@@ -12,37 +12,90 @@ import (
 )
 
 type Product struct {
-	ID             string  `json:"id"`
-	Barcode        *string `json:"barcode"`
-	SKU            *string `json:"sku"`
-	Name           string  `json:"name"`
-	NameAr         *string `json:"name_ar"`
-	CategoryID     *string `json:"category_id"`
-	Unit           string  `json:"unit"`
-	IsWeighable    bool    `json:"is_weighable"`
-	VatRate        int64   `json:"vat_rate"`
-	PurchasePrice  int64   `json:"purchase_price"`
-	PriceRetail    int64   `json:"price_retail"`
-	PriceWholesale *int64  `json:"price_wholesale"`
-	MinStockMilli  int64   `json:"min_stock_milli"`
-	TrackLots      bool    `json:"track_lots"`
-	Active         bool    `json:"active"`
-	CreatedAt      string  `json:"created_at"`
-	UpdatedAt      string  `json:"updated_at"`
+	ID              string   `json:"id"`
+	Barcode         *string  `json:"barcode"`
+	SKU             *string  `json:"sku"`
+	Name            string   `json:"name"`
+	NameAr          *string  `json:"name_ar"`
+	CategoryID      *string  `json:"category_id"`
+	Unit            string   `json:"unit"`
+	IsWeighable     bool     `json:"is_weighable"`
+	VatRate         int64    `json:"vat_rate"`
+	PurchasePrice   int64    `json:"purchase_price"`
+	PriceRetail     int64    `json:"price_retail"`
+	PriceWholesale  *int64   `json:"price_wholesale"`
+	MinStockMilli   int64    `json:"min_stock_milli"`
+	TrackLots       bool     `json:"track_lots"`
+	Active          bool     `json:"active"`
+	PromoPrice      *int64   `json:"promo_price"`
+	PromoStart      *string  `json:"promo_start"`
+	PromoEnd        *string  `json:"promo_end"`
+	ParentProductID *string  `json:"parent_product_id"`
+	VariantLabel    *string  `json:"variant_label"`
+	Barcodes        []string `json:"barcodes"`
+	CreatedAt       string   `json:"created_at"`
+	UpdatedAt       string   `json:"updated_at"`
 }
 
 const productCols = `id, barcode, sku, name, name_ar, category_id, unit, is_weighable,
 	vat_rate, purchase_price, price_retail, price_wholesale, min_stock_milli, track_lots,
-	active, created_at, updated_at`
+	active, promo_price, promo_start, promo_end, parent_product_id, variant_label,
+	created_at, updated_at`
 
 func scanProduct(row interface{ Scan(...any) error }) (Product, error) {
 	var p Product
 	var weighable, trackLots, active int
 	err := row.Scan(&p.ID, &p.Barcode, &p.SKU, &p.Name, &p.NameAr, &p.CategoryID, &p.Unit,
 		&weighable, &p.VatRate, &p.PurchasePrice, &p.PriceRetail, &p.PriceWholesale,
-		&p.MinStockMilli, &trackLots, &active, &p.CreatedAt, &p.UpdatedAt)
+		&p.MinStockMilli, &trackLots, &active,
+		&p.PromoPrice, &p.PromoStart, &p.PromoEnd, &p.ParentProductID, &p.VariantLabel,
+		&p.CreatedAt, &p.UpdatedAt)
 	p.IsWeighable, p.TrackLots, p.Active = weighable == 1, trackLots == 1, active == 1
+	p.Barcodes = []string{}
 	return p, err
+}
+
+// loadExtraBarcodes fills p.Barcodes for a batch of products in one query.
+func (s *Server) loadExtraBarcodes(items []Product) {
+	if len(items) == 0 {
+		return
+	}
+	byID := map[string]*Product{}
+	for i := range items {
+		byID[items[i].ID] = &items[i]
+	}
+	rows, err := s.db.Query(`SELECT product_id, barcode FROM product_barcodes`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var pid, bc string
+		if rows.Scan(&pid, &bc) == nil {
+			if p, ok := byID[pid]; ok {
+				p.Barcodes = append(p.Barcodes, bc)
+			}
+		}
+	}
+}
+
+// saveExtraBarcodes replaces a product's additional barcodes.
+func (s *Server) saveExtraBarcodes(productID string, barcodes []string) error {
+	if _, err := s.db.Exec(`DELETE FROM product_barcodes WHERE product_id = ?`, productID); err != nil {
+		return err
+	}
+	now := domain.NowISO()
+	for _, bc := range barcodes {
+		bc = strings.TrimSpace(bc)
+		if bc == "" {
+			continue
+		}
+		if _, err := s.db.Exec(`INSERT OR IGNORE INTO product_barcodes (barcode, product_id, created_at)
+			VALUES (?, ?, ?)`, bc, productID, now); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // redactCost blanks purchase pricing for users without the view_cost right.
@@ -66,9 +119,10 @@ func (s *Server) listProducts(w http.ResponseWriter, r *http.Request) {
 		where = "WHERE 1=1"
 	}
 	if q != "" {
-		where += " AND (name LIKE ? OR name_ar LIKE ? OR barcode = ? OR sku = ?)"
+		where += ` AND (name LIKE ? OR name_ar LIKE ? OR barcode = ? OR sku = ?
+			OR id IN (SELECT product_id FROM product_barcodes WHERE barcode = ?))`
 		like := "%" + q + "%"
-		args = append(args, like, like, q, q)
+		args = append(args, like, like, q, q, q)
 	}
 	args = append(args, limit, offset)
 
@@ -89,24 +143,31 @@ func (s *Server) listProducts(w http.ResponseWriter, r *http.Request) {
 		s.redactCost(r, &p)
 		items = append(items, p)
 	}
+	s.loadExtraBarcodes(items)
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 type productInput struct {
-	Barcode        *string `json:"barcode"`
-	SKU            *string `json:"sku"`
-	Name           string  `json:"name"`
-	NameAr         *string `json:"name_ar"`
-	CategoryID     *string `json:"category_id"`
-	Unit           string  `json:"unit"`
-	IsWeighable    bool    `json:"is_weighable"`
-	VatRate        int64   `json:"vat_rate"`
-	PurchasePrice  int64   `json:"purchase_price"`
-	PriceRetail    int64   `json:"price_retail"`
-	PriceWholesale *int64  `json:"price_wholesale"`
-	MinStockMilli  int64   `json:"min_stock_milli"`
-	TrackLots      bool    `json:"track_lots"`
-	Active         *bool   `json:"active"`
+	Barcode         *string  `json:"barcode"`
+	SKU             *string  `json:"sku"`
+	Name            string   `json:"name"`
+	NameAr          *string  `json:"name_ar"`
+	CategoryID      *string  `json:"category_id"`
+	Unit            string   `json:"unit"`
+	IsWeighable     bool     `json:"is_weighable"`
+	VatRate         int64    `json:"vat_rate"`
+	PurchasePrice   int64    `json:"purchase_price"`
+	PriceRetail     int64    `json:"price_retail"`
+	PriceWholesale  *int64   `json:"price_wholesale"`
+	MinStockMilli   int64    `json:"min_stock_milli"`
+	TrackLots       bool     `json:"track_lots"`
+	Active          *bool    `json:"active"`
+	PromoPrice      *int64   `json:"promo_price"`
+	PromoStart      *string  `json:"promo_start"`
+	PromoEnd        *string  `json:"promo_end"`
+	ParentProductID *string  `json:"parent_product_id"`
+	VariantLabel    *string  `json:"variant_label"`
+	Barcodes        []string `json:"barcodes"`
 }
 
 func (in *productInput) normalize() {
@@ -140,14 +201,20 @@ func (s *Server) createProduct(w http.ResponseWriter, r *http.Request) {
 	}
 	_, err := s.db.Exec(`INSERT INTO products (id, barcode, sku, name, name_ar, category_id, unit,
 			is_weighable, vat_rate, purchase_price, price_retail, price_wholesale, min_stock_milli,
-			track_lots, active, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			track_lots, active, promo_price, promo_start, promo_end,
+			parent_product_id, variant_label, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, in.Barcode, in.SKU, in.Name, in.NameAr, in.CategoryID, in.Unit,
 		b2i(in.IsWeighable), in.VatRate, in.PurchasePrice, in.PriceRetail, in.PriceWholesale,
-		in.MinStockMilli, b2i(in.TrackLots), b2i(active), now, now)
+		in.MinStockMilli, b2i(in.TrackLots), b2i(active),
+		in.PromoPrice, in.PromoStart, in.PromoEnd, in.ParentProductID, in.VariantLabel,
+		now, now)
 	if err != nil {
 		writeErr(w, http.StatusConflict, err.Error())
 		return
+	}
+	if in.Barcodes != nil {
+		s.saveExtraBarcodes(id, in.Barcodes)
 	}
 	s.getByID(w, r, id)
 }
@@ -167,7 +234,9 @@ func (s *Server) getByID(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	s.redactCost(r, &p)
-	writeJSON(w, http.StatusOK, p)
+	batch := []Product{p}
+	s.loadExtraBarcodes(batch)
+	writeJSON(w, http.StatusOK, batch[0])
 }
 
 func (s *Server) updateProduct(w http.ResponseWriter, r *http.Request) {
@@ -198,11 +267,15 @@ func (s *Server) updateProduct(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := s.db.Exec(`UPDATE products SET barcode=?, sku=?, name=?, name_ar=?, category_id=?,
 			unit=?, is_weighable=?, vat_rate=?, purchase_price=?, price_retail=?, price_wholesale=?,
-			min_stock_milli=?, track_lots=?, active=?, updated_at=?
+			min_stock_milli=?, track_lots=?, active=?,
+			promo_price=?, promo_start=?, promo_end=?, parent_product_id=?, variant_label=?,
+			updated_at=?
 		WHERE id=?`,
 		in.Barcode, in.SKU, in.Name, in.NameAr, in.CategoryID, in.Unit,
 		b2i(in.IsWeighable), in.VatRate, in.PurchasePrice, in.PriceRetail, in.PriceWholesale,
-		in.MinStockMilli, b2i(in.TrackLots), b2i(active), domain.NowISO(), id)
+		in.MinStockMilli, b2i(in.TrackLots), b2i(active),
+		in.PromoPrice, in.PromoStart, in.PromoEnd, in.ParentProductID, in.VariantLabel,
+		domain.NowISO(), id)
 	if err != nil {
 		writeErr(w, http.StatusConflict, err.Error())
 		return
@@ -210,6 +283,9 @@ func (s *Server) updateProduct(w http.ResponseWriter, r *http.Request) {
 	if n, _ := res.RowsAffected(); n == 0 {
 		writeErr(w, http.StatusNotFound, "product not found")
 		return
+	}
+	if in.Barcodes != nil {
+		s.saveExtraBarcodes(id, in.Barcodes)
 	}
 	s.getByID(w, r, id)
 }

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:intl/date_symbol_data_local.dart';
+import 'package:window_manager/window_manager.dart';
 
 import 'api/client.dart';
 import 'api/models.dart';
@@ -15,6 +16,21 @@ import 'util/config.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await initializeDateFormatting('fr');
+
+  // Frameless: the app draws its own top bar, no Windows chrome.
+  await windowManager.ensureInitialized();
+  const options = WindowOptions(
+    size: Size(1280, 820),
+    minimumSize: Size(1000, 640),
+    center: true,
+    titleBarStyle: TitleBarStyle.hidden,
+    title: 'Elixir Gestion',
+  );
+  windowManager.waitUntilReadyToShow(options, () async {
+    await windowManager.show();
+    await windowManager.focus();
+  });
+
   runApp(const ElixirApp());
 }
 

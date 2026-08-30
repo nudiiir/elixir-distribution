@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
@@ -241,33 +242,39 @@ class _TopBar extends StatelessWidget {
     return Container(
       height: 62,
       color: T.surface,
-      padding: const EdgeInsetsDirectional.only(start: 18, end: 18),
+      padding: const EdgeInsetsDirectional.only(start: 18, end: 8),
       child: Row(
         children: [
-          Container(
-            width: 32,
-            height: 32,
-            decoration: BoxDecoration(
-              color: T.ink,
-              borderRadius: BorderRadius.circular(9),
-            ),
-            alignment: Alignment.center,
-            child: const Text('E',
-                style: TextStyle(
-                    fontFamily: T.sans,
-                    fontSize: 17,
-                    fontWeight: FontWeight.w800,
-                    color: Colors.white)),
+          // The wordmark doubles as the window drag handle now that the
+          // native title bar is gone.
+          DragToMoveArea(
+            child: Row(children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: T.ink,
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                alignment: Alignment.center,
+                child: const Text('E',
+                    style: TextStyle(
+                        fontFamily: T.sans,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white)),
+              ),
+              const SizedBox(width: 9),
+              const Text('ELIXIR',
+                  style: TextStyle(
+                      fontFamily: T.sans,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 2.4,
+                      color: T.ink)),
+              const SizedBox(width: 30),
+            ]),
           ),
-          const SizedBox(width: 9),
-          const Text('ELIXIR',
-              style: TextStyle(
-                  fontFamily: T.sans,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 2.4,
-                  color: T.ink)),
-          const SizedBox(width: 14),
           IconButton(
             onPressed: onBurger,
             tooltip: collapsed ? 'Développer le menu' : 'Réduire le menu',
@@ -300,7 +307,8 @@ class _TopBar extends StatelessWidget {
                 ),
               ),
             ),
-          const Spacer(),
+          // The empty middle drags the window too.
+          const Expanded(child: DragToMoveArea(child: SizedBox.expand())),
           Tooltip(
             message: online ? 'Serveur connecté' : 'Serveur hors ligne',
             child: Stack(children: [
@@ -379,7 +387,75 @@ class _TopBar extends StatelessWidget {
               const Icon(Icons.expand_more, size: 18, color: T.faint),
             ]),
           ),
+          const SizedBox(width: 10),
+          // Window controls — we own the chrome now.
+          _WinBtn(
+            icon: Icons.remove,
+            tooltip: 'Réduire',
+            onTap: () => windowManager.minimize(),
+          ),
+          _WinBtn(
+            icon: Icons.crop_square,
+            tooltip: 'Agrandir',
+            onTap: () async {
+              if (await windowManager.isMaximized()) {
+                await windowManager.unmaximize();
+              } else {
+                await windowManager.maximize();
+              }
+            },
+          ),
+          _WinBtn(
+            icon: Icons.close,
+            tooltip: 'Fermer',
+            danger: true,
+            onTap: () => windowManager.close(),
+          ),
         ],
+      ),
+    );
+  }
+}
+
+class _WinBtn extends StatefulWidget {
+  const _WinBtn({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+    this.danger = false,
+  });
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+  final bool danger;
+
+  @override
+  State<_WinBtn> createState() => _WinBtnState();
+}
+
+class _WinBtnState extends State<_WinBtn> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: widget.tooltip,
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: Container(
+            width: 40,
+            height: 62,
+            color: _hover
+                ? (widget.danger ? T.danger : T.bg)
+                : Colors.transparent,
+            child: Icon(widget.icon,
+                size: 16,
+                color: _hover && widget.danger ? Colors.white : T.muted),
+          ),
+        ),
       ),
     );
   }

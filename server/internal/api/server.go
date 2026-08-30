@@ -79,6 +79,13 @@ func New(db *sql.DB, dbPath string) http.Handler {
 		r.Get("/backups", s.listBackups)
 		r.Post("/backups/run", s.runBackupNow)
 
+		r.Get("/gift-cards", s.listGiftCards)
+		r.Post("/gift-cards", s.createGiftCard)
+		r.Get("/gift-cards/code/{code}", s.getGiftCard)
+		r.Post("/gift-cards/code/{code}/redeem", s.redeemGiftCard)
+		r.Post("/gift-card-uses/{id}/refund", s.refundGiftCardUse)
+		r.Post("/gift-cards/{id}/cancel", s.cancelGiftCard)
+
 		r.Get("/cloud/status", s.cloudStatus)
 		r.Post("/cloud/connect", s.cloudConnect)
 		r.Post("/cloud/disconnect", s.cloudDisconnect)

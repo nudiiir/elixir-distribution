@@ -14,6 +14,7 @@ const _titles = {
   'DELIVERY_NOTE': 'BON DE LIVRAISON',
   'SALE_CREDIT_NOTE': 'AVOIR',
   'PURCHASE_ORDER': 'BON DE COMMANDE',
+  'SALE_TICKET': 'TICKET', // rendered as an 80mm roll, not A4
 };
 
 bool canPdf(String docType) => _titles.containsKey(docType);
@@ -41,6 +42,14 @@ Future<String> openDocumentPdf({
   final body = pw.TextStyle(font: sans, fontSize: 9.5, color: ink);
   final small = pw.TextStyle(font: sans, fontSize: 8.5, color: muted);
   final monoS = pw.TextStyle(font: mono, fontSize: 9, color: ink);
+
+  // Tickets get a receipt-shaped page, not an A4 facture.
+  if (doc.docType == 'SALE_TICKET') {
+    return _saveAndOpen(
+        _buildTicketPdf(
+            company: company, doc: doc, sans: sans, sansBold: sansBold, mono: mono),
+        doc);
+  }
 
   pw.Widget totalRow(String label, String value, {bool big = false}) =>
       pw.Padding(
@@ -240,6 +249,10 @@ Future<String> openDocumentPdf({
     ],
   ));
 
+  return _saveAndOpen(pdf, doc);
+}
+
+Future<String> _saveAndOpen(pw.Document pdf, DocDetail doc) async {
   final home = Platform.environment['USERPROFILE'] ?? '.';
   final dir = Directory('$home\\Documents\\Elixir\\documents');
   await dir.create(recursive: true);
@@ -250,3 +263,92 @@ Future<String> openDocumentPdf({
   await Process.run('cmd', ['/c', 'start', '', file.path]);
   return file.path;
 }
+
+/// 80mm receipt PDF — for reprints, sharing, or shops without a thermal
+/// printer. Mirrors the ESC/POS layout.
+pw.Document _buildTicketPdf({
+  required Map<String, String> company,
+  required DocDetail doc,
+  required pw.Font sans,
+  required pw.Font sansBold,
+  required pw.Font mono,
+}) {
+  const ink = PdfColor.fromInt(0xFF0F1113);
+  const muted = PdfColor.fromInt(0xFF5D6462);
+  final body = pw.TextStyle(font: sans, fontSize: 8, color: ink);
+  final monoS = pw.TextStyle(font: mono, fontSize: 8, color: ink);
+  final tiny = pw.TextStyle(font: sans, fontSize: 7, color: muted);
+
+  pw.Widget row(String l, String r, {bool bold = false, double size = 8}) =>
+      pw.Padding(
+        padding: const pw.EdgeInsets.symmetric(vertical: 1),
+        child: pw.Row(
+          mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+          children: [
+            pw.Text(l,
+                style: pw.TextStyle(
+                    font: bold ? sansBold : sans, fontSize: size, color: ink)),
+            pw.Text(r,
+                style: pw.TextStyle(font: mono, fontSize: size, color: ink)),
+          ],
+        ),
+      );
+
+  pw.Widget divider() => pw.Padding(
+        padding: const pw.EdgeInsets.symmetric(vertical: 3),
+        child: pw.Container(
+            height: 0.7, color: const PdfColor.fromInt(0xFFB0B5B2)),
+      );
+
+  final pdf = pw.Document();
+  pdf.addPage(pw.Page(
+    pageFormat: PdfPageFormat.roll80,
+    margin: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+    build: (context) => pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+      children: [
+        pw.Center(
+          child: pw.Text(
+              company['company_name']?.isNotEmpty == true
+                  ? company['company_name']!
+                  : 'ELIXIR',
+              style: pw.TextStyle(font: sansBold, fontSize: 11, color: ink)),
+        ),
+        if ((company['company_address'] ?? '').isNotEmpty)
+          pw.Center(child: pw.Text(company['company_address']!, style: tiny)),
+        if ((company['company_phone'] ?? '').isNotEmpty)
+          pw.Center(
+              child: pw.Text('Tél : ${company['company_phone']}', style: tiny)),
+        if ((company['company_nif'] ?? '').isNotEmpty)
+          pw.Center(
+              child: pw.Text('NIF : ${company['company_nif']}', style: tiny)),
+        divider(),
+        row(doc.number ?? '', doc.docDate),
+        divider(),
+        for (final l in doc.lines) ...[
+          pw.Text(l.description, style: body),
+          row('  ${fmtQty(l.qtyMilli)} x ${fmtDA(_unitTTC(l)).replaceAll(' DA', '')}',
+              fmtDA(l.lineTTC).replaceAll(' DA', '')),
+        ],
+        divider(),
+        row('Sous-total HT', fmtDA(doc.totalHT).replaceAll(' DA', '')),
+        row('TVA', fmtDA(doc.totalVAT).replaceAll(' DA', '')),
+        if (doc.timbre > 0)
+          row('Timbre fiscal', fmtDA(doc.timbre).replaceAll(' DA', '')),
+        pw.SizedBox(height: 2),
+        row('TOTAL', fmtDA(doc.totalTTC), bold: true, size: 11),
+        divider(),
+        pw.Center(
+            child: pw.Text('Merci de votre visite !',
+                style: pw.TextStyle(font: sans, fontSize: 8, color: ink))),
+        pw.SizedBox(height: 4),
+        pw.Center(
+            child: pw.Text(doc.id.substring(0, 8), style: monoS)),
+      ],
+    ),
+  ));
+  return pdf;
+}
+
+int _unitTTC(DocLine l) =>
+    l.qtyMilli == 0 ? 0 : (l.lineTTC * 1000 + l.qtyMilli ~/ 2) ~/ l.qtyMilli;

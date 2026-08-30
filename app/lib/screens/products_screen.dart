@@ -249,6 +249,8 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
       TextEditingController(text: widget.existing?.nameAr ?? '');
   late final _barcode =
       TextEditingController(text: widget.existing?.barcode ?? '');
+  late final _extraBarcodes = TextEditingController(
+      text: widget.existing?.barcodes.join(', ') ?? '');
   late final _purchase = TextEditingController(
       text: widget.existing == null
           ? ''
@@ -260,17 +262,76 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
       text: widget.existing == null || widget.existing!.minStockMilli == 0
           ? ''
           : fmtQty(widget.existing!.minStockMilli));
+  late final _promoPrice = TextEditingController(
+      text: widget.existing?.promoPrice == null
+          ? ''
+          : editDA(widget.existing!.promoPrice!));
   late int _vat = widget.existing?.vatRate ?? 1900;
   late bool _weighable = widget.existing?.isWeighable ?? false;
+  late String? _promoStart = widget.existing?.promoStart;
+  late String? _promoEnd = widget.existing?.promoEnd;
+  List<Product> _variants = const [];
   bool _busy = false;
   String? _error;
 
   @override
+  void initState() {
+    super.initState();
+    _loadVariants();
+  }
+
+  Future<void> _loadVariants() async {
+    final parent = widget.existing;
+    if (parent == null || parent.parentProductId != null) return;
+    try {
+      final all = await widget.api.products(limit: 500);
+      if (mounted) {
+        setState(() => _variants =
+            all.where((p) => p.parentProductId == parent.id).toList());
+      }
+    } catch (_) {}
+  }
+
+  @override
   void dispose() {
-    for (final c in [_name, _nameAr, _barcode, _purchase, _retail, _minStock]) {
+    for (final c in [
+      _name, _nameAr, _barcode, _extraBarcodes, _purchase, _retail,
+      _minStock, _promoPrice
+    ]) {
       c.dispose();
     }
     super.dispose();
+  }
+
+  Future<void> _pickPromoDate(bool start) async {
+    final current = start ? _promoStart : _promoEnd;
+    final d = await showDatePicker(
+      context: context,
+      initialDate: DateTime.tryParse(current ?? '') ?? DateTime.now(),
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (d != null) {
+      final iso =
+          '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+      setState(() {
+        if (start) {
+          _promoStart = iso;
+        } else {
+          _promoEnd = iso;
+        }
+      });
+    }
+  }
+
+  Future<void> _addVariant() async {
+    final parent = widget.existing;
+    if (parent == null) return;
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => _VariantDialog(api: widget.api, parent: parent),
+    );
+    if (saved == true) _loadVariants();
   }
 
   Future<void> _save() async {
@@ -283,16 +344,26 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
       _error = null;
     });
     try {
+      final promo = parseDA(_promoPrice.text);
       await widget.api.saveProduct({
         'name': _name.text.trim(),
         'name_ar': _nameAr.text.trim().isEmpty ? null : _nameAr.text.trim(),
         'barcode': _barcode.text.trim().isEmpty ? null : _barcode.text.trim(),
+        'barcodes': [
+          for (final b in _extraBarcodes.text.split(RegExp(r'[,;\s]+')))
+            if (b.trim().isNotEmpty) b.trim()
+        ],
         'vat_rate': _vat,
         'purchase_price': parseDA(_purchase.text) ?? 0,
         'price_retail': parseDA(_retail.text) ?? 0,
         'min_stock_milli': parseQty(_minStock.text) ?? 0,
         'is_weighable': _weighable,
         'unit': _weighable ? 'kg' : 'piece',
+        'promo_price': (promo != null && promo > 0) ? promo : null,
+        'promo_start': (promo != null && promo > 0) ? _promoStart : null,
+        'promo_end': (promo != null && promo > 0) ? _promoEnd : null,
+        'parent_product_id': widget.existing?.parentProductId,
+        'variant_label': widget.existing?.variantLabel,
       }, id: widget.existing?.id);
       if (mounted) Navigator.of(context).pop(true);
     } on ApiException catch (e) {
@@ -309,8 +380,9 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
       shape:
           RoundedRectangleBorder(borderRadius: BorderRadius.circular(T.rCard)),
       child: SizedBox(
-        width: 540,
-        child: Padding(
+        width: 560,
+        child: SingleChildScrollView(
+          child: Padding(
           padding: const EdgeInsets.all(20),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -321,6 +393,12 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
                       ? 'Nouveau produit'
                       : widget.existing!.name,
                   style: T.h2),
+              if (widget.existing?.variantLabel != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: MintChip('variante · ${widget.existing!.variantLabel}',
+                      color: T.mintTint, fg: T.mintDark),
+                ),
               const SizedBox(height: 16),
               _Field(label: 'Désignation', controller: _name),
               Row(children: [
@@ -399,6 +477,67 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
                   Text('Produit au poids (kg)', style: T.bodyMuted),
                 ]),
               ),
+              const SizedBox(height: 12),
+              _Field(
+                  label:
+                      'Codes-barres supplémentaires (séparés par des virgules)',
+                  controller: _extraBarcodes,
+                  mono: true),
+              // ---- Promotion ----
+              const Divider(height: 20),
+              const MicroLabel('Promotion'),
+              const SizedBox(height: 8),
+              Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                Expanded(
+                    child: _Field(
+                        label: 'Prix promo TTC (DA) — vide = pas de promo',
+                        controller: _promoPrice,
+                        mono: true)),
+                const SizedBox(width: 10),
+                _PromoDateBtn(
+                    label: 'Du',
+                    value: _promoStart,
+                    onTap: () => _pickPromoDate(true)),
+                const SizedBox(width: 8),
+                _PromoDateBtn(
+                    label: 'Au',
+                    value: _promoEnd,
+                    onTap: () => _pickPromoDate(false)),
+              ]),
+              // ---- Variants (only on a parent product being edited) ----
+              if (widget.existing != null &&
+                  widget.existing!.parentProductId == null) ...[
+                const Divider(height: 20),
+                Row(children: [
+                  const Expanded(child: MicroLabel('Variantes')),
+                  TextButton.icon(
+                    onPressed: _addVariant,
+                    icon: const Icon(Icons.add, size: 14, color: T.mintDark),
+                    label: Text('Ajouter une variante',
+                        style: T.small.copyWith(
+                            color: T.mintDark, fontWeight: FontWeight.w700)),
+                  ),
+                ]),
+                if (_variants.isEmpty)
+                  Text(
+                      'Aucune variante — ex. « 2L », « Rouge », chacune avec '
+                      'son prix et son code-barres.',
+                      style: T.small)
+                else
+                  for (final v in _variants)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 5),
+                      child: Row(children: [
+                        const Icon(Icons.subdirectory_arrow_right,
+                            size: 14, color: T.faint),
+                        const SizedBox(width: 8),
+                        Expanded(
+                            child: Text(v.variantLabel ?? v.name,
+                                style: T.body.copyWith(fontSize: 12.5))),
+                        Text(fmtDA(v.priceRetail), style: T.monoSmall),
+                      ]),
+                    ),
+              ],
               if (_error != null) ...[
                 const SizedBox(height: 8),
                 Text(_error!, style: T.small.copyWith(color: T.dangerDark)),
@@ -416,6 +555,155 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
                   width: 140,
                   child: PrimaryButton(
                     label: _busy ? '…' : 'Enregistrer',
+                    onPressed: _busy ? null : _save,
+                  ),
+                ),
+              ]),
+            ],
+          ),
+        ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PromoDateBtn extends StatelessWidget {
+  const _PromoDateBtn(
+      {required this.label, required this.value, required this.onTap});
+  final String label;
+  final String? value;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(T.rInner),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: T.bg,
+          borderRadius: BorderRadius.circular(T.rInner),
+          border: Border.all(color: T.border),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          MicroLabel(label),
+          const SizedBox(height: 2),
+          Text(value ?? '—', style: T.monoBody.copyWith(fontSize: 11.5)),
+        ]),
+      ),
+    );
+  }
+}
+
+/// Creates a sibling product linked to [parent] — its own price, barcode and
+/// stock, sold as a normal product at the POS.
+class _VariantDialog extends StatefulWidget {
+  const _VariantDialog({required this.api, required this.parent});
+  final ApiClient api;
+  final Product parent;
+
+  @override
+  State<_VariantDialog> createState() => _VariantDialogState();
+}
+
+class _VariantDialogState extends State<_VariantDialog> {
+  final _label = TextEditingController();
+  final _price = TextEditingController();
+  final _purchase = TextEditingController();
+  final _bc = TextEditingController();
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    for (final c in [_label, _price, _purchase, _bc]) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final label = _label.text.trim();
+    final price = parseDA(_price.text);
+    if (label.isEmpty || price == null || price <= 0) {
+      setState(() => _error = 'Libellé et prix de vente obligatoires.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final p = widget.parent;
+      await widget.api.saveProduct({
+        'name': '${p.name} — $label',
+        'barcode': _bc.text.trim().isEmpty ? null : _bc.text.trim(),
+        'vat_rate': p.vatRate,
+        'purchase_price': parseDA(_purchase.text) ?? 0,
+        'price_retail': price,
+        'min_stock_milli': 0,
+        'is_weighable': p.isWeighable,
+        'unit': p.unit,
+        'parent_product_id': p.id,
+        'variant_label': label,
+      });
+      if (mounted) Navigator.of(context).pop(true);
+    } on ApiException catch (e) {
+      setState(() => _error = e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: T.surface,
+      shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(T.rCard)),
+      child: SizedBox(
+        width: 420,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Variante de ${widget.parent.name}', style: T.h2),
+              const SizedBox(height: 14),
+              _Field(label: 'Libellé (ex. 2L, Rouge, XL)', controller: _label),
+              Row(children: [
+                Expanded(
+                    child: _Field(
+                        label: 'Prix de vente TTC (DA)',
+                        controller: _price,
+                        mono: true)),
+                const SizedBox(width: 10),
+                Expanded(
+                    child: _Field(
+                        label: "Prix d'achat HT (DA)",
+                        controller: _purchase,
+                        mono: true)),
+              ]),
+              _Field(label: 'Code-barres', controller: _bc, mono: true),
+              if (_error != null)
+                Text(_error!, style: T.small.copyWith(color: T.dangerDark)),
+              const SizedBox(height: 14),
+              Row(children: [
+                const Spacer(),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child:
+                      Text('Fermer', style: T.small.copyWith(color: T.muted)),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 130,
+                  child: PrimaryButton(
+                    label: _busy ? '…' : 'Créer',
                     onPressed: _busy ? null : _save,
                   ),
                 ),

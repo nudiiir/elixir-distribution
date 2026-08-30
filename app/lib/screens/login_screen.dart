@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
@@ -62,6 +63,24 @@ class _LoginScreenState extends State<LoginScreen> {
     return Scaffold(
       backgroundColor: T.bg,
       body: Stack(children: [
+        // Frameless window: the top edge drags, and a close button sits in
+        // the corner.
+        const Positioned(
+          top: 0,
+          left: 0,
+          right: 48,
+          height: 44,
+          child: DragToMoveArea(child: SizedBox.expand()),
+        ),
+        PositionedDirectional(
+          top: 8,
+          end: 8,
+          child: IconButton(
+            onPressed: () => windowManager.close(),
+            tooltip: 'Fermer',
+            icon: const Icon(Icons.close, size: 18, color: T.faint),
+          ),
+        ),
         // Soft mint glow at the bottom, echoes the brand.
         Positioned(
           left: 0,
