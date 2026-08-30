@@ -233,19 +233,58 @@ class _ScanDetailDialog extends StatefulWidget {
   State<_ScanDetailDialog> createState() => _ScanDetailDialogState();
 }
 
+/// One editable row of the scan: designation, quantity, cost and the
+/// catalogue product it will feed. Everything the OCR read can be corrected
+/// here before the réception exists.
+class _EditLine {
+  _EditLine(ScannedLine l)
+      : designation = TextEditingController(text: l.designation),
+        qty = TextEditingController(text: fmtQty(l.qtyMilli)),
+        price = TextEditingController(text: editDA(l.unitPriceCentimes)),
+        lot = l.lot,
+        expiry = l.expiry,
+        barcode = l.barcode;
+
+  final TextEditingController designation;
+  final TextEditingController qty;
+  final TextEditingController price;
+  final String? lot;
+  final String? expiry;
+  final String? barcode;
+
+  Product? product; // matched catalogue product
+  bool createNew = false; // create it in the catalogue at validation
+
+  int get qtyMilli => parseQty(qty.text) ?? 0;
+  int get priceCentimes => parseDA(price.text) ?? 0;
+  int get lineTotal => (qtyMilli * priceCentimes) ~/ 1000;
+
+  void dispose() {
+    designation.dispose();
+    qty.dispose();
+    price.dispose();
+  }
+}
+
 class _ScanDetailDialogState extends State<_ScanDetailDialog> {
   ScannedInvoice? _scan;
   String? _error;
   bool _busy = false;
-
-  /// productId per line, resolved by barcode then name. null = will be created
-  /// as a free-text line the user can attach to a product later.
-  final Map<int, Product?> _matched = {};
+  int _lastCreatedCount = 0;
+  final List<_EditLine> _lines = [];
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    for (final l in _lines) {
+      l.dispose();
+    }
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -254,8 +293,15 @@ class _ScanDetailDialogState extends State<_ScanDetailDialog> {
     try {
       final scan = await client.inboxItem(widget.item.id);
       if (!mounted) return;
-      setState(() => _scan = scan);
-      await _match(scan);
+      setState(() {
+        _scan = scan;
+        _lines.addAll(scan.lines.map(_EditLine.new));
+        for (final l in _lines) {
+          l.qty.addListener(_refresh);
+          l.price.addListener(_refresh);
+        }
+      });
+      await _match();
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
     } finally {
@@ -263,29 +309,78 @@ class _ScanDetailDialogState extends State<_ScanDetailDialog> {
     }
   }
 
+  void _refresh() {
+    if (mounted) setState(() {});
+  }
+
   /// Best-effort matching against the catalogue: barcode is authoritative,
-  /// otherwise the first name hit. Anything unmatched stays a free-text line
-  /// rather than silently attaching to the wrong product.
-  Future<void> _match(ScannedInvoice scan) async {
-    for (var i = 0; i < scan.lines.length; i++) {
-      final l = scan.lines[i];
+  /// otherwise the first name hit. Anything unmatched stays "nouveau produit"
+  /// until the user decides — never silently attached to the wrong product.
+  Future<void> _match() async {
+    for (final line in _lines) {
       Product? hit;
       try {
-        if (l.barcode != null && l.barcode!.isNotEmpty) {
-          final byCode = await widget.api.products(q: l.barcode!, limit: 3);
-          hit = byCode.where((p) => p.barcode == l.barcode).firstOrNull;
+        if (line.barcode != null && line.barcode!.isNotEmpty) {
+          final byCode = await widget.api.products(q: line.barcode!, limit: 3);
+          hit = byCode.where((p) => p.barcode == line.barcode).firstOrNull;
         }
-        hit ??= (await widget.api.products(q: l.designation, limit: 1))
+        hit ??= (await widget.api
+                .products(q: line.designation.text.trim(), limit: 1))
             .firstOrNull;
       } catch (_) {}
       if (!mounted) return;
-      setState(() => _matched[i] = hit);
+      if (line.product == null && !line.createNew) {
+        setState(() {
+          line.product = hit;
+          line.createNew = hit == null;
+        });
+      }
     }
+  }
+
+  Future<void> _pickProduct(_EditLine line) async {
+    final result = await showDialog<Object>(
+      context: context,
+      builder: (_) => _ProductPickDialog(
+        api: widget.api,
+        initialQuery: line.designation.text.trim(),
+      ),
+    );
+    if (result == null || !mounted) return;
+    setState(() {
+      if (result is Product) {
+        line.product = result;
+        line.createNew = false;
+      } else if (result == 'new') {
+        line.product = null;
+        line.createNew = true;
+      } else if (result == 'free') {
+        line.product = null;
+        line.createNew = false;
+      }
+    });
+  }
+
+  void _deleteLine(_EditLine line) {
+    setState(() => _lines.remove(line));
   }
 
   Future<void> _createDraft() async {
     final scan = _scan;
     if (scan == null || _busy) return;
+    if (_lines.isEmpty) {
+      setState(() => _error = 'Aucune ligne — utilisez « Ignorer » pour jeter le scan.');
+      return;
+    }
+    for (final l in _lines) {
+      if (l.designation.text.trim().isEmpty ||
+          l.qtyMilli <= 0 ||
+          l.priceCentimes < 0) {
+        setState(() =>
+            _error = 'Vérifiez les lignes : désignation, quantité et coût.');
+        return;
+      }
+    }
     setState(() {
       _busy = true;
       _error = null;
@@ -307,6 +402,32 @@ class _ScanDetailDialogState extends State<_ScanDetailDialog> {
         partnerId = found.firstOrNull?.id;
       }
 
+      // Lines flagged "nouveau produit" enter the catalogue first, so the
+      // réception feeds real stock instead of free-text lines.
+      var created = 0;
+      for (final l in _lines) {
+        if (!l.createNew) continue;
+        try {
+          l.product = await widget.api.saveProduct({
+            'name': l.designation.text.trim(),
+            'barcode':
+                (l.barcode ?? '').isEmpty ? null : l.barcode,
+            'vat_rate': 0,
+            'purchase_price': l.priceCentimes,
+            'price_retail': 0,
+            'min_stock_milli': 0,
+            'is_weighable': false,
+            'unit': 'piece',
+            'barcodes': const <String>[],
+          });
+          l.createNew = false;
+          created++;
+        } catch (_) {
+          // A duplicate barcode or similar must not block the réception —
+          // the line simply stays free-text.
+        }
+      }
+
       final draft = await widget.api.createDraft({
         'doc_type': 'PURCHASE_RECEIPT',
         'doc_date': _isoDate(scan.invoiceDate) ?? todayISO(),
@@ -319,16 +440,17 @@ class _ScanDetailDialogState extends State<_ScanDetailDialog> {
             'fournisseur ${scan.supplierName}',
         ].join(' · '),
         'lines': [
-          for (var i = 0; i < scan.lines.length; i++)
+          for (final l in _lines)
             {
-              'product_id': _matched[i]?.id,
-              'description': scan.lines[i].designation,
-              'qty_milli': scan.lines[i].qtyMilli,
-              'unit_price': scan.lines[i].unitPriceCentimes,
-              'vat_rate': _matched[i]?.vatRate ?? 0,
+              'product_id': l.product?.id,
+              'description': l.designation.text.trim(),
+              'qty_milli': l.qtyMilli,
+              'unit_price': l.priceCentimes,
+              'vat_rate': l.product?.vatRate ?? 0,
             }
         ],
       });
+      _lastCreatedCount = created;
 
       // Only acknowledge once the draft exists, so a failure here leaves the
       // scan in the inbox to try again rather than losing it.
@@ -349,8 +471,9 @@ class _ScanDetailDialogState extends State<_ScanDetailDialog> {
           const Icon(Icons.check_circle, color: T.mint, size: 18),
           const SizedBox(width: 10),
           Text(
-              'Réception brouillon créée · ${draft.lines.length} lignes — '
-              'à vérifier puis valider dans Achats',
+              'Réception brouillon créée · ${draft.lines.length} lignes'
+              '${_lastCreatedCount > 0 ? ' · $_lastCreatedCount produit(s) ajouté(s) au catalogue' : ''}'
+              ' — à vérifier puis valider dans Achats',
               style: const TextStyle(
                   fontFamily: T.sans, fontSize: 13, color: Colors.white)),
         ]),
@@ -445,68 +568,119 @@ class _ScanDetailDialogState extends State<_ScanDetailDialog> {
                 const Padding(
                   padding: EdgeInsetsDirectional.fromSTEB(16, 10, 16, 8),
                   child: Row(children: [
-                    Expanded(flex: 5, child: MicroLabel('Désignation scannée')),
+                    Expanded(flex: 5, child: MicroLabel('Désignation')),
+                    SizedBox(width: 10),
                     Expanded(flex: 4, child: MicroLabel('Produit du catalogue')),
-                    SizedBox(width: 70, child: MicroLabel('Qté')),
+                    SizedBox(width: 10),
+                    SizedBox(width: 74, child: MicroLabel('Qté')),
+                    SizedBox(width: 10),
                     SizedBox(
-                        width: 100,
+                        width: 104,
                         child: Align(
                             alignment: AlignmentDirectional.centerEnd,
                             child: MicroLabel('Coût HT'))),
+                    SizedBox(width: 30),
                   ]),
                 ),
                 const Divider(),
                 Expanded(
                   child: ListView.separated(
-                    itemCount: scan.lines.length,
+                    itemCount: _lines.length,
                     separatorBuilder: (_, _) => const Divider(),
                     itemBuilder: (context, i) {
-                      final l = scan.lines[i];
-                      final hit = _matched[i];
+                      final l = _lines[i];
                       return Padding(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 9),
+                            horizontal: 16, vertical: 7),
                         child: Row(children: [
                           Expanded(
                             flex: 5,
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(l.designation,
-                                    style: T.body,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis),
+                                _CellField(controller: l.designation),
                                 if (l.expiry != null || l.lot != null)
-                                  Text(
-                                      [
-                                        if (l.lot != null) 'lot ${l.lot}',
-                                        if (l.expiry != null) 'exp. ${l.expiry}',
-                                      ].join(' · '),
-                                      style: T.monoSmall
-                                          .copyWith(fontSize: 10)),
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 2),
+                                    child: Text(
+                                        [
+                                          if (l.lot != null) 'lot ${l.lot}',
+                                          if (l.expiry != null)
+                                            'exp. ${l.expiry}',
+                                        ].join(' · '),
+                                        style: T.monoSmall
+                                            .copyWith(fontSize: 10)),
+                                  ),
                               ],
                             ),
                           ),
+                          const SizedBox(width: 10),
                           Expanded(
                             flex: 4,
-                            child: hit == null
-                                ? Text('— nouveau produit —',
-                                    style: T.small
-                                        .copyWith(color: T.warnDark))
-                                : Text(hit.name,
-                                    style: T.bodyMuted,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis),
+                            child: InkWell(
+                              onTap: () => _pickProduct(l),
+                              borderRadius: BorderRadius.circular(8),
+                              child: Container(
+                                height: 34,
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 9),
+                                decoration: BoxDecoration(
+                                  color: l.product != null
+                                      ? T.mintTint
+                                      : l.createNew
+                                          ? T.warnTint
+                                          : T.bg,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                      color: l.product != null
+                                          ? T.mintDeep
+                                          : T.border),
+                                ),
+                                child: Row(children: [
+                                  Expanded(
+                                    child: Text(
+                                        l.product?.name ??
+                                            (l.createNew
+                                                ? 'Créer ce produit'
+                                                : 'Ligne libre'),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: T.small.copyWith(
+                                            fontSize: 11.5,
+                                            fontWeight: FontWeight.w700,
+                                            color: l.product != null
+                                                ? T.mintDark
+                                                : l.createNew
+                                                    ? T.warnDark
+                                                    : T.muted)),
+                                  ),
+                                  const Icon(Icons.expand_more,
+                                      size: 14, color: T.faint),
+                                ]),
+                              ),
+                            ),
                           ),
+                          const SizedBox(width: 10),
                           SizedBox(
-                              width: 70,
-                              child: Text(fmtQty(l.qtyMilli),
-                                  style: T.monoBody)),
+                              width: 74,
+                              child: _CellField(
+                                  controller: l.qty, mono: true)),
+                          const SizedBox(width: 10),
                           SizedBox(
-                            width: 100,
-                            child: Text(fmtDA(l.unitPriceCentimes),
-                                textAlign: TextAlign.end,
-                                style: T.monoBody),
+                              width: 104,
+                              child: _CellField(
+                                  controller: l.price,
+                                  mono: true,
+                                  alignEnd: true)),
+                          SizedBox(
+                            width: 30,
+                            child: IconButton(
+                              visualDensity: VisualDensity.compact,
+                              tooltip: 'Supprimer la ligne',
+                              onPressed: () => _deleteLine(l),
+                              icon: const Icon(Icons.delete_outline_rounded,
+                                  size: 16, color: T.faint),
+                            ),
                           ),
                         ]),
                       );
@@ -530,7 +704,8 @@ class _ScanDetailDialogState extends State<_ScanDetailDialog> {
                     else
                       Expanded(
                         child: MicroLabel(
-                            'Total ${fmtDA(scan.lines.fold(0, (s, l) => s + (l.qtyMilli * l.unitPriceCentimes) ~/ 1000))}'),
+                            'Total ${fmtDA(_lines.fold(0, (s, l) => s + l.lineTotal))}'
+                            ' · ${_lines.where((l) => l.createNew).length} nouveau(x) produit(s)'),
                       ),
                     TextButton(
                       onPressed: _busy ? null : _discard,
@@ -548,6 +723,227 @@ class _ScanDetailDialogState extends State<_ScanDetailDialog> {
                   ]),
                 ),
               ]),
+      ),
+    );
+  }
+}
+
+/// Compact editable cell used by the scan review table.
+class _CellField extends StatelessWidget {
+  const _CellField(
+      {required this.controller, this.mono = false, this.alignEnd = false});
+  final TextEditingController controller;
+  final bool mono;
+  final bool alignEnd;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 34,
+      decoration: BoxDecoration(
+        color: T.bg,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: T.border),
+      ),
+      child: TextField(
+        controller: controller,
+        textAlign: alignEnd ? TextAlign.end : TextAlign.start,
+        style: (mono ? T.monoBody : T.body).copyWith(fontSize: 12.5),
+        decoration: const InputDecoration(
+          isDense: true,
+          border: InputBorder.none,
+          contentPadding: EdgeInsets.symmetric(horizontal: 9, vertical: 8),
+        ),
+      ),
+    );
+  }
+}
+
+/// Attach a scanned line to the catalogue: search an existing product,
+/// create it as a new one, or keep the line free.
+class _ProductPickDialog extends StatefulWidget {
+  const _ProductPickDialog({required this.api, required this.initialQuery});
+  final ApiClient api;
+  final String initialQuery;
+
+  @override
+  State<_ProductPickDialog> createState() => _ProductPickDialogState();
+}
+
+class _ProductPickDialogState extends State<_ProductPickDialog> {
+  late final _search = TextEditingController(text: widget.initialQuery);
+  Timer? _debounce;
+  List<Product> _results = const [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _search.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final items =
+          await widget.api.products(q: _search.text.trim(), limit: 25);
+      if (mounted) {
+        setState(() {
+          _results = items;
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: T.surface,
+      shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(T.rCard)),
+      child: SizedBox(
+        width: 460,
+        height: 480,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(children: [
+                  const Expanded(
+                      child: Text('Associer un produit', style: T.h2)),
+                  IconButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close, size: 18, color: T.muted),
+                  ),
+                ]),
+                const SizedBox(height: 8),
+                SearchField(
+                  controller: _search,
+                  hint: 'Rechercher dans le catalogue…',
+                  autofocus: true,
+                  onChanged: (_) {
+                    _debounce?.cancel();
+                    _debounce =
+                        Timer(const Duration(milliseconds: 250), _load);
+                  },
+                ),
+                const SizedBox(height: 8),
+                Row(children: [
+                  Expanded(
+                    child: _QuickChoice(
+                      icon: Icons.add_circle_outline,
+                      label: 'Créer comme nouveau produit',
+                      color: T.warnDark,
+                      onTap: () => Navigator.of(context).pop('new'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _QuickChoice(
+                      icon: Icons.short_text_rounded,
+                      label: 'Ligne libre (aucun produit)',
+                      color: T.muted,
+                      onTap: () => Navigator.of(context).pop('free'),
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 8),
+                const Divider(),
+                Expanded(
+                  child: _results.isEmpty
+                      ? EmptyState(
+                          icon: Icons.search_off_rounded,
+                          text: _loading
+                              ? 'Chargement…'
+                              : 'Aucun produit ne correspond.')
+                      : ListView.separated(
+                          itemCount: _results.length,
+                          separatorBuilder: (_, _) => const Divider(),
+                          itemBuilder: (context, i) {
+                            final p = _results[i];
+                            return InkWell(
+                              onTap: () => Navigator.of(context).pop(p),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    vertical: 9),
+                                child: Row(children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(p.name,
+                                            maxLines: 1,
+                                            overflow:
+                                                TextOverflow.ellipsis,
+                                            style: T.body.copyWith(
+                                                fontSize: 12.5)),
+                                        if (p.barcode != null)
+                                          Text(p.barcode!,
+                                              style: T.monoSmall.copyWith(
+                                                  fontSize: 10)),
+                                      ],
+                                    ),
+                                  ),
+                                  Text(fmtDA(p.priceRetail),
+                                      style: T.monoSmall),
+                                ]),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ]),
+        ),
+      ),
+    );
+  }
+}
+
+class _QuickChoice extends StatelessWidget {
+  const _QuickChoice(
+      {required this.icon,
+      required this.label,
+      required this.color,
+      required this.onTap});
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(T.rInner),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        decoration: BoxDecoration(
+          color: T.bg,
+          borderRadius: BorderRadius.circular(T.rInner),
+          border: Border.all(color: T.border),
+        ),
+        child: Row(children: [
+          Icon(icon, size: 15, color: color),
+          const SizedBox(width: 7),
+          Expanded(
+            child: Text(label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: T.small.copyWith(
+                    fontSize: 11, fontWeight: FontWeight.w700, color: color)),
+          ),
+        ]),
       ),
     );
   }
