@@ -21,6 +21,7 @@ import '../screens/settings_screen.dart';
 import '../screens/stock_screen.dart';
 import '../theme/tokens.dart';
 import '../util/config.dart';
+import '../util/updater.dart';
 import '../widgets/ui.dart';
 
 class _Module {
@@ -97,6 +98,82 @@ class _AppShellState extends State<AppShell> {
     _beat();
     _presenceTimer =
         Timer.periodic(const Duration(seconds: 30), (_) => _beat());
+    _checkUpdate();
+  }
+
+  /// Au démarrage : si une version plus récente est publiée, on propose de
+  /// l'installer tout de suite (téléchargement + réinstallation silencieuse).
+  Future<void> _checkUpdate() async {
+    final info = await checkForUpdate();
+    if (info == null || !mounted) return;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: T.surface,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(T.rCard)),
+        title: Row(children: [
+          const Icon(Icons.system_update_alt_rounded,
+              size: 20, color: T.mintDeep),
+          const SizedBox(width: 10),
+          Text('Mise à jour disponible', style: T.h2),
+        ]),
+        content: Text(
+            'La version ${info.version} est disponible (vous avez la '
+            '$kAppVersion).\n\nL\'application va se fermer, s\'installer et '
+            'redémarrer toute seule. Les ventes en cours doivent être '
+            'terminées avant.',
+            style: T.body.copyWith(height: 1.5)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text('Plus tard', style: T.body.copyWith(color: T.muted)),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+                backgroundColor: T.mint, foregroundColor: T.ink),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Mettre à jour maintenant'),
+          ),
+        ],
+      ),
+    );
+    if (go != true || !mounted) return;
+    final status = ValueNotifier<String>('Préparation…');
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        backgroundColor: T.surface,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(T.rCard)),
+        content: Row(children: [
+          const SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2.4, color: T.mintDeep)),
+          const SizedBox(width: 16),
+          Expanded(
+            child: ValueListenableBuilder<String>(
+              valueListenable: status,
+              builder: (context, s, _) => Text(s, style: T.body),
+            ),
+          ),
+        ]),
+      ),
+    );
+    try {
+      await downloadAndInstall(info, onStatus: (s) => status.value = s);
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          backgroundColor: T.danger,
+          content: Text('Mise à jour impossible : $e',
+              style: const TextStyle(color: Colors.white))));
+    }
   }
 
   @override
