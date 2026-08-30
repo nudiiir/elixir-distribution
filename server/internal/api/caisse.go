@@ -31,6 +31,7 @@ type CaisseReport struct {
 	OtherSales  int64 `json:"other_sales"`
 	CashIn      int64 `json:"cash_in"`  // encaissements espèces
 	CashOut     int64 `json:"cash_out"` // règlements espèces
+	CashRefunds int64 `json:"cash_refunds"` // avoirs remboursés en espèces
 	ExpectedCash int64 `json:"expected_cash"`
 }
 
@@ -102,6 +103,8 @@ func (s *Server) caisseOpen(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.audit(r, "caisse.open", "caisse_session", id,
+		"ouverture de caisse, fond "+centimes(in.OpeningCash)+" DA")
 	writeJSON(w, http.StatusCreated, map[string]any{"session": c})
 }
 
@@ -150,7 +153,13 @@ func (s *Server) buildReport(openingCash int64, from string, to string) (*Caisse
 	if rep.CashOut, err = q("PAYMENT_OUT"); err != nil {
 		return nil, err
 	}
-	rep.ExpectedCash = openingCash + rep.CashSales + rep.CashIn - rep.CashOut
+	// Cash refunds (avoirs) leave the drawer too.
+	if err := s.db.QueryRow(`SELECT COALESCE(SUM(total_ttc),0) FROM documents
+		WHERE status='posted' AND doc_type='SALE_CREDIT_NOTE' AND payment_method='cash'
+		  AND posted_at >= ? AND posted_at <= ?`, from, to).Scan(&rep.CashRefunds); err != nil {
+		return nil, err
+	}
+	rep.ExpectedCash = openingCash + rep.CashSales + rep.CashIn - rep.CashOut - rep.CashRefunds
 	return rep, nil
 }
 
@@ -219,6 +228,9 @@ func (s *Server) caisseClose(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.audit(r, "caisse.close", "caisse_session", c.ID,
+		"clôture Z : attendu "+centimes(rep.ExpectedCash)+
+			" DA, compté "+centimes(in.CountedCash)+" DA")
 	writeJSON(w, http.StatusOK, map[string]any{"session": closed, "report": rep})
 }
 

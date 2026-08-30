@@ -74,6 +74,14 @@ class _PartnersScreenState extends State<PartnersScreen> {
     if (done == true) _load();
   }
 
+  Future<void> _openInstallments(Partner p) async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _InstallmentsDialog(api: widget.api, partner: p),
+    );
+    _load();
+  }
+
   Future<void> _export(List<Partner> rows) async {
     final path = await exportCsv(
       baseName: 'partenaires',
@@ -261,15 +269,33 @@ class _PartnersScreenState extends State<PartnersScreen> {
                 ),
                 ColumnSpec(
                   label: '',
-                  width: 105,
+                  width: 150,
                   numeric: true,
-                  cell: (context, p) => TextButton(
-                    onPressed: () => _openPayment(p),
-                    child: Text(
-                        p.kind == 'supplier' ? 'Régler' : 'Encaisser',
-                        style: T.small.copyWith(
-                            color: T.mintDark,
-                            fontWeight: FontWeight.w700)),
+                  cell: (context, p) => Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      if (p.kind != 'supplier')
+                        Tooltip(
+                          message: 'Facilité de paiement (échéances)',
+                          child: InkWell(
+                            onTap: () => _openInstallments(p),
+                            borderRadius: BorderRadius.circular(6),
+                            child: const Padding(
+                              padding: EdgeInsets.all(4),
+                              child: Icon(Icons.event_repeat_rounded,
+                                  size: 15, color: T.muted),
+                            ),
+                          ),
+                        ),
+                      TextButton(
+                        onPressed: () => _openPayment(p),
+                        child: Text(
+                            p.kind == 'supplier' ? 'Régler' : 'Encaisser',
+                            style: T.small.copyWith(
+                                color: T.mintDark,
+                                fontWeight: FontWeight.w700)),
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -327,6 +353,7 @@ class _PartnerFormDialogState extends State<_PartnerFormDialog> {
   late final _ai = TextEditingController(text: widget.existing?.ai ?? '');
   late final _notes = TextEditingController(text: widget.existing?.notes ?? '');
   late String _kind = widget.existing?.kind ?? 'customer';
+  late String _priceLevel = widget.existing?.priceLevel ?? 'retail';
   bool _busy = false;
   String? _error;
 
@@ -360,6 +387,7 @@ class _PartnerFormDialogState extends State<_PartnerFormDialog> {
         'rc': v(_rc),
         'ai': v(_ai),
         'notes': v(_notes),
+        'price_level': _priceLevel,
       }, id: widget.existing?.id);
       if (mounted) Navigator.of(context).pop(true);
     } on ApiException catch (e) {
@@ -436,6 +464,40 @@ class _PartnerFormDialogState extends State<_PartnerFormDialog> {
                         label: "Article d'imposition", controller: _ai)),
               ]),
               _FormField(label: 'Notes', controller: _notes),
+              if (_kind != 'supplier') ...[
+                const MicroLabel('Tarif appliqué'),
+                const SizedBox(height: 6),
+                Row(children: [
+                  for (final (label, value) in [
+                    ('Détail', 'retail'),
+                    ('Demi-gros', 'wholesale')
+                  ])
+                    Padding(
+                      padding: const EdgeInsetsDirectional.only(end: 6),
+                      child: ChoiceChip(
+                        label: Text(label,
+                            style: TextStyle(
+                                fontFamily: T.sans,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: _priceLevel == value
+                                    ? T.mintDark
+                                    : T.muted)),
+                        selected: _priceLevel == value,
+                        selectedColor: T.mintTint,
+                        backgroundColor: T.bg,
+                        side: BorderSide(
+                            color: _priceLevel == value
+                                ? T.mintDeep
+                                : T.border),
+                        showCheckmark: false,
+                        onSelected: (_) =>
+                            setState(() => _priceLevel = value),
+                      ),
+                    ),
+                ]),
+                const SizedBox(height: 6),
+              ],
               if (_error != null) ...[
                 const SizedBox(height: 6),
                 Text(_error!, style: T.small.copyWith(color: T.dangerDark)),
@@ -498,6 +560,330 @@ class _FormField extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ---------------- Installments (facilité de paiement) ----------------
+
+class _InstallmentsDialog extends StatefulWidget {
+  const _InstallmentsDialog({required this.api, required this.partner});
+  final ApiClient api;
+  final Partner partner;
+
+  @override
+  State<_InstallmentsDialog> createState() => _InstallmentsDialogState();
+}
+
+class _InstallmentsDialogState extends State<_InstallmentsDialog> {
+  List<InstallmentPlan> _plans = const [];
+  bool _loading = true;
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final plans =
+          await widget.api.installmentPlans(partnerId: widget.partner.id);
+      if (mounted) {
+        setState(() {
+          _plans = plans;
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _newPlan() async {
+    final created = await showDialog<bool>(
+      context: context,
+      builder: (_) => _NewPlanDialog(api: widget.api, partner: widget.partner),
+    );
+    if (created == true) _load();
+  }
+
+  /// Encaisser une échéance : PAYMENT_IN espèces + pointage de l'échéance.
+  Future<void> _payDue(InstallmentDue d) async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await widget.api.createPayment(
+        docType: 'PAYMENT_IN',
+        partnerId: widget.partner.id,
+        amount: d.remaining,
+        method: 'cash',
+      );
+      await widget.api.payInstallmentDue(d.id);
+      _load();
+    } on ApiException catch (e) {
+      setState(() => _error = e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final today = DateTime.now().toIso8601String().substring(0, 10);
+    return Dialog(
+      backgroundColor: T.surface,
+      shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(T.rCard)),
+      child: SizedBox(
+        width: 540,
+        height: 500,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(children: [
+                  Expanded(
+                    child: Text('Échéances — ${widget.partner.name}',
+                        style: T.h2, overflow: TextOverflow.ellipsis),
+                  ),
+                  SizedBox(
+                    width: 140,
+                    child: PrimaryButton(
+                        label: 'Nouveau plan', onPressed: _newPlan),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close, size: 18, color: T.muted),
+                  ),
+                ]),
+                if (_error != null)
+                  Text(_error!,
+                      style: T.small.copyWith(color: T.dangerDark)),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: _plans.isEmpty
+                      ? EmptyState(
+                          icon: Icons.event_repeat_rounded,
+                          text: _loading
+                              ? 'Chargement…'
+                              : 'Aucune facilité de paiement.\nCréez un plan pour étaler une vente à crédit.')
+                      : ListView(children: [
+                          for (final plan in _plans) ...[
+                            Padding(
+                              padding: const EdgeInsets.only(top: 8, bottom: 4),
+                              child: Row(children: [
+                                Expanded(
+                                  child: Text(
+                                      '${fmtDA(plan.total)} sur ${plan.months} mois'
+                                      '${plan.docNumber != null ? ' · ${plan.docNumber}' : ''}',
+                                      style: T.body.copyWith(
+                                          fontWeight: FontWeight.w700)),
+                                ),
+                                Text(
+                                    '${fmtDA(plan.totalPaid)} / ${fmtDA(plan.total)}',
+                                    style: T.monoSmall),
+                              ]),
+                            ),
+                            for (final d in plan.dues)
+                              Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 4),
+                                child: Row(children: [
+                                  Icon(
+                                      d.settled
+                                          ? Icons.check_circle_rounded
+                                          : d.dueDate.compareTo(today) < 0
+                                              ? Icons.error_rounded
+                                              : Icons.schedule_rounded,
+                                      size: 15,
+                                      color: d.settled
+                                          ? T.mintDeep
+                                          : d.dueDate.compareTo(today) < 0
+                                              ? T.danger
+                                              : T.faint),
+                                  const SizedBox(width: 8),
+                                  SizedBox(
+                                      width: 95,
+                                      child: Text(d.dueDate,
+                                          style: T.monoSmall
+                                              .copyWith(fontSize: 11))),
+                                  Expanded(
+                                      child: Text(fmtDA(d.amount),
+                                          style: T.monoBody
+                                              .copyWith(fontSize: 12))),
+                                  if (d.settled)
+                                    const MintChip('payée',
+                                        color: T.mintTint, fg: T.mintDark)
+                                  else
+                                    TextButton(
+                                      onPressed:
+                                          _busy ? null : () => _payDue(d),
+                                      child: Text(
+                                          'Encaisser ${fmtDA(d.remaining)}',
+                                          style: T.small.copyWith(
+                                              color: T.mintDark,
+                                              fontWeight: FontWeight.w700)),
+                                    ),
+                                ]),
+                              ),
+                            const Divider(height: 16),
+                          ],
+                        ]),
+                ),
+              ]),
+        ),
+      ),
+    );
+  }
+}
+
+class _NewPlanDialog extends StatefulWidget {
+  const _NewPlanDialog({required this.api, required this.partner});
+  final ApiClient api;
+  final Partner partner;
+
+  @override
+  State<_NewPlanDialog> createState() => _NewPlanDialogState();
+}
+
+class _NewPlanDialogState extends State<_NewPlanDialog> {
+  late final _total = TextEditingController(
+      text: widget.partner.balance > 0 ? editDA(widget.partner.balance) : '');
+  final _months = TextEditingController(text: '3');
+  late String _start = DateTime.now()
+      .add(const Duration(days: 30))
+      .toIso8601String()
+      .substring(0, 10);
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _total.dispose();
+    _months.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickStart() async {
+    final d = await showDatePicker(
+      context: context,
+      initialDate: DateTime.tryParse(_start) ?? DateTime.now(),
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (d != null) {
+      setState(() => _start =
+          '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}');
+    }
+  }
+
+  Future<void> _save() async {
+    final total = parseDA(_total.text);
+    final months = int.tryParse(_months.text.trim());
+    if (total == null || total <= 0 || months == null || months < 1) {
+      setState(() => _error = 'Montant et nombre de mois obligatoires.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await widget.api.createInstallmentPlan(
+        partnerId: widget.partner.id,
+        total: total,
+        months: months,
+        startDate: _start,
+      );
+      if (mounted) Navigator.of(context).pop(true);
+    } on ApiException catch (e) {
+      setState(() => _error = e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: T.surface,
+      shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(T.rCard)),
+      child: SizedBox(
+        width: 380,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Nouveau plan de paiement', style: T.h2),
+              const SizedBox(height: 4),
+              Text(
+                  'La dette vient de la vente à crédit ; le plan la découpe '
+                  'en mensualités égales.',
+                  style: T.small),
+              const SizedBox(height: 14),
+              _FormField(label: 'Montant total (DA)', controller: _total),
+              Row(children: [
+                Expanded(
+                    child: _FormField(
+                        label: 'Nombre de mois', controller: _months)),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const MicroLabel('1re échéance'),
+                        const SizedBox(height: 4),
+                        InkWell(
+                          onTap: _pickStart,
+                          borderRadius: BorderRadius.circular(T.rInner),
+                          child: Container(
+                            height: 38,
+                            padding:
+                                const EdgeInsets.symmetric(horizontal: 12),
+                            alignment: AlignmentDirectional.centerStart,
+                            decoration: BoxDecoration(
+                              color: T.bg,
+                              borderRadius: BorderRadius.circular(T.rInner),
+                              border: Border.all(color: T.border),
+                            ),
+                            child: Text(_start, style: T.monoBody),
+                          ),
+                        ),
+                      ]),
+                ),
+              ]),
+              if (_error != null)
+                Text(_error!, style: T.small.copyWith(color: T.dangerDark)),
+              const SizedBox(height: 14),
+              Row(children: [
+                const Spacer(),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child:
+                      Text('Annuler', style: T.small.copyWith(color: T.muted)),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 120,
+                  child: PrimaryButton(
+                    label: _busy ? '…' : 'Créer',
+                    onPressed: _busy ? null : _save,
+                  ),
+                ),
+              ]),
+            ],
+          ),
+        ),
       ),
     );
   }

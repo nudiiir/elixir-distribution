@@ -31,12 +31,38 @@ class _ProductsScreenState extends State<ProductsScreen> {
   final _searchCtrl = TextEditingController();
   Timer? _debounce;
   List<Product> _items = const [];
+  List<Category> _cats = const [];
+  String? _catFilter;
   bool _loading = true;
 
   @override
   void initState() {
     super.initState();
     widget.searchRequest?.addListener(_onExternalSearch);
+    _load();
+    _loadCats();
+  }
+
+  Future<void> _loadCats() async {
+    try {
+      final cats = await widget.api.categories();
+      if (mounted) setState(() => _cats = cats);
+    } catch (_) {}
+  }
+
+  String _catName(String? id) {
+    for (final c in _cats) {
+      if (c.id == id) return c.name;
+    }
+    return '—';
+  }
+
+  Future<void> _manageCats() async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _CategoriesDialog(api: widget.api),
+    );
+    _loadCats();
     _load();
   }
 
@@ -129,6 +155,21 @@ class _ProductsScreenState extends State<ProductsScreen> {
           Row(children: [
             const Text('Produits', style: T.h1),
             const Spacer(),
+            OutlinedButton.icon(
+              onPressed: _manageCats,
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: T.border3),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(T.rInner)),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              ),
+              icon: const Icon(Icons.sell_outlined, size: 16, color: T.ink),
+              label: Text('Catégories',
+                  style: T.small
+                      .copyWith(color: T.ink, fontWeight: FontWeight.w700)),
+            ),
+            const SizedBox(width: 8),
             SizedBox(
               width: 180,
               child: PrimaryButton(
@@ -147,10 +188,33 @@ class _ProductsScreenState extends State<ProductsScreen> {
             },
             onSubmitted: (_) => _load(),
           ),
+          if (_cats.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            SizedBox(
+              height: 32,
+              child: ListView(scrollDirection: Axis.horizontal, children: [
+                _CatFilterChip(
+                  label: 'Toutes',
+                  selected: _catFilter == null,
+                  onTap: () => setState(() => _catFilter = null),
+                ),
+                for (final c in _cats)
+                  _CatFilterChip(
+                    label: c.name,
+                    selected: _catFilter == c.id,
+                    onTap: () => setState(
+                        () => _catFilter = _catFilter == c.id ? null : c.id),
+                  ),
+              ]),
+            ),
+          ],
           const SizedBox(height: 14),
           Expanded(
             child: DataListView<Product>(
-              items: _items,
+              items: [
+                for (final p in _items)
+                  if (_catFilter == null || p.categoryId == _catFilter) p
+              ],
               onTap: (p) => _openForm(existing: p),
               onExport: _export,
               empty: EmptyState(
@@ -177,6 +241,15 @@ class _ProductsScreenState extends State<ProductsScreen> {
                   sortKey: (p) => p.name.toLowerCase(),
                   cell: (context, p) => Text(p.name,
                       style: T.body,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis),
+                ),
+                ColumnSpec(
+                  label: 'Catégorie',
+                  flex: 2,
+                  sortKey: (p) => _catName(p.categoryId),
+                  cell: (context, p) => Text(_catName(p.categoryId),
+                      style: T.small.copyWith(fontSize: 11.5),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis),
                 ),
@@ -273,12 +346,20 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
       text: widget.existing == null || widget.existing!.warrantyMonths == 0
           ? ''
           : '${widget.existing!.warrantyMonths}');
+  late final _wholesale = TextEditingController(
+      text: widget.existing?.priceWholesale == null
+          ? ''
+          : editDA(widget.existing!.priceWholesale!));
   late int _vat = widget.existing?.vatRate ?? 1900;
   late bool _weighable = widget.existing?.isWeighable ?? false;
+  late bool _trackSerials = widget.existing?.trackSerials ?? false;
+  late String? _categoryId = widget.existing?.categoryId;
+  List<Category> _cats = const [];
   bool _generating = false;
   late String? _promoStart = widget.existing?.promoStart;
   late String? _promoEnd = widget.existing?.promoEnd;
   List<Product> _variants = const [];
+  List<ProductUnit> _units = const [];
   bool _busy = false;
   String? _error;
 
@@ -286,6 +367,129 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
   void initState() {
     super.initState();
     _loadVariants();
+    _loadCats();
+    _loadUnits();
+  }
+
+  Future<void> _loadCats() async {
+    try {
+      final cats = await widget.api.categories();
+      if (mounted) setState(() => _cats = cats);
+    } catch (_) {}
+  }
+
+  Future<void> _loadUnits() async {
+    final p = widget.existing;
+    if (p == null || !p.trackSerials) return;
+    try {
+      final units = await widget.api.units(productId: p.id);
+      if (mounted) setState(() => _units = units);
+    } catch (_) {}
+  }
+
+  Future<void> _addSerials() async {
+    final p = widget.existing;
+    if (p == null) return;
+    final ctrl = TextEditingController();
+    bool used = false;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDlg) => Dialog(
+          backgroundColor: T.surface,
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(T.rCard)),
+          child: SizedBox(
+            width: 400,
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text('Ajouter des N° de série', style: T.h2),
+                  const SizedBox(height: 4),
+                  Text('Un numéro par ligne — scannez-les à la suite.',
+                      style: T.small),
+                  const SizedBox(height: 10),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: T.bg,
+                      borderRadius: BorderRadius.circular(T.rInner),
+                      border: Border.all(color: T.border),
+                    ),
+                    child: TextField(
+                      controller: ctrl,
+                      autofocus: true,
+                      maxLines: 7,
+                      style: T.monoBody,
+                      decoration: const InputDecoration(
+                        isDense: true,
+                        border: InputBorder.none,
+                        contentPadding: EdgeInsets.all(12),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  InkWell(
+                    onTap: () => setDlg(() => used = !used),
+                    child: Row(children: [
+                      Icon(
+                          used
+                              ? Icons.check_box
+                              : Icons.check_box_outline_blank,
+                          size: 18,
+                          color: used ? T.mintDeep : T.faint),
+                      const SizedBox(width: 8),
+                      Text('Appareils d\'occasion (reprise)',
+                          style: T.bodyMuted),
+                    ]),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(children: [
+                    const Spacer(),
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(false),
+                      child: Text('Annuler',
+                          style: T.small.copyWith(color: T.muted)),
+                    ),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      width: 120,
+                      child: PrimaryButton(
+                        label: 'Ajouter',
+                        onPressed: () => Navigator.of(context).pop(true),
+                      ),
+                    ),
+                  ]),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    if (ok == true) {
+      final serials = [
+        for (final line in ctrl.text.split('\n'))
+          if (line.trim().isNotEmpty) line.trim()
+      ];
+      if (serials.isNotEmpty) {
+        try {
+          final (added, dupes) =
+              await widget.api.addUnits(p.id, serials, isUsed: used);
+          if (mounted) {
+            setState(() => _error = dupes.isEmpty
+                ? null
+                : 'Déjà connus (ignorés) : ${dupes.join(', ')}');
+          }
+          if (added > 0) _loadUnits();
+        } on ApiException catch (e) {
+          setState(() => _error = e.message);
+        }
+      }
+    }
+    ctrl.dispose();
   }
 
   Future<void> _loadVariants() async {
@@ -304,7 +508,7 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
   void dispose() {
     for (final c in [
       _name, _nameAr, _barcode, _extraBarcodes, _purchase, _retail,
-      _minStock, _promoPrice, _warranty
+      _minStock, _promoPrice, _warranty, _wholesale
     ]) {
       c.dispose();
     }
@@ -403,6 +607,9 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
         'promo_start': (promo != null && promo > 0) ? _promoStart : null,
         'promo_end': (promo != null && promo > 0) ? _promoEnd : null,
         'warranty_months': int.tryParse(_warranty.text.trim()) ?? 0,
+        'category_id': _categoryId,
+        'price_wholesale': parseDA(_wholesale.text),
+        'track_serials': _trackSerials,
         'parent_product_id': widget.existing?.parentProductId,
         'variant_label': widget.existing?.variantLabel,
       }, id: widget.existing?.id);
@@ -528,20 +735,82 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
                           mono: true)),
                 ],
               ),
-              const SizedBox(height: 4),
-              InkWell(
-                onTap: () => setState(() => _weighable = !_weighable),
-                child: Row(children: [
-                  Icon(
-                      _weighable
-                          ? Icons.check_box
-                          : Icons.check_box_outline_blank,
-                      size: 18,
-                      color: _weighable ? T.mintDeep : T.faint),
-                  const SizedBox(width: 8),
-                  Text('Produit au poids (kg)', style: T.bodyMuted),
-                ]),
-              ),
+              Row(children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const MicroLabel('Catégorie'),
+                      const SizedBox(height: 4),
+                      Container(
+                        height: 38,
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        decoration: BoxDecoration(
+                          color: T.bg,
+                          borderRadius: BorderRadius.circular(T.rInner),
+                          border: Border.all(color: T.border),
+                        ),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<String?>(
+                            value: _cats.any((c) => c.id == _categoryId)
+                                ? _categoryId
+                                : null,
+                            isExpanded: true,
+                            style: T.body,
+                            dropdownColor: T.surface,
+                            items: [
+                              const DropdownMenuItem<String?>(
+                                  value: null, child: Text('Sans catégorie')),
+                              for (final c in _cats)
+                                DropdownMenuItem<String?>(
+                                    value: c.id, child: Text(c.name)),
+                            ],
+                            onChanged: (v) =>
+                                setState(() => _categoryId = v),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                    child: _Field(
+                        label: 'Prix demi-gros TTC (DA) — vide = aucun',
+                        controller: _wholesale,
+                        mono: true)),
+              ]),
+              Row(children: [
+                InkWell(
+                  onTap: () => setState(() => _weighable = !_weighable),
+                  child: Row(children: [
+                    Icon(
+                        _weighable
+                            ? Icons.check_box
+                            : Icons.check_box_outline_blank,
+                        size: 18,
+                        color: _weighable ? T.mintDeep : T.faint),
+                    const SizedBox(width: 8),
+                    Text('Produit au poids (kg)', style: T.bodyMuted),
+                  ]),
+                ),
+                const SizedBox(width: 20),
+                InkWell(
+                  onTap: () =>
+                      setState(() => _trackSerials = !_trackSerials),
+                  child: Row(children: [
+                    Icon(
+                        _trackSerials
+                            ? Icons.check_box
+                            : Icons.check_box_outline_blank,
+                        size: 18,
+                        color: _trackSerials ? T.mintDeep : T.faint),
+                    const SizedBox(width: 8),
+                    Text('Suivi par N° de série / IMEI', style: T.bodyMuted),
+                  ]),
+                ),
+              ]),
               const SizedBox(height: 12),
               _Field(
                   label:
@@ -575,6 +844,56 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
                     ),
                   ),
               ]),
+              // ---- Serialized units (IMEI) ----
+              if (widget.existing != null &&
+                  widget.existing!.trackSerials) ...[
+                const Divider(height: 20),
+                Row(children: [
+                  Expanded(
+                    child: MicroLabel(
+                        'N° de série — ${_units.where((u) => u.status == 'in_stock').length} en stock / ${_units.length} connus'),
+                  ),
+                  TextButton.icon(
+                    onPressed: _addSerials,
+                    icon: const Icon(Icons.add, size: 14, color: T.mintDark),
+                    label: Text('Ajouter des numéros',
+                        style: T.small.copyWith(
+                            color: T.mintDark, fontWeight: FontWeight.w700)),
+                  ),
+                ]),
+                for (final u in _units.take(6))
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Row(children: [
+                      Icon(
+                          u.status == 'in_stock'
+                              ? Icons.inventory_2_outlined
+                              : Icons.sell_outlined,
+                          size: 13,
+                          color:
+                              u.status == 'in_stock' ? T.mintDeep : T.faint),
+                      const SizedBox(width: 8),
+                      Expanded(
+                          child: Text(u.serial,
+                              style: T.monoSmall.copyWith(fontSize: 11))),
+                      if (u.isUsed)
+                        const MintChip('occasion',
+                            color: T.warnTint, fg: T.warnDark),
+                      const SizedBox(width: 6),
+                      Text(
+                          switch (u.status) {
+                            'in_stock' => 'en stock',
+                            'sold' => 'vendu',
+                            'returned' => 'retourné',
+                            'repair' => 'en SAV',
+                            _ => 'rebuté',
+                          },
+                          style: T.small.copyWith(fontSize: 10.5)),
+                    ]),
+                  ),
+                if (_units.length > 6)
+                  Text('… et ${_units.length - 6} autres', style: T.small),
+              ],
               // ---- Promotion ----
               const Divider(height: 20),
               const MicroLabel('Promotion'),
@@ -654,6 +973,256 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
             ],
           ),
         ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CatFilterChip extends StatelessWidget {
+  const _CatFilterChip(
+      {required this.label, required this.selected, required this.onTap});
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsetsDirectional.only(end: 6),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: selected ? T.ink : T.surface,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: selected ? T.ink : T.border),
+          ),
+          child: Text(label,
+              style: TextStyle(
+                fontFamily: T.sans,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: selected ? Colors.white : T.muted,
+              )),
+        ),
+      ),
+    );
+  }
+}
+
+/// Gestion des catégories (rayons) : ajouter, renommer, supprimer.
+class _CategoriesDialog extends StatefulWidget {
+  const _CategoriesDialog({required this.api});
+  final ApiClient api;
+
+  @override
+  State<_CategoriesDialog> createState() => _CategoriesDialogState();
+}
+
+class _CategoriesDialogState extends State<_CategoriesDialog> {
+  List<Category> _cats = const [];
+  final _newCtrl = TextEditingController();
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _newCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    try {
+      final cats = await widget.api.categories();
+      if (mounted) setState(() => _cats = cats);
+    } catch (_) {}
+  }
+
+  Future<void> _add() async {
+    final name = _newCtrl.text.trim();
+    if (name.isEmpty) return;
+    try {
+      await widget.api.createCategory(name);
+      _newCtrl.clear();
+      _load();
+    } on ApiException catch (e) {
+      setState(() => _error = e.message);
+    }
+  }
+
+  Future<void> _rename(Category c) async {
+    final ctrl = TextEditingController(text: c.name);
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: T.surface,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(T.rCard)),
+        child: SizedBox(
+          width: 300,
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              const MicroLabel('Renommer la catégorie'),
+              const SizedBox(height: 8),
+              Container(
+                height: 38,
+                decoration: BoxDecoration(
+                  color: T.bg,
+                  borderRadius: BorderRadius.circular(T.rInner),
+                  border: Border.all(color: T.border),
+                ),
+                child: TextField(
+                  controller: ctrl,
+                  autofocus: true,
+                  style: T.body,
+                  onSubmitted: (v) => Navigator.of(context).pop(v.trim()),
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    border: InputBorder.none,
+                    contentPadding:
+                        EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              PrimaryButton(
+                label: 'Renommer',
+                onPressed: () =>
+                    Navigator.of(context).pop(ctrl.text.trim()),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+    ctrl.dispose();
+    if (name != null && name.isNotEmpty && name != c.name) {
+      try {
+        await widget.api.renameCategory(c.id, name);
+        _load();
+      } on ApiException catch (e) {
+        setState(() => _error = e.message);
+      }
+    }
+  }
+
+  Future<void> _delete(Category c) async {
+    try {
+      await widget.api.deleteCategory(c.id);
+      _load();
+    } on ApiException catch (e) {
+      setState(() => _error = e.message);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: T.surface,
+      shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(T.rCard)),
+      child: SizedBox(
+        width: 380,
+        height: 440,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(children: [
+                  const Expanded(
+                      child: Text('Catégories', style: T.h2)),
+                  IconButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close, size: 18, color: T.muted),
+                  ),
+                ]),
+                Text('Rayons du magasin — filtre à la caisse et rapports.',
+                    style: T.small),
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(_error!,
+                        style: T.small.copyWith(color: T.dangerDark)),
+                  ),
+                const SizedBox(height: 10),
+                Expanded(
+                  child: _cats.isEmpty
+                      ? const EmptyState(
+                          icon: Icons.sell_outlined,
+                          text:
+                              'Aucune catégorie.\nEx. Boissons, Téléphones, Accessoires…')
+                      : ListView.separated(
+                          itemCount: _cats.length,
+                          separatorBuilder: (_, _) => const Divider(),
+                          itemBuilder: (context, i) {
+                            final c = _cats[i];
+                            return Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 4),
+                              child: Row(children: [
+                                Expanded(
+                                    child: Text(c.name, style: T.body)),
+                                IconButton(
+                                  visualDensity: VisualDensity.compact,
+                                  tooltip: 'Renommer',
+                                  onPressed: () => _rename(c),
+                                  icon: const Icon(Icons.edit_outlined,
+                                      size: 15, color: T.muted),
+                                ),
+                                IconButton(
+                                  visualDensity: VisualDensity.compact,
+                                  tooltip: 'Supprimer',
+                                  onPressed: () => _delete(c),
+                                  icon: const Icon(
+                                      Icons.delete_outline_rounded,
+                                      size: 16,
+                                      color: T.dangerDark),
+                                ),
+                              ]),
+                            );
+                          },
+                        ),
+                ),
+                const SizedBox(height: 8),
+                Row(children: [
+                  Expanded(
+                    child: Container(
+                      height: 38,
+                      decoration: BoxDecoration(
+                        color: T.bg,
+                        borderRadius: BorderRadius.circular(T.rInner),
+                        border: Border.all(color: T.border),
+                      ),
+                      child: TextField(
+                        controller: _newCtrl,
+                        style: T.body,
+                        onSubmitted: (_) => _add(),
+                        decoration: const InputDecoration(
+                          isDense: true,
+                          border: InputBorder.none,
+                          hintText: 'Nouvelle catégorie…',
+                          contentPadding: EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 10),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                      width: 100,
+                      child:
+                          PrimaryButton(label: 'Ajouter', onPressed: _add)),
+                ]),
+              ]),
         ),
       ),
     );

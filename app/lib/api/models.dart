@@ -38,8 +38,11 @@ class Product {
   final String? barcode;
   final String name;
   final String? nameAr;
+  final String? categoryId;
   final String unit;
   final bool isWeighable;
+  final int? priceWholesale; // centimes TTC, null = no wholesale tier
+  final bool trackSerials;
   final int vatRate; // percent * 100
   final int purchasePrice; // centimes HT
   final int priceRetail; // centimes TTC
@@ -58,8 +61,11 @@ class Product {
         barcode = j['barcode'] as String?,
         name = j['name'] as String,
         nameAr = j['name_ar'] as String?,
+        categoryId = j['category_id'] as String?,
         unit = (j['unit'] as String?) ?? 'piece',
         isWeighable = j['is_weighable'] == true,
+        priceWholesale = (j['price_wholesale'] as num?)?.toInt(),
+        trackSerials = j['track_serials'] == true,
         vatRate = (j['vat_rate'] as num?)?.toInt() ?? 0,
         purchasePrice = (j['purchase_price'] as num?)?.toInt() ?? 0,
         priceRetail = (j['price_retail'] as num?)?.toInt() ?? 0,
@@ -90,6 +96,18 @@ class Product {
 
   /// What the customer pays today (TTC centimes).
   int get effectivePriceTTC => promoActive ? promoPrice! : priceRetail;
+
+  /// Price for a wholesale-tier customer (promo wins if lower).
+  int priceFor(String priceLevel) {
+    if (priceLevel == 'wholesale' &&
+        priceWholesale != null &&
+        priceWholesale! > 0) {
+      return promoActive && promoPrice! < priceWholesale!
+          ? promoPrice!
+          : priceWholesale!;
+    }
+    return effectivePriceTTC;
+  }
 
   /// Unit price HT in centimes, derived from today's effective TTC price.
   int get unitPriceHT =>
@@ -143,6 +161,7 @@ class Partner {
   final String? ai;
   final int? creditLimit;
   final String? notes;
+  final String priceLevel; // retail | wholesale
   final int balance; // positive = the partner owes us
   final bool active;
 
@@ -159,6 +178,7 @@ class Partner {
         ai = j['ai'] as String?,
         creditLimit = (j['credit_limit'] as num?)?.toInt(),
         notes = j['notes'] as String?,
+        priceLevel = (j['price_level'] as String?) ?? 'retail',
         balance = (j['balance'] as num?)?.toInt() ?? 0,
         active = j['active'] == true;
 }
@@ -287,6 +307,7 @@ class CaisseReport {
   final int creditSales;
   final int cashIn;
   final int cashOut;
+  final int cashRefunds;
   final int expectedCash;
 
   CaisseReport.fromJson(Map<String, dynamic> j)
@@ -298,7 +319,173 @@ class CaisseReport {
         creditSales = (j['credit_sales'] as num?)?.toInt() ?? 0,
         cashIn = (j['cash_in'] as num?)?.toInt() ?? 0,
         cashOut = (j['cash_out'] as num?)?.toInt() ?? 0,
+        cashRefunds = (j['cash_refunds'] as num?)?.toInt() ?? 0,
         expectedCash = (j['expected_cash'] as num?)?.toInt() ?? 0;
+}
+
+class Category {
+  final String id;
+  final String name;
+  final String? parentId;
+
+  Category.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as String,
+        name = j['name'] as String,
+        parentId = j['parent_id'] as String?;
+}
+
+/// One physical serialized unit (IMEI / N° de série).
+class ProductUnit {
+  final String id;
+  final String productId;
+  final String productName;
+  final String serial;
+  final String status; // in_stock | sold | returned | repair | scrapped
+  final bool isUsed;
+  final String? saleDocNumber;
+  final String? saleDate;
+  final String? partnerName;
+  final String? notes;
+
+  ProductUnit.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as String,
+        productId = j['product_id'] as String,
+        productName = (j['product_name'] as String?) ?? '',
+        serial = j['serial'] as String,
+        status = (j['status'] as String?) ?? 'in_stock',
+        isUsed = j['is_used'] == true,
+        saleDocNumber = j['sale_doc_number'] as String?,
+        saleDate = j['sale_date'] as String?,
+        partnerName = j['partner_name'] as String?,
+        notes = j['notes'] as String?;
+}
+
+class Repair {
+  final String id;
+  final String number;
+  final String customerName;
+  final String? customerPhone;
+  final String device;
+  final String? serial;
+  final String fault;
+  final int deposit;
+  final int? quote;
+  final String status;
+  final String? notes;
+  final String createdAt;
+
+  Repair.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as String,
+        number = (j['number'] as String?) ?? '',
+        customerName = j['customer_name'] as String,
+        customerPhone = j['customer_phone'] as String?,
+        device = j['device'] as String,
+        serial = j['serial'] as String?,
+        fault = j['fault'] as String,
+        deposit = (j['deposit'] as num?)?.toInt() ?? 0,
+        quote = (j['quote'] as num?)?.toInt(),
+        status = (j['status'] as String?) ?? 'received',
+        notes = j['notes'] as String?,
+        createdAt = (j['created_at'] as String?) ?? '';
+}
+
+class InstallmentDue {
+  final String id;
+  final String dueDate;
+  final int amount;
+  final int paid;
+  final String? paidAt;
+
+  InstallmentDue.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as String,
+        dueDate = j['due_date'] as String,
+        amount = (j['amount'] as num?)?.toInt() ?? 0,
+        paid = (j['paid'] as num?)?.toInt() ?? 0,
+        paidAt = j['paid_at'] as String?;
+
+  int get remaining => amount - paid;
+  bool get settled => paid >= amount;
+}
+
+class InstallmentPlan {
+  final String id;
+  final String partnerId;
+  final String partnerName;
+  final String? docNumber;
+  final int total;
+  final int months;
+  final String startDate;
+  final List<InstallmentDue> dues;
+
+  InstallmentPlan.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as String,
+        partnerId = j['partner_id'] as String,
+        partnerName = (j['partner_name'] as String?) ?? '',
+        docNumber = j['doc_number'] as String?,
+        total = (j['total'] as num?)?.toInt() ?? 0,
+        months = (j['months'] as num?)?.toInt() ?? 0,
+        startDate = (j['start_date'] as String?) ?? '',
+        dues = [
+          for (final d in (j['dues'] as List? ?? const []))
+            InstallmentDue.fromJson(d)
+        ];
+
+  int get totalPaid => dues.fold(0, (s, d) => s + d.paid);
+}
+
+class Lot {
+  final String id;
+  final String productId;
+  final String productName;
+  final String lotNumber;
+  final String? expiryDate;
+  final int qtyMilli;
+
+  Lot.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as String,
+        productId = j['product_id'] as String,
+        productName = (j['product_name'] as String?) ?? '',
+        lotNumber = (j['lot_number'] as String?) ?? '',
+        expiryDate = j['expiry_date'] as String?,
+        qtyMilli = (j['qty_milli'] as num?)?.toInt() ?? 0;
+
+  /// Days until expiry (negative = expired).
+  int? get daysLeft {
+    final e = DateTime.tryParse(expiryDate ?? '');
+    if (e == null) return null;
+    final now = DateTime.now();
+    return e.difference(DateTime(now.year, now.month, now.day)).inDays;
+  }
+}
+
+class AuditEntry {
+  final String username;
+  final String action;
+  final String? detail;
+  final String createdAt;
+
+  AuditEntry.fromJson(Map<String, dynamic> j)
+      : username = (j['username'] as String?) ?? '',
+        action = (j['action'] as String?) ?? '',
+        detail = j['detail'] as String?,
+        createdAt = (j['created_at'] as String?) ?? '';
+}
+
+class BreakdownRow {
+  final String label;
+  final int count;
+  final int qtyMilli;
+  final int totalHT;
+  final int totalTTC;
+  final int? margin;
+
+  BreakdownRow.fromJson(Map<String, dynamic> j)
+      : label = (j['label'] as String?) ?? '',
+        count = (j['count'] as num?)?.toInt() ?? 0,
+        qtyMilli = (j['qty_milli'] as num?)?.toInt() ?? 0,
+        totalHT = (j['total_ht'] as num?)?.toInt() ?? 0,
+        totalTTC = (j['total_ttc'] as num?)?.toInt() ?? 0,
+        margin = (j['margin'] as num?)?.toInt();
 }
 
 class BackupInfo {

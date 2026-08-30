@@ -24,6 +24,7 @@ type Partner struct {
 	AI          *string `json:"ai"`
 	CreditLimit *int64  `json:"credit_limit"`
 	Notes       *string `json:"notes"`
+	PriceLevel  string  `json:"price_level"` // retail | wholesale
 	Active      bool    `json:"active"`
 	Balance     int64   `json:"balance"` // positive = the partner owes us
 	CreatedAt   string  `json:"created_at"`
@@ -31,7 +32,7 @@ type Partner struct {
 }
 
 const partnerCols = `p.id, p.kind, p.name, p.phone, p.email, p.address, p.nif, p.nis, p.rc, p.ai,
-	p.credit_limit, p.notes, p.active,
+	p.credit_limit, p.notes, p.price_level, p.active,
 	COALESCE((SELECT SUM(amount) FROM partner_ledger pl WHERE pl.partner_id = p.id), 0),
 	p.created_at, p.updated_at`
 
@@ -39,7 +40,7 @@ func scanPartner(row interface{ Scan(...any) error }) (Partner, error) {
 	var p Partner
 	var active int
 	err := row.Scan(&p.ID, &p.Kind, &p.Name, &p.Phone, &p.Email, &p.Address,
-		&p.NIF, &p.NIS, &p.RC, &p.AI, &p.CreditLimit, &p.Notes, &active,
+		&p.NIF, &p.NIS, &p.RC, &p.AI, &p.CreditLimit, &p.Notes, &p.PriceLevel, &active,
 		&p.Balance, &p.CreatedAt, &p.UpdatedAt)
 	p.Active = active == 1
 	return p, err
@@ -98,12 +99,19 @@ type partnerInput struct {
 	AI          *string `json:"ai"`
 	CreditLimit *int64  `json:"credit_limit"`
 	Notes       *string `json:"notes"`
+	PriceLevel  string  `json:"price_level"`
 	Active      *bool   `json:"active"`
 }
 
 func (in *partnerInput) validate() string {
 	if strings.TrimSpace(in.Name) == "" {
 		return "name is required"
+	}
+	if in.PriceLevel == "" {
+		in.PriceLevel = "retail"
+	}
+	if in.PriceLevel != "retail" && in.PriceLevel != "wholesale" {
+		return "price_level must be retail or wholesale"
 	}
 	switch in.Kind {
 	case "customer", "supplier", "both":
@@ -133,10 +141,11 @@ func (s *Server) createPartner(w http.ResponseWriter, r *http.Request) {
 		active = *in.Active
 	}
 	_, err := s.db.Exec(`INSERT INTO partners (id, kind, name, phone, email, address,
-			nif, nis, rc, ai, credit_limit, notes, active, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			nif, nis, rc, ai, credit_limit, notes, price_level, active, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, in.Kind, in.Name, in.Phone, in.Email, in.Address,
-		in.NIF, in.NIS, in.RC, in.AI, in.CreditLimit, in.Notes, b2i(active), now, now)
+		in.NIF, in.NIS, in.RC, in.AI, in.CreditLimit, in.Notes, in.PriceLevel,
+		b2i(active), now, now)
 	if err != nil {
 		writeErr(w, http.StatusConflict, err.Error())
 		return
@@ -181,10 +190,10 @@ func (s *Server) updatePartner(w http.ResponseWriter, r *http.Request) {
 		active = *in.Active
 	}
 	res, err := s.db.Exec(`UPDATE partners SET kind=?, name=?, phone=?, email=?, address=?,
-			nif=?, nis=?, rc=?, ai=?, credit_limit=?, notes=?, active=?, updated_at=?
+			nif=?, nis=?, rc=?, ai=?, credit_limit=?, notes=?, price_level=?, active=?, updated_at=?
 		WHERE id=?`,
 		in.Kind, in.Name, in.Phone, in.Email, in.Address,
-		in.NIF, in.NIS, in.RC, in.AI, in.CreditLimit, in.Notes, b2i(active),
+		in.NIF, in.NIS, in.RC, in.AI, in.CreditLimit, in.Notes, in.PriceLevel, b2i(active),
 		domain.NowISO(), id)
 	if err != nil {
 		writeErr(w, http.StatusConflict, err.Error())

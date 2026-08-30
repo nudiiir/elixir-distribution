@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -97,6 +98,10 @@ func (s *Server) createDocument(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "doc_date must be YYYY-MM-DD")
 		return
 	}
+	if msg := s.checkDiscounts(r, in.DocType, in.Lines); msg != "" {
+		writeErr(w, http.StatusForbidden, msg)
+		return
+	}
 	id, now := domain.NewID(), domain.NowISO()
 
 	tx, err := s.db.Begin()
@@ -162,6 +167,10 @@ func (s *Server) updateDocument(w http.ResponseWriter, r *http.Request) {
 		forbid(w)
 		return
 	}
+	if msg := s.checkDiscounts(r, docType, in.Lines); msg != "" {
+		writeErr(w, http.StatusForbidden, msg)
+		return
+	}
 
 	now := domain.NowISO()
 	if _, err := tx.Exec(`UPDATE documents SET doc_date=?, partner_id=?, warehouse_id=?,
@@ -186,6 +195,23 @@ func (s *Server) updateDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.respondDocument(w, id, http.StatusOK)
+}
+
+// checkDiscounts refuses sale-side discounts from users without the right.
+func (s *Server) checkDiscounts(r *http.Request, docType string, lines []DocumentLine) string {
+	if !strings.HasPrefix(docType, "SALE") && docType != domain.Quote &&
+		docType != domain.DeliveryNote {
+		return ""
+	}
+	if s.can(r, "discount") {
+		return ""
+	}
+	for _, l := range lines {
+		if l.DiscountPct != 0 {
+			return "vous n'êtes pas autorisé à accorder des remises"
+		}
+	}
+	return ""
 }
 
 func insertLines(tx *sql.Tx, docID string, lines []DocumentLine, now string) error {
@@ -342,5 +368,6 @@ func (s *Server) cancelDocument(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "document not found or not a draft (posted documents are reversed with a credit note)")
 		return
 	}
+	s.audit(r, "document.cancel", "document", id, "annulation d'un brouillon")
 	s.respondDocument(w, id, http.StatusOK)
 }

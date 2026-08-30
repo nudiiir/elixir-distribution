@@ -88,6 +88,38 @@ func New(db *sql.DB, dbPath string) http.Handler {
 		r.Post("/gift-card-uses/{id}/refund", s.refundGiftCardUse)
 		r.Post("/gift-cards/{id}/cancel", s.cancelGiftCard)
 
+		r.Get("/categories", s.listCategories)
+		r.Post("/categories", s.createCategory)
+		r.Put("/categories/{id}", s.updateCategory)
+		r.Delete("/categories/{id}", s.deleteCategory)
+
+		r.Get("/units", s.listUnits)
+		r.Post("/units", s.createUnits)
+		r.Get("/units/serial/{serial}", s.getUnitBySerial)
+		r.Post("/units/sell", s.sellUnit)
+		r.Put("/units/{id}", s.updateUnit)
+		r.Delete("/units/{id}", s.deleteUnit)
+
+		r.Get("/repairs", s.listRepairs)
+		r.Post("/repairs", s.createRepair)
+		r.Put("/repairs/{id}", s.updateRepair)
+
+		r.Get("/installment-plans", s.listInstallmentPlans)
+		r.Post("/installment-plans", s.createInstallmentPlan)
+		r.Delete("/installment-plans/{id}", s.deleteInstallmentPlan)
+		r.Post("/installment-dues/{id}/pay", s.payInstallmentDue)
+		r.Get("/installments/overdue", s.overdueInstallments)
+
+		r.Get("/lots", s.listLots)
+		r.Post("/lots", s.createLot)
+		r.Put("/lots/{id}", s.updateLot)
+		r.Delete("/lots/{id}", s.deleteLot)
+
+		r.Get("/reports/summary", s.reportSummary)
+		r.Get("/reports/breakdown", s.reportBreakdown)
+
+		r.Get("/audit", s.listAudit)
+
 		r.Get("/templates", s.listTemplates)
 		r.Post("/templates", s.createTemplate)
 		r.Get("/templates/{id}", s.getTemplate)

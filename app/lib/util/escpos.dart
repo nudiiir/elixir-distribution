@@ -1,6 +1,9 @@
 import '../api/models.dart';
 import '../theme/tokens.dart' show fmtQty, roundDiv;
 
+/// ESC p 0 — fires the cash-drawer solenoid on the printer's RJ11 port.
+const List<int> drawerKick = [0x1B, 0x70, 0x00, 0x19, 0xFA];
+
 /// ESC/POS ticket builder for 80mm thermal printers (42 columns, Font A).
 /// Text is ASCII-folded so every cheap printer renders it correctly.
 class EscPos {

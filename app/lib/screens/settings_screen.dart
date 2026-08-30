@@ -109,6 +109,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (saved == true) _loadUsers();
   }
 
+  Future<void> _openAudit() async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _AuditDialog(api: widget.api),
+    );
+  }
+
   @override
   void dispose() {
     for (final c in _ctrls.values) {
@@ -325,6 +332,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ],
               if (_isAdmin) ...[
                 const SizedBox(height: 14),
+                Card14(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(children: [
+                        const Expanded(
+                            child: MicroLabel("Journal d'activité")),
+                        TextButton.icon(
+                          onPressed: _openAudit,
+                          icon: const Icon(Icons.history_rounded,
+                              size: 15, color: T.mintDark),
+                          label: Text('Consulter',
+                              style: T.small.copyWith(
+                                  color: T.mintDark,
+                                  fontWeight: FontWeight.w700)),
+                        ),
+                      ]),
+                      Text(
+                          'Qui a annulé un document, changé un prix, ouvert '
+                          'ou clôturé la caisse — horodaté, admin uniquement.',
+                          style: T.bodyMuted),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
                 CloudCard(api: widget.api),
               ],
               const SizedBox(height: 14),
@@ -483,6 +515,8 @@ const _permLabels = [
   ('stock', 'Stock'),
   ('products', 'Produits'),
   ('partners', 'Partenaires'),
+  ('sav', 'Réparations'),
+  ('reports', 'Rapports'),
   ('assistant', 'Assistant'),
   ('settings', 'Paramètres'),
 ];
@@ -491,12 +525,15 @@ Map<String, bool> _roleDefaults(String role) => switch (role) {
       'admin' || 'manager' => {
           for (final (k, _) in _permLabels) k: true,
           'view_cost': true,
+          'discount': true,
         },
       _ => {
           for (final (k, _) in _permLabels) k: false,
           'pos': true,
           'assistant': true,
+          'sav': true,
           'view_cost': false,
+          'discount': false,
         },
     };
 
@@ -678,6 +715,24 @@ class _UserFormDialogState extends State<_UserFormDialog> {
                           style: T.bodyMuted),
                     ]),
                   ),
+                  const SizedBox(height: 8),
+                  InkWell(
+                    onTap: () => setState(() =>
+                        _perms['discount'] = !(_perms['discount'] ?? false)),
+                    child: Row(children: [
+                      Icon(
+                          (_perms['discount'] ?? false)
+                              ? Icons.check_box
+                              : Icons.check_box_outline_blank,
+                          size: 18,
+                          color: (_perms['discount'] ?? false)
+                              ? T.mintDeep
+                              : T.faint),
+                      const SizedBox(width: 8),
+                      Text('Peut accorder des remises à la caisse',
+                          style: T.bodyMuted),
+                    ]),
+                  ),
                 ],
                 if (widget.existing != null && !_isSelf) ...[
                   const SizedBox(height: 12),
@@ -760,6 +815,122 @@ class _SettingField extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+
+/// Journal d'activité — lecture seule, admin.
+class _AuditDialog extends StatefulWidget {
+  const _AuditDialog({required this.api});
+  final ApiClient api;
+
+  @override
+  State<_AuditDialog> createState() => _AuditDialogState();
+}
+
+class _AuditDialogState extends State<_AuditDialog> {
+  List<AuditEntry> _items = const [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final items = await widget.api.auditLog(limit: 200);
+      if (mounted) {
+        setState(() {
+          _items = items;
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  String _actionLabel(String a) => switch (a) {
+        'document.cancel' => 'Annulation',
+        'product.price_change' => 'Changement de prix',
+        'caisse.open' => 'Ouverture caisse',
+        'caisse.close' => 'Clôture caisse',
+        _ => a,
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: T.surface,
+      shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(T.rCard)),
+      child: SizedBox(
+        width: 620,
+        height: 520,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(children: [
+                  const Expanded(
+                      child: Text("Journal d'activité", style: T.h2)),
+                  IconButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close, size: 18, color: T.muted),
+                  ),
+                ]),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: _items.isEmpty
+                      ? EmptyState(
+                          icon: Icons.history_rounded,
+                          text: _loading
+                              ? 'Chargement…'
+                              : 'Aucun événement enregistré pour le moment.')
+                      : ListView.separated(
+                          itemCount: _items.length,
+                          separatorBuilder: (_, _) => const Divider(),
+                          itemBuilder: (context, i) {
+                            final e = _items[i];
+                            return Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 8),
+                              child: Row(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.start,
+                                  children: [
+                                    SizedBox(
+                                      width: 135,
+                                      child: Text(
+                                          e.createdAt.length >= 16
+                                              ? e.createdAt
+                                                  .substring(0, 16)
+                                                  .replaceFirst('T', '  ')
+                                              : e.createdAt,
+                                          style: T.monoSmall
+                                              .copyWith(fontSize: 10.5)),
+                                    ),
+                                    SizedBox(
+                                      width: 140,
+                                      child: MintChip(_actionLabel(e.action),
+                                          color: T.cream, fg: T.muted),
+                                    ),
+                                    Expanded(
+                                      child: Text(e.detail ?? '',
+                                          style: T.body
+                                              .copyWith(fontSize: 12.5)),
+                                    ),
+                                  ]),
+                            );
+                          },
+                        ),
+                ),
+              ]),
+        ),
       ),
     );
   }

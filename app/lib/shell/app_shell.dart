@@ -14,7 +14,9 @@ import '../screens/partners_screen.dart';
 import '../screens/pos_screen.dart';
 import '../screens/products_screen.dart';
 import '../screens/purchases_screen.dart';
+import '../screens/reports_screen.dart';
 import '../screens/sales_screen.dart';
+import '../screens/sav_screen.dart';
 import '../screens/settings_screen.dart';
 import '../screens/stock_screen.dart';
 import '../theme/tokens.dart';
@@ -41,6 +43,8 @@ const _allModules = [
   _Module('stock', Icons.inventory_2_outlined, 'Stock'),
   _Module('products', Icons.category_outlined, 'Produits'),
   _Module('partners', Icons.people_alt_outlined, 'Partenaires'),
+  _Module('sav', Icons.build_outlined, 'Réparations'),
+  _Module('reports', Icons.query_stats_rounded, 'Rapports'),
   _Module('assistant', Icons.auto_awesome_outlined, 'Assistant'),
   _Module('delivery', Icons.rocket_launch_outlined, 'Livraison', enabled: false),
   _Module('designer', Icons.design_services_outlined, 'Modèles',
@@ -151,6 +155,7 @@ class _AppShellState extends State<AppShell> {
         'pos' => PosScreen(
             api: widget.api,
             config: widget.config,
+            user: user,
             cashierName:
                 user.fullName.isEmpty ? user.username : user.fullName),
         'sales' => SalesScreen(api: widget.api),
@@ -162,6 +167,8 @@ class _AppShellState extends State<AppShell> {
             session: widget.session,
             searchRequest: _productsQuery),
         'partners' => PartnersScreen(api: widget.api),
+        'sav' => SavScreen(api: widget.api),
+        'reports' => ReportsScreen(api: widget.api, session: widget.session),
         'assistant' => AssistantScreen(api: widget.api),
         'designer' => DesignerScreen(api: widget.api),
         'settings' => SettingsScreen(
@@ -188,6 +195,28 @@ class _AppShellState extends State<AppShell> {
             onLogout: widget.onLogout,
           ),
           const Divider(),
+          // Loud offline strip — every caisse depends on the server PC.
+          if (!_online)
+            Container(
+              width: double.infinity,
+              color: T.danger,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 18, vertical: 7),
+              child: const Row(children: [
+                Icon(Icons.wifi_off_rounded, size: 15, color: Colors.white),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                      'SERVEUR INJOIGNABLE — les ventes sont impossibles. '
+                      'Vérifiez que le PC serveur est allumé et connecté au réseau.',
+                      style: TextStyle(
+                          fontFamily: T.sans,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white)),
+                ),
+              ]),
+            ),
           Expanded(
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,

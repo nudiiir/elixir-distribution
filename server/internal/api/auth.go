@@ -35,9 +35,11 @@ type AuthUser struct {
 
 // AllPerms: module access flags + special flags.
 // view_cost = may see purchase prices / CUMP / margins (enforced by redaction).
+// discount = may apply remises on sale lines (enforced at document creation).
 var AllPerms = []string{
 	"dashboard", "pos", "sales", "purchases", "stock",
-	"products", "partners", "assistant", "settings", "view_cost",
+	"products", "partners", "assistant", "reports", "sav",
+	"settings", "view_cost", "discount",
 }
 
 func defaultPerms(role string) map[string]bool {
@@ -50,6 +52,7 @@ func defaultPerms(role string) map[string]bool {
 	case "cashier":
 		p["pos"] = true
 		p["assistant"] = true
+		p["sav"] = true
 	}
 	return p
 }

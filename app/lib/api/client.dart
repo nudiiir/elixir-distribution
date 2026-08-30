@@ -331,6 +331,162 @@ class ApiClient {
     return j['barcode'] as String;
   }
 
+  // ---- Categories ----
+
+  Future<List<Category>> categories() async {
+    final j = await _get('/api/v1/categories');
+    return [for (final e in j['items'] as List) Category.fromJson(e)];
+  }
+
+  Future<Category> createCategory(String name) async =>
+      Category.fromJson(await _post('/api/v1/categories', {'name': name}));
+
+  Future<void> renameCategory(String id, String name) async {
+    await _put('/api/v1/categories/$id', {'name': name});
+  }
+
+  Future<void> deleteCategory(String id) async {
+    await _delete('/api/v1/categories/$id');
+  }
+
+  // ---- Serialized units (IMEI) ----
+
+  Future<List<ProductUnit>> units(
+      {String? productId, String? status, String? q}) async {
+    final j = await _get('/api/v1/units', {
+      'product_id': ?productId,
+      'status': ?status,
+      if (q != null && q.isNotEmpty) 'q': q,
+    });
+    return [for (final e in j['items'] as List) ProductUnit.fromJson(e)];
+  }
+
+  Future<ProductUnit> unitBySerial(String serial) async =>
+      ProductUnit.fromJson(
+          await _get('/api/v1/units/serial/${Uri.encodeComponent(serial)}'));
+
+  /// Registers serials; returns (added, duplicates).
+  Future<(int, List<String>)> addUnits(String productId, List<String> serials,
+      {bool isUsed = false}) async {
+    final j = await _post('/api/v1/units', {
+      'product_id': productId,
+      'serials': serials,
+      'is_used': isUsed,
+    });
+    return (
+      (j['added'] as num?)?.toInt() ?? 0,
+      [for (final d in (j['duplicates'] as List? ?? const [])) d.toString()]
+    );
+  }
+
+  Future<void> sellUnit(String serial,
+      {required String productId, String? saleDocId, String? partnerId}) async {
+    await _post('/api/v1/units/sell', {
+      'serial': serial,
+      'product_id': productId,
+      'sale_doc_id': saleDocId,
+      'partner_id': partnerId,
+    });
+  }
+
+  Future<void> updateUnit(String id,
+      {required String status, String? notes}) async {
+    await _put('/api/v1/units/$id', {'status': status, 'notes': notes});
+  }
+
+  // ---- SAV (repairs) ----
+
+  Future<List<Repair>> repairs({String? status, String? q}) async {
+    final j = await _get('/api/v1/repairs', {
+      'status': ?status,
+      if (q != null && q.isNotEmpty) 'q': q,
+    });
+    return [for (final e in j['items'] as List) Repair.fromJson(e)];
+  }
+
+  Future<Repair> saveRepair(Map<String, dynamic> data, {String? id}) async {
+    final j = id == null
+        ? await _post('/api/v1/repairs', data)
+        : await _put('/api/v1/repairs/$id', data);
+    return Repair.fromJson(j);
+  }
+
+  // ---- Installments ----
+
+  Future<List<InstallmentPlan>> installmentPlans({String? partnerId}) async {
+    final j =
+        await _get('/api/v1/installment-plans', {'partner_id': ?partnerId});
+    return [for (final e in j['items'] as List) InstallmentPlan.fromJson(e)];
+  }
+
+  Future<void> createInstallmentPlan({
+    required String partnerId,
+    required int total,
+    required int months,
+    required String startDate,
+    String? documentId,
+    String? notes,
+  }) async {
+    await _post('/api/v1/installment-plans', {
+      'partner_id': partnerId,
+      'total': total,
+      'months': months,
+      'start_date': startDate,
+      'document_id': documentId,
+      'notes': notes,
+    });
+  }
+
+  Future<void> payInstallmentDue(String dueId, {int? amount}) async {
+    await _post('/api/v1/installment-dues/$dueId/pay', {'amount': amount});
+  }
+
+  Future<void> deleteInstallmentPlan(String id) async {
+    await _delete('/api/v1/installment-plans/$id');
+  }
+
+  // ---- Lots (DLC) ----
+
+  Future<List<Lot>> lots({String? productId, int? expiringDays}) async {
+    final j = await _get('/api/v1/lots', {
+      'product_id': ?productId,
+      if (expiringDays != null) 'expiring_days': '$expiringDays',
+    });
+    return [for (final e in j['items'] as List) Lot.fromJson(e)];
+  }
+
+  Future<void> saveLot(Map<String, dynamic> data, {String? id}) async {
+    if (id == null) {
+      await _post('/api/v1/lots', data);
+    } else {
+      await _put('/api/v1/lots/$id', data);
+    }
+  }
+
+  Future<void> deleteLot(String id) async {
+    await _delete('/api/v1/lots/$id');
+  }
+
+  // ---- Reports & audit ----
+
+  Future<Map<String, dynamic>> reportSummary(
+      {required String from, required String to}) async {
+    return await _get('/api/v1/reports/summary', {'from': from, 'to': to})
+        as Map<String, dynamic>;
+  }
+
+  Future<List<BreakdownRow>> reportBreakdown(
+      {required String from, required String to, required String by}) async {
+    final j = await _get(
+        '/api/v1/reports/breakdown', {'from': from, 'to': to, 'by': by});
+    return [for (final e in j['items'] as List) BreakdownRow.fromJson(e)];
+  }
+
+  Future<List<AuditEntry>> auditLog({int limit = 150}) async {
+    final j = await _get('/api/v1/audit', {'limit': '$limit'});
+    return [for (final e in j['items'] as List) AuditEntry.fromJson(e)];
+  }
+
   // ---- Print templates ----
 
   Future<List<Template>> templates({String? kind}) async {

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
@@ -27,18 +28,33 @@ class CartLine {
   CartLine(this.product) : qtyMilli = 1000;
   final Product product;
   int qtyMilli;
+  int discountPct = 0; // percent * 100
 
-  int get unitPriceHT => product.unitPriceHT;
-  int get lineHT => roundDiv(unitPriceHT * qtyMilli, 1000);
-  int get lineVAT => roundDiv(lineHT * product.vatRate, 10000);
-  int get lineTTC => lineHT + lineVAT;
+  /// All money math depends on the customer's price tier, resolved at
+  /// render/checkout time so picking the client later reprices the cart.
+  int unitTTC(String level) => product.priceFor(level);
+  int unitHT(String level) =>
+      ((unitTTC(level) * 10000) + (10000 + product.vatRate) ~/ 2) ~/
+      (10000 + product.vatRate);
+  int lineHT(String level) {
+    final gross = roundDiv(unitHT(level) * qtyMilli, 1000);
+    return roundDiv(gross * (10000 - discountPct), 10000);
+  }
+
+  int lineVAT(String level) => roundDiv(lineHT(level) * product.vatRate, 10000);
+  int lineTTC(String level) => lineHT(level) + lineVAT(level);
 }
 
 class PosScreen extends StatefulWidget {
   const PosScreen(
-      {super.key, required this.api, required this.config, this.cashierName = ''});
+      {super.key,
+      required this.api,
+      required this.config,
+      required this.user,
+      this.cashierName = ''});
   final ApiClient api;
   final LocalConfig config;
+  final User user;
   final String cashierName;
 
   @override
@@ -60,6 +76,12 @@ class _PosScreenState extends State<PosScreen> {
   CaisseSession? _session;
   bool _sessionLoading = true;
   Map<String, String> _company = const {};
+  List<Category> _cats = const [];
+  String? _catFilter;
+  Set<String> _favorites = {};
+
+  bool get _canDiscount => widget.user.can('discount');
+  String get _priceLevel => _client?.priceLevel ?? 'retail';
 
   @override
   void initState() {
@@ -77,8 +99,16 @@ class _PosScreenState extends State<PosScreen> {
     } catch (_) {}
     _loadSession();
     _loadCompany();
+    _loadCats();
     _refreshStock();
     _search('');
+  }
+
+  Future<void> _loadCats() async {
+    try {
+      final cats = await widget.api.categories();
+      if (mounted) setState(() => _cats = cats);
+    } catch (_) {}
   }
 
   Future<void> _loadSession() async {
@@ -98,7 +128,35 @@ class _PosScreenState extends State<PosScreen> {
   Future<void> _loadCompany() async {
     try {
       final s = await widget.api.settings();
-      if (mounted) setState(() => _company = s);
+      if (mounted) {
+        setState(() {
+          _company = s;
+          _favorites = _parseFavorites(s['pos_quick_keys']);
+        });
+      }
+    } catch (_) {}
+  }
+
+  static Set<String> _parseFavorites(String? raw) {
+    try {
+      return {
+        for (final id in jsonDecode(raw ?? '[]') as List) id.toString()
+      };
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /// Quick keys: administrators pin products with a right-click; everyone
+  /// gets them first on the grid.
+  Future<void> _toggleFavorite(Product p) async {
+    if (!widget.user.isAdmin) return;
+    final next = {..._favorites};
+    if (!next.remove(p.id)) next.add(p.id);
+    setState(() => _favorites = next);
+    try {
+      await widget.api
+          .saveSettings({'pos_quick_keys': jsonEncode(next.toList())});
     } catch (_) {}
   }
 
@@ -141,7 +199,10 @@ class _PosScreenState extends State<PosScreen> {
         received: received,
         change: change,
       );
-      await rawPrint(printer, bytes);
+      // Cash payment pops the drawer through the printer's RJ11 port.
+      final payload =
+          doc.paymentMethod == 'cash' ? [...drawerKick, ...bytes] : bytes;
+      await rawPrint(printer, payload);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -179,7 +240,7 @@ class _PosScreenState extends State<PosScreen> {
 
   Future<void> _search(String q) async {
     try {
-      final items = await widget.api.products(q: q, limit: 60);
+      final items = await widget.api.products(q: q, limit: 200);
       if (mounted) setState(() => _results = items);
     } catch (_) {
       if (mounted) setState(() => _results = const []);
@@ -188,10 +249,22 @@ class _PosScreenState extends State<PosScreen> {
 
   /// Barcode scanners type the code then send Enter.
   Future<void> _onSubmitted(String q) async {
-    if (q.trim().isEmpty) return;
+    q = q.trim();
+    if (q.isEmpty) return;
+
+    // Scale barcodes (GS1 prefixes 21/22): 2 P PPPPP VVVVV C —
+    // 21 embeds the weight in grams, 22 the price in centimes.
+    final scale = RegExp(r'^(2[12])(\d{5})(\d{5})\d$').firstMatch(q);
+    if (scale != null && await _addScaleItem(scale)) {
+      _searchCtrl.clear();
+      _search('');
+      _searchFocus.requestFocus();
+      return;
+    }
+
     try {
-      final items = await widget.api.products(q: q.trim(), limit: 5);
-      final exact = items.where((p) => p.matchesBarcode(q.trim())).toList();
+      final items = await widget.api.products(q: q, limit: 5);
+      final exact = items.where((p) => p.matchesBarcode(q)).toList();
       final pick = exact.isNotEmpty
           ? exact.first
           : (items.length == 1 ? items.first : null);
@@ -204,6 +277,43 @@ class _PosScreenState extends State<PosScreen> {
       }
     } catch (_) {}
     _searchFocus.requestFocus();
+  }
+
+  Future<bool> _addScaleItem(RegExpMatch m) async {
+    final plu = m.group(2)!;
+    final value = int.parse(m.group(3)!);
+    Product? p;
+    try {
+      final trimmed = plu.replaceFirst(RegExp(r'^0+'), '');
+      for (final code in {plu, if (trimmed.isNotEmpty) trimmed}) {
+        final items = await widget.api.products(q: code, limit: 5);
+        final hit = items.where((x) => x.matchesBarcode(code));
+        if (hit.isNotEmpty) {
+          p = hit.first;
+          break;
+        }
+      }
+    } catch (_) {}
+    if (p == null) return false;
+    final product = p;
+    int qtyMilli;
+    if (m.group(1) == '21') {
+      qtyMilli = value; // grams == milli-kg
+    } else {
+      final unit = product.priceFor(_priceLevel);
+      if (unit <= 0) return false;
+      qtyMilli = roundDiv(value * 1000, unit);
+    }
+    if (qtyMilli <= 0) return false;
+    setState(() {
+      final existing = _cart.where((l) => l.product.id == product.id);
+      if (existing.isNotEmpty) {
+        existing.first.qtyMilli += qtyMilli;
+      } else {
+        _cart.add(CartLine(product)..qtyMilli = qtyMilli);
+      }
+    });
+    return true;
   }
 
   Future<void> _addToCart(Product p) async {
@@ -316,23 +426,116 @@ class _PosScreenState extends State<PosScreen> {
 
   Future<void> _editQty(CartLine line) async {
     final ctrl = TextEditingController(text: fmtQty(line.qtyMilli));
-    final result = await showDialog<int>(
+    final discCtrl = TextEditingController(
+        text: line.discountPct == 0 ? '' : '${line.discountPct ~/ 100}');
+    final result = await showDialog<(int, int)>(
+      context: context,
+      builder: (context) {
+        (int, int)? parse() {
+          final q = parseQty(ctrl.text);
+          if (q == null || q <= 0) return null;
+          final d = int.tryParse(discCtrl.text.trim()) ?? 0;
+          return (q, (d.clamp(0, 100)) * 100);
+        }
+
+        return Dialog(
+          backgroundColor: T.surface,
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(T.rCard)),
+          child: SizedBox(
+            width: 300,
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Text(line.product.name,
+                    style: T.h2, textAlign: TextAlign.center),
+                const SizedBox(height: 4),
+                Text(
+                    line.product.isWeighable ? 'Quantité (kg)' : 'Quantité',
+                    style: T.small),
+                const SizedBox(height: 12),
+                Container(
+                  height: 54,
+                  decoration: BoxDecoration(
+                    color: T.bg,
+                    borderRadius: BorderRadius.circular(T.rInner),
+                    border: Border.all(color: T.border),
+                  ),
+                  child: TextField(
+                    controller: ctrl,
+                    autofocus: true,
+                    textAlign: TextAlign.center,
+                    style: T.monoBig,
+                    onSubmitted: (_) => Navigator.of(context).pop(parse()),
+                    decoration: const InputDecoration(
+                        border: InputBorder.none,
+                        contentPadding: EdgeInsets.symmetric(vertical: 12)),
+                  ),
+                ),
+                if (_canDiscount) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: T.bg,
+                      borderRadius: BorderRadius.circular(T.rInner),
+                      border: Border.all(color: T.border),
+                    ),
+                    child: TextField(
+                      controller: discCtrl,
+                      textAlign: TextAlign.center,
+                      style: T.monoBody,
+                      onSubmitted: (_) => Navigator.of(context).pop(parse()),
+                      decoration: InputDecoration(
+                        border: InputBorder.none,
+                        hintText: 'Remise % (0–100)',
+                        hintStyle: T.small.copyWith(color: T.ghost),
+                        contentPadding:
+                            const EdgeInsets.symmetric(vertical: 10),
+                      ),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 14),
+                PrimaryButton(
+                  label: 'Valider',
+                  onPressed: () => Navigator.of(context).pop(parse()),
+                ),
+              ]),
+            ),
+          ),
+        );
+      },
+    );
+    ctrl.dispose();
+    discCtrl.dispose();
+    if (result != null) {
+      setState(() {
+        line.qtyMilli = result.$1;
+        line.discountPct = result.$2;
+      });
+    }
+    _searchFocus.requestFocus();
+  }
+
+  /// Whole-ticket remise: same percentage on every line.
+  Future<void> _ticketDiscount() async {
+    if (!_canDiscount || _cart.isEmpty) return;
+    final ctrl = TextEditingController();
+    final pct = await showDialog<int>(
       context: context,
       builder: (context) => Dialog(
         backgroundColor: T.surface,
         shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(T.rCard)),
         child: SizedBox(
-          width: 300,
+          width: 280,
           child: Padding(
             padding: const EdgeInsets.all(20),
             child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Text(line.product.name,
-                  style: T.h2, textAlign: TextAlign.center),
+              const Text('Remise sur le ticket', style: T.h2),
               const SizedBox(height: 4),
-              Text(
-                  line.product.isWeighable ? 'Quantité (kg)' : 'Quantité',
-                  style: T.small),
+              Text('Appliquée à toutes les lignes', style: T.small),
               const SizedBox(height: 12),
               Container(
                 height: 54,
@@ -347,17 +550,20 @@ class _PosScreenState extends State<PosScreen> {
                   textAlign: TextAlign.center,
                   style: T.monoBig,
                   onSubmitted: (v) =>
-                      Navigator.of(context).pop(parseQty(v)),
-                  decoration: const InputDecoration(
-                      border: InputBorder.none,
-                      contentPadding: EdgeInsets.symmetric(vertical: 12)),
+                      Navigator.of(context).pop(int.tryParse(v.trim())),
+                  decoration: InputDecoration(
+                    border: InputBorder.none,
+                    hintText: '%',
+                    hintStyle: T.monoBig.copyWith(color: T.ghost),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
                 ),
               ),
               const SizedBox(height: 14),
               PrimaryButton(
-                label: 'Valider',
+                label: 'Appliquer',
                 onPressed: () =>
-                    Navigator.of(context).pop(parseQty(ctrl.text)),
+                    Navigator.of(context).pop(int.tryParse(ctrl.text.trim())),
               ),
             ]),
           ),
@@ -365,8 +571,12 @@ class _PosScreenState extends State<PosScreen> {
       ),
     );
     ctrl.dispose();
-    if (result != null && result > 0) {
-      setState(() => line.qtyMilli = result);
+    if (pct != null) {
+      setState(() {
+        for (final l in _cart) {
+          l.discountPct = pct.clamp(0, 100) * 100;
+        }
+      });
     }
     _searchFocus.requestFocus();
   }
@@ -377,8 +587,39 @@ class _PosScreenState extends State<PosScreen> {
     _searchFocus.requestFocus();
   }
 
-  int get _totalHT => _cart.fold(0, (s, l) => s + l.lineHT);
-  int get _totalVAT => _cart.fold(0, (s, l) => s + l.lineVAT);
+  /// Return flow: pick the original sale, choose the lines, refund in cash.
+  Future<void> _startReturn() async {
+    final refunded = await showDialog<DocDetail>(
+      context: context,
+      builder: (_) => _ReturnDialog(
+        api: widget.api,
+        warehouseId: _warehouseId,
+        caisseSessionId: _session?.id,
+      ),
+    );
+    if (refunded != null && mounted) {
+      _refreshStock();
+      // Pop the drawer to give the money back.
+      final printer = widget.config.ticketPrinter;
+      if (printer != null && printer.isNotEmpty) {
+        try {
+          await rawPrint(printer, drawerKick);
+        } catch (_) {}
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        backgroundColor: T.ink,
+        behavior: SnackBarBehavior.floating,
+        content: Text(
+            'Retour ${refunded.number} validé — rendre ${fmtDA(refunded.totalTTC)} au client.',
+            style: const TextStyle(fontFamily: T.sans, color: Colors.white)),
+      ));
+    }
+    _searchFocus.requestFocus();
+  }
+
+  int get _totalHT => _cart.fold(0, (s, l) => s + l.lineHT(_priceLevel));
+  int get _totalVAT => _cart.fold(0, (s, l) => s + l.lineVAT(_priceLevel));
   int get _timbre {
     if (_paymentMethod != 'cash' || _cart.isEmpty) return 0;
     var t = roundDiv(_totalHT + _totalVAT, 100);
@@ -396,6 +637,23 @@ class _PosScreenState extends State<PosScreen> {
     if (_paymentMethod == 'credit' && _client == null) {
       await _pickClient();
       if (_client == null) return;
+    }
+    if (!mounted) return;
+
+    // Serialized products (IMEI): capture which physical unit goes out.
+    Map<String, List<String>> serialsByProduct = {};
+    final serialized =
+        _cart.where((l) => l.product.trackSerials).toList();
+    if (serialized.isNotEmpty) {
+      final res = await showDialog<Map<String, List<String>>>(
+        context: context,
+        builder: (_) => _SerialDialog(lines: serialized),
+      );
+      if (res == null) {
+        _searchFocus.requestFocus();
+        return;
+      }
+      serialsByProduct = res;
     }
     if (!mounted) return;
 
@@ -425,10 +683,14 @@ class _PosScreenState extends State<PosScreen> {
         return; // cancelled
       }
     }
-    await _checkout(received: received, giftUseId: giftUseId);
+    await _checkout(
+        received: received, giftUseId: giftUseId, serials: serialsByProduct);
   }
 
-  Future<void> _checkout({int? received, String? giftUseId}) async {
+  Future<void> _checkout(
+      {int? received,
+      String? giftUseId,
+      Map<String, List<String>> serials = const {}}) async {
     setState(() => _checkingOut = true);
     try {
       final posted = await widget.api.checkoutTicket(
@@ -443,11 +705,23 @@ class _PosScreenState extends State<PosScreen> {
               'product_id': l.product.id,
               'description': l.product.name,
               'qty_milli': l.qtyMilli,
-              'unit_price': l.unitPriceHT,
+              'unit_price': l.unitHT(_priceLevel),
+              'discount_pct': l.discountPct,
               'vat_rate': l.product.vatRate,
             }
         ],
       );
+      // Mark the sold serials — the sale stands even if this trails behind.
+      for (final e in serials.entries) {
+        for (final serial in e.value) {
+          try {
+            await widget.api.sellUnit(serial,
+                productId: e.key,
+                saleDocId: posted.id,
+                partnerId: _client?.id);
+          } catch (_) {}
+        }
+      }
       if (!mounted) return;
       final change =
           received == null ? 0 : (received - posted.totalTTC).clamp(0, 1 << 48);
@@ -627,6 +901,14 @@ class _PosScreenState extends State<PosScreen> {
                   ),
                   const SizedBox(width: 6),
                   Tooltip(
+                    message: 'Retour / remboursement client',
+                    child: IconButton(
+                      onPressed: _startReturn,
+                      icon: const Icon(Icons.assignment_return_outlined,
+                          size: 17, color: T.muted),
+                    ),
+                  ),
+                  Tooltip(
                     message: 'Vendre une carte cadeau',
                     child: IconButton(
                       onPressed: () => showDialog<void>(
@@ -689,31 +971,74 @@ class _PosScreenState extends State<PosScreen> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 16),
+                if (_cats.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    height: 32,
+                    child: ListView(
+                      scrollDirection: Axis.horizontal,
+                      children: [
+                        _CatChip(
+                          label: 'Tous',
+                          selected: _catFilter == null,
+                          onTap: () => setState(() => _catFilter = null),
+                        ),
+                        for (final c in _cats)
+                          _CatChip(
+                            label: c.name,
+                            selected: _catFilter == c.id,
+                            onTap: () => setState(() =>
+                                _catFilter = _catFilter == c.id ? null : c.id),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 12),
                 Expanded(
-                  child: _results.isEmpty
-                      ? const EmptyState(
+                  child: Builder(builder: (context) {
+                    final shown = [
+                      for (final p in _results)
+                        if (_catFilter == null || p.categoryId == _catFilter) p
+                    ];
+                    // Pinned quick keys come first while browsing.
+                    if (_searchCtrl.text.trim().isEmpty &&
+                        _favorites.isNotEmpty) {
+                      shown.sort((a, b) {
+                        final fa = _favorites.contains(a.id) ? 0 : 1;
+                        final fb = _favorites.contains(b.id) ? 0 : 1;
+                        return fa != fb
+                            ? fa - fb
+                            : a.name.toLowerCase().compareTo(b.name.toLowerCase());
+                      });
+                    }
+                    if (shown.isEmpty) {
+                      return const EmptyState(
                           icon: Icons.qr_code_scanner,
                           text:
-                              'Aucun produit.\nScannez un code-barres ou tapez un nom.')
-                      : GridView.builder(
-                          gridDelegate:
-                              const SliverGridDelegateWithMaxCrossAxisExtent(
-                            maxCrossAxisExtent: 180,
-                            mainAxisSpacing: 10,
-                            crossAxisSpacing: 10,
-                            mainAxisExtent: 120,
-                          ),
-                          itemCount: _results.length,
-                          itemBuilder: (context, i) => _ProductTile(
-                            product: _results[i],
-                            stockMilli: _stockByProduct[_results[i].id] ?? 0,
-                            onTap: () {
-                              _addToCart(_results[i]);
-                              _searchFocus.requestFocus();
-                            },
-                          ),
-                        ),
+                              'Aucun produit.\nScannez un code-barres ou tapez un nom.');
+                    }
+                    return GridView.builder(
+                      gridDelegate:
+                          const SliverGridDelegateWithMaxCrossAxisExtent(
+                        maxCrossAxisExtent: 180,
+                        mainAxisSpacing: 10,
+                        crossAxisSpacing: 10,
+                        mainAxisExtent: 120,
+                      ),
+                      itemCount: shown.length,
+                      itemBuilder: (context, i) => _ProductTile(
+                        product: shown[i],
+                        stockMilli: _stockByProduct[shown[i].id] ?? 0,
+                        favorite: _favorites.contains(shown[i].id),
+                        onTap: () {
+                          _addToCart(shown[i]);
+                          _searchFocus.requestFocus();
+                        },
+                        onSecondaryTap: () => _toggleFavorite(shown[i]),
+                      ),
+                    );
+                  }),
                 ),
               ],
             ),
@@ -796,6 +1121,11 @@ class _PosScreenState extends State<PosScreen> {
                           ),
                         ),
                       ),
+                      if (_client?.priceLevel == 'wholesale') ...[
+                        const MintChip('demi-gros',
+                            color: T.warnTint, fg: T.warnDark),
+                        const SizedBox(width: 6),
+                      ],
                       if (_client != null)
                         InkWell(
                           onTap: () => setState(() {
@@ -829,6 +1159,7 @@ class _PosScreenState extends State<PosScreen> {
                         separatorBuilder: (_, _) => const Divider(),
                         itemBuilder: (context, i) => _CartRow(
                           line: _cart[i],
+                          priceLevel: _priceLevel,
                           onDelta: _changeQty,
                           onEditQty: () => _editQty(_cart[i]),
                           onRemove: () =>
@@ -856,7 +1187,25 @@ class _PosScreenState extends State<PosScreen> {
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        const Expanded(child: MicroLabel('Total à payer')),
+                        const MicroLabel('Total à payer'),
+                        if (_canDiscount && _cart.isNotEmpty)
+                          Padding(
+                            padding:
+                                const EdgeInsetsDirectional.only(start: 6),
+                            child: Tooltip(
+                              message: 'Remise sur tout le ticket',
+                              child: InkWell(
+                                onTap: _ticketDiscount,
+                                borderRadius: BorderRadius.circular(6),
+                                child: const Padding(
+                                  padding: EdgeInsets.all(3),
+                                  child: Icon(Icons.percent_rounded,
+                                      size: 14, color: T.mintDark),
+                                ),
+                              ),
+                            ),
+                          ),
+                        const Spacer(),
                         Text(fmtDA(_totalTTC),
                             style: const TextStyle(
                                 fontFamily: T.sans,
@@ -954,10 +1303,16 @@ class _PosScreenState extends State<PosScreen> {
 
 class _ProductTile extends StatefulWidget {
   const _ProductTile(
-      {required this.product, required this.stockMilli, required this.onTap});
+      {required this.product,
+      required this.stockMilli,
+      required this.onTap,
+      this.favorite = false,
+      this.onSecondaryTap});
   final Product product;
   final int stockMilli;
   final VoidCallback onTap;
+  final bool favorite;
+  final VoidCallback? onSecondaryTap;
 
   @override
   State<_ProductTile> createState() => _ProductTileState();
@@ -976,6 +1331,7 @@ class _ProductTileState extends State<_ProductTile> {
       onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
         onTap: widget.onTap,
+        onSecondaryTap: widget.onSecondaryTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 120),
           padding: const EdgeInsets.all(12),
@@ -1013,6 +1369,10 @@ class _ProductTileState extends State<_ProductTile> {
                         color: fg),
                   ),
                 ),
+                if (widget.favorite) ...[
+                  const SizedBox(width: 4),
+                  const Icon(Icons.push_pin_rounded, size: 11, color: T.warn),
+                ],
                 const Spacer(),
                 if (p.promoActive) ...[
                   const MintChip('promo', color: T.warnTint, fg: T.warnDark),
@@ -1065,11 +1425,13 @@ class _ProductTileState extends State<_ProductTile> {
 class _CartRow extends StatefulWidget {
   const _CartRow({
     required this.line,
+    required this.priceLevel,
     required this.onDelta,
     required this.onEditQty,
     required this.onRemove,
   });
   final CartLine line;
+  final String priceLevel;
   final void Function(CartLine, int) onDelta;
   final VoidCallback onEditQty;
   final VoidCallback onRemove;
@@ -1123,10 +1485,11 @@ class _CartRowState extends State<_CartRow> {
                         color: T.ink)),
                 const SizedBox(height: 2),
                 Text(
-                    '${fmtDA(line.product.effectivePriceTTC)}'
+                    '${fmtDA(line.unitTTC(widget.priceLevel))}'
                     '${line.product.isWeighable ? '/kg' : ''}'
                     ' × ${fmtQty(line.qtyMilli)}'
                     '${line.product.isWeighable ? ' kg' : ''}'
+                    '${line.discountPct > 0 ? '  · -${line.discountPct ~/ 100}%' : ''}'
                     '${line.product.promoActive ? '  · promo' : ''}',
                     style: T.monoSmall.copyWith(fontSize: 10.5)),
               ],
@@ -1164,7 +1527,7 @@ class _CartRowState extends State<_CartRow> {
           const SizedBox(width: 10),
           SizedBox(
             width: 78,
-            child: Text(fmtDA(line.lineTTC),
+            child: Text(fmtDA(line.lineTTC(widget.priceLevel)),
                 textAlign: TextAlign.end,
                 style: T.monoBody
                     .copyWith(fontSize: 12.5, fontWeight: FontWeight.w600)),
@@ -1180,6 +1543,435 @@ class _CartRowState extends State<_CartRow> {
                 : null,
           ),
         ]),
+      ),
+    );
+  }
+}
+
+class _CatChip extends StatelessWidget {
+  const _CatChip(
+      {required this.label, required this.selected, required this.onTap});
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsetsDirectional.only(end: 6),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: selected ? T.ink : T.surface,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: selected ? T.ink : T.border),
+          ),
+          child: Text(label,
+              style: TextStyle(
+                fontFamily: T.sans,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: selected ? Colors.white : T.muted,
+              )),
+        ),
+      ),
+    );
+  }
+}
+
+/// Captures the serial/IMEI of each serialized unit in the cart.
+class _SerialDialog extends StatefulWidget {
+  const _SerialDialog({required this.lines});
+  final List<CartLine> lines;
+
+  @override
+  State<_SerialDialog> createState() => _SerialDialogState();
+}
+
+class _SerialDialogState extends State<_SerialDialog> {
+  late final Map<String, List<TextEditingController>> _ctrls = {
+    for (final l in widget.lines)
+      l.product.id: [
+        for (var i = 0; i < (l.qtyMilli / 1000).ceil(); i++)
+          TextEditingController()
+      ]
+  };
+
+  @override
+  void dispose() {
+    for (final list in _ctrls.values) {
+      for (final c in list) {
+        c.dispose();
+      }
+    }
+    super.dispose();
+  }
+
+  void _submit() {
+    final out = <String, List<String>>{};
+    for (final e in _ctrls.entries) {
+      final serials = [
+        for (final c in e.value)
+          if (c.text.trim().isNotEmpty) c.text.trim()
+      ];
+      if (serials.isNotEmpty) out[e.key] = serials;
+    }
+    Navigator.of(context).pop(out);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: T.surface,
+      shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(T.rCard)),
+      child: SizedBox(
+        width: 420,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text('N° de série / IMEI', style: T.h2),
+              const SizedBox(height: 4),
+              Text('Scannez ou saisissez le numéro de chaque appareil vendu.',
+                  style: T.small),
+              const SizedBox(height: 12),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 320),
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (final l in widget.lines) ...[
+                        MicroLabel(l.product.name),
+                        const SizedBox(height: 4),
+                        for (final c in _ctrls[l.product.id]!)
+                          Container(
+                            height: 38,
+                            margin: const EdgeInsets.only(bottom: 8),
+                            decoration: BoxDecoration(
+                              color: T.bg,
+                              borderRadius: BorderRadius.circular(T.rInner),
+                              border: Border.all(color: T.border),
+                            ),
+                            child: TextField(
+                              controller: c,
+                              style: T.monoBody,
+                              decoration: const InputDecoration(
+                                isDense: true,
+                                border: InputBorder.none,
+                                hintText: 'IMEI / N° de série',
+                                contentPadding: EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 10),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Row(children: [
+                const Spacer(),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child:
+                      Text('Annuler', style: T.small.copyWith(color: T.muted)),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 130,
+                  child: PrimaryButton(label: 'Continuer', onPressed: _submit),
+                ),
+              ]),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Cash-refund return: pick the sale, tick the lines, post the avoir.
+class _ReturnDialog extends StatefulWidget {
+  const _ReturnDialog(
+      {required this.api, required this.warehouseId, this.caisseSessionId});
+  final ApiClient api;
+  final String? warehouseId;
+  final String? caisseSessionId;
+
+  @override
+  State<_ReturnDialog> createState() => _ReturnDialogState();
+}
+
+class _ReturnDialogState extends State<_ReturnDialog> {
+  final _search = TextEditingController();
+  List<DocSummary> _docs = const [];
+  DocDetail? _doc;
+  final Map<String, int> _selectedQty = {}; // line id -> qty milli
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    try {
+      final tickets = await widget.api
+          .documents(type: 'SALE_TICKET', status: 'posted', limit: 30);
+      final invoices = await widget.api
+          .documents(type: 'SALE_INVOICE', status: 'posted', limit: 10);
+      final all = [...tickets, ...invoices]
+        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      if (mounted) setState(() => _docs = all);
+    } catch (_) {}
+  }
+
+  Future<void> _open(DocSummary d) async {
+    try {
+      final detail = await widget.api.getDocument(d.id);
+      if (mounted) {
+        setState(() {
+          _doc = detail;
+          _selectedQty.clear();
+        });
+      }
+    } catch (e) {
+      setState(() => _error = '$e');
+    }
+  }
+
+  int get _refundEstimate {
+    final d = _doc;
+    if (d == null) return 0;
+    var total = 0;
+    for (final l in d.lines) {
+      final sel = _selectedQty[l.id ?? ''] ?? 0;
+      if (sel > 0 && l.qtyMilli > 0) {
+        total += roundDiv(l.lineTTC * sel, l.qtyMilli);
+      }
+    }
+    return total;
+  }
+
+  Future<void> _refund() async {
+    final d = _doc;
+    if (d == null || _busy) return;
+    final lines = [
+      for (final l in d.lines)
+        if ((_selectedQty[l.id ?? ''] ?? 0) > 0)
+          {
+            'product_id': l.productId,
+            'description': l.description,
+            'qty_milli': _selectedQty[l.id ?? '']!,
+            'unit_price': l.unitPrice,
+            'discount_pct': l.discountPct,
+            'vat_rate': l.vatRate,
+            'position': 0,
+          }
+    ];
+    if (lines.isEmpty) {
+      setState(() => _error = 'Sélectionnez au moins un article.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final draft = await widget.api.createDraft({
+        'doc_type': 'SALE_CREDIT_NOTE',
+        'doc_date': todayISO(),
+        'warehouse_id': d.warehouseId ?? widget.warehouseId,
+        'partner_id': d.partnerId,
+        'payment_method': 'cash',
+        'caisse_session_id': widget.caisseSessionId,
+        'ref_document_id': d.id,
+        'notes': 'Retour sur ${d.number ?? d.id.substring(0, 8)}',
+        'lines': lines,
+      });
+      final posted = await widget.api.postDocument(draft.id);
+      if (mounted) Navigator.of(context).pop(posted);
+    } on ApiException catch (e) {
+      setState(() => _error = e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final d = _doc;
+    return Dialog(
+      backgroundColor: T.surface,
+      shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(T.rCard)),
+      child: SizedBox(
+        width: 560,
+        height: 520,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(children: [
+                const Expanded(
+                    child: Text('Retour client', style: T.h2)),
+                if (d != null)
+                  TextButton(
+                    onPressed: () => setState(() => _doc = null),
+                    child: Text('← Autre ticket',
+                        style: T.small.copyWith(color: T.mintDark)),
+                  ),
+                IconButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.close, size: 18, color: T.muted),
+                ),
+              ]),
+              if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Text(_error!,
+                      style: T.small.copyWith(color: T.dangerDark)),
+                ),
+              if (d == null) ...[
+                SearchField(
+                  controller: _search,
+                  hint: 'N° du ticket (ex. TK-2026-000012)…',
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 10),
+                Expanded(
+                  child: ListView(
+                    children: [
+                      for (final doc in _docs)
+                        if (_search.text.trim().isEmpty ||
+                            (doc.number ?? '')
+                                .toLowerCase()
+                                .contains(_search.text.trim().toLowerCase()))
+                          InkWell(
+                            onTap: () => _open(doc),
+                            child: Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 9),
+                              child: Row(children: [
+                                Text(doc.number ?? '',
+                                    style: T.monoBody.copyWith(fontSize: 12)),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                    child: Text(doc.docDate, style: T.small)),
+                                Text(fmtDA(doc.totalTTC), style: T.monoBody),
+                              ]),
+                            ),
+                          ),
+                    ],
+                  ),
+                ),
+              ] else ...[
+                Text('${d.number} · ${d.docDate}', style: T.monoSmall),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: ListView(
+                    children: [
+                      for (final l in d.lines)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 6),
+                          child: Row(children: [
+                            InkWell(
+                              onTap: () => setState(() {
+                                final k = l.id ?? '';
+                                if ((_selectedQty[k] ?? 0) > 0) {
+                                  _selectedQty.remove(k);
+                                } else {
+                                  _selectedQty[k] = l.qtyMilli;
+                                }
+                              }),
+                              child: Icon(
+                                  (_selectedQty[l.id ?? ''] ?? 0) > 0
+                                      ? Icons.check_box
+                                      : Icons.check_box_outline_blank,
+                                  size: 18,
+                                  color: (_selectedQty[l.id ?? ''] ?? 0) > 0
+                                      ? T.mintDeep
+                                      : T.faint),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                                child: Text(l.description,
+                                    style: T.body,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis)),
+                            if ((_selectedQty[l.id ?? ''] ?? 0) > 0 &&
+                                l.qtyMilli > 1000) ...[
+                              _StepBtn(
+                                  icon: Icons.remove,
+                                  onTap: () => setState(() {
+                                        final k = l.id ?? '';
+                                        final v = (_selectedQty[k] ?? 0) - 1000;
+                                        if (v > 0) _selectedQty[k] = v;
+                                      })),
+                              Text(
+                                  fmtQty(_selectedQty[l.id ?? ''] ?? 0),
+                                  style: T.monoBody.copyWith(fontSize: 12)),
+                              _StepBtn(
+                                  icon: Icons.add,
+                                  onTap: () => setState(() {
+                                        final k = l.id ?? '';
+                                        final v = (_selectedQty[k] ?? 0) + 1000;
+                                        if (v <= l.qtyMilli) {
+                                          _selectedQty[k] = v;
+                                        }
+                                      })),
+                            ] else
+                              Text('×${fmtQty(l.qtyMilli)}',
+                                  style: T.monoSmall),
+                            const SizedBox(width: 12),
+                            SizedBox(
+                                width: 90,
+                                child: Text(fmtDA(l.lineTTC),
+                                    textAlign: TextAlign.end,
+                                    style: T.monoBody.copyWith(fontSize: 12))),
+                          ]),
+                        ),
+                    ],
+                  ),
+                ),
+                const Divider(),
+                const SizedBox(height: 8),
+                Row(children: [
+                  Expanded(
+                    child: Text('À rembourser (espèces)',
+                        style: T.bodyMuted),
+                  ),
+                  Text(fmtDA(_refundEstimate),
+                      style: T.monoBig.copyWith(fontSize: 20)),
+                ]),
+                const SizedBox(height: 10),
+                PrimaryButton(
+                  label: _busy ? '…' : 'Valider le retour',
+                  big: true,
+                  onPressed:
+                      _busy || _selectedQty.isEmpty ? null : _refund,
+                ),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -1509,6 +2301,9 @@ class _ReportDialogState extends State<_ReportDialog> {
                     if (r.cashIn > 0) _row('Encaissements espèces', r.cashIn),
                     if (r.cashOut > 0)
                       _row('Règlements espèces', -r.cashOut, color: T.dangerDark),
+                    if (r.cashRefunds > 0)
+                      _row('Retours remboursés', -r.cashRefunds,
+                          color: T.dangerDark),
                     const Divider(height: 16),
                     _row('Espèces attendues en caisse', r.expectedCash,
                         bold: true),

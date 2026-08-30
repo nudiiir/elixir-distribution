@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/rand"
 	"database/sql"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -34,6 +35,7 @@ type Product struct {
 	ParentProductID *string  `json:"parent_product_id"`
 	VariantLabel    *string  `json:"variant_label"`
 	WarrantyMonths  int64    `json:"warranty_months"`
+	TrackSerials    bool     `json:"track_serials"`
 	Barcodes        []string `json:"barcodes"`
 	CreatedAt       string   `json:"created_at"`
 	UpdatedAt       string   `json:"updated_at"`
@@ -42,17 +44,18 @@ type Product struct {
 const productCols = `id, barcode, sku, name, name_ar, category_id, unit, is_weighable,
 	vat_rate, purchase_price, price_retail, price_wholesale, min_stock_milli, track_lots,
 	active, promo_price, promo_start, promo_end, parent_product_id, variant_label,
-	warranty_months, created_at, updated_at`
+	warranty_months, track_serials, created_at, updated_at`
 
 func scanProduct(row interface{ Scan(...any) error }) (Product, error) {
 	var p Product
-	var weighable, trackLots, active int
+	var weighable, trackLots, active, trackSerials int
 	err := row.Scan(&p.ID, &p.Barcode, &p.SKU, &p.Name, &p.NameAr, &p.CategoryID, &p.Unit,
 		&weighable, &p.VatRate, &p.PurchasePrice, &p.PriceRetail, &p.PriceWholesale,
 		&p.MinStockMilli, &trackLots, &active,
 		&p.PromoPrice, &p.PromoStart, &p.PromoEnd, &p.ParentProductID, &p.VariantLabel,
-		&p.WarrantyMonths, &p.CreatedAt, &p.UpdatedAt)
+		&p.WarrantyMonths, &trackSerials, &p.CreatedAt, &p.UpdatedAt)
 	p.IsWeighable, p.TrackLots, p.Active = weighable == 1, trackLots == 1, active == 1
+	p.TrackSerials = trackSerials == 1
 	p.Barcodes = []string{}
 	return p, err
 }
@@ -170,6 +173,7 @@ type productInput struct {
 	ParentProductID *string  `json:"parent_product_id"`
 	VariantLabel    *string  `json:"variant_label"`
 	WarrantyMonths  int64    `json:"warranty_months"`
+	TrackSerials    bool     `json:"track_serials"`
 	Barcodes        []string `json:"barcodes"`
 }
 
@@ -205,13 +209,13 @@ func (s *Server) createProduct(w http.ResponseWriter, r *http.Request) {
 	_, err := s.db.Exec(`INSERT INTO products (id, barcode, sku, name, name_ar, category_id, unit,
 			is_weighable, vat_rate, purchase_price, price_retail, price_wholesale, min_stock_milli,
 			track_lots, active, promo_price, promo_start, promo_end,
-			parent_product_id, variant_label, warranty_months, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			parent_product_id, variant_label, warranty_months, track_serials, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, in.Barcode, in.SKU, in.Name, in.NameAr, in.CategoryID, in.Unit,
 		b2i(in.IsWeighable), in.VatRate, in.PurchasePrice, in.PriceRetail, in.PriceWholesale,
 		in.MinStockMilli, b2i(in.TrackLots), b2i(active),
 		in.PromoPrice, in.PromoStart, in.PromoEnd, in.ParentProductID, in.VariantLabel,
-		in.WarrantyMonths, now, now)
+		in.WarrantyMonths, b2i(in.TrackSerials), now, now)
 	if err != nil {
 		writeErr(w, http.StatusConflict, err.Error())
 		return
@@ -263,6 +267,15 @@ func (s *Server) updateProduct(w http.ResponseWriter, r *http.Request) {
 	if !s.can(r, "view_cost") {
 		s.db.QueryRow(`SELECT purchase_price FROM products WHERE id = ?`, id).
 			Scan(&in.PurchasePrice)
+	}
+	// Price changes go to the journal.
+	var oldRetail int64
+	var name string
+	if s.db.QueryRow(`SELECT price_retail, name FROM products WHERE id = ?`, id).
+		Scan(&oldRetail, &name) == nil && oldRetail != in.PriceRetail {
+		s.audit(r, "product.price_change", "product", id,
+			fmt.Sprintf("%s : prix de vente %s → %s DA", name,
+				centimes(oldRetail), centimes(in.PriceRetail)))
 	}
 	active := true
 	if in.Active != nil {
@@ -317,6 +330,11 @@ func b2i(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// centimes formats an amount for audit messages ("1250,50").
+func centimes(v int64) string {
+	return fmt.Sprintf("%d,%02d", v/100, v%100)
 }
 
 // generateBarcode mints an unused internal EAN-13. The 200 prefix is reserved

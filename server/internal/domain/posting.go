@@ -56,9 +56,6 @@ func Post(db *sql.DB, docID, userID string) (string, error) {
 	if d.status != "draft" {
 		return "", ErrNotDraft
 	}
-	if d.docType == InventoryCount {
-		return "", ErrNotImplemented
-	}
 
 	isPayment := d.docType == PaymentIn || d.docType == PaymentOut
 	now := NowISO()
@@ -169,6 +166,35 @@ func Post(db *sql.DB, docID, userID string) (string, error) {
 				}
 			}
 			if _, err := tx.Exec(`UPDATE document_lines SET unit_cost=? WHERE id=?`, unitCost, l.id); err != nil {
+				return "", err
+			}
+		}
+	}
+
+	// ---- Inventory count: lines carry the COUNTED absolute quantity; the
+	// posting writes the delta against the current level, at current CUMP.
+	if d.docType == InventoryCount {
+		if !d.warehouseID.Valid {
+			return "", ErrNoWarehouse
+		}
+		for _, l := range lines {
+			if !l.productID.Valid {
+				continue
+			}
+			var current int64
+			tx.QueryRow(`SELECT qty_milli FROM stock_levels WHERE product_id=? AND warehouse_id=?`,
+				l.productID.String, d.warehouseID.String).Scan(&current)
+			delta := l.qtyMilli - current
+			if delta == 0 {
+				continue
+			}
+			cost := currentAvgCost(tx, l.productID.String, d.warehouseID.String)
+			if err := applyStockMove(tx, l.productID.String, d.warehouseID.String, l.lotID,
+				delta, cost, false, docID, l.id, now); err != nil {
+				return "", err
+			}
+			if _, err := tx.Exec(`UPDATE document_lines SET unit_cost=? WHERE id=?`,
+				cost, l.id); err != nil {
 				return "", err
 			}
 		}
