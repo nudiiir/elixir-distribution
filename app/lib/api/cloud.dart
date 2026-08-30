@@ -7,36 +7,39 @@ import 'package:http/http.dart' as http;
 /// agrees without local setup.
 class CloudConfig {
   CloudConfig({
+    this.enrolled = false,
     this.relayEnabled = false,
     this.relayConnected = false,
+    this.relayBase = '',
     this.relaySubdomain = '',
     this.llmUrl = '',
     this.invoiceUrl = '',
-    this.configured = false,
   });
 
+  final bool enrolled;
   final bool relayEnabled;
   final bool relayConnected;
+  final String relayBase;
   final String relaySubdomain;
   final String llmUrl;
   final String invoiceUrl;
-  final bool configured;
 
   CloudConfig.fromJson(Map<String, dynamic> j)
-      : relayEnabled = j['relay_enabled'] == true,
+      : enrolled = j['enrolled'] == true,
+        relayEnabled = j['relay_enabled'] == true,
         relayConnected = j['relay_connected'] == true,
+        relayBase = (j['relay_base'] as String?) ?? '',
         relaySubdomain = (j['relay_subdomain'] as String?) ?? '',
         llmUrl = (j['llm_url'] as String?) ?? '',
-        invoiceUrl = (j['invoice_url'] as String?) ?? '',
-        configured = j['configured'] == true;
+        invoiceUrl = (j['invoice_url'] as String?) ?? '';
 
-  /// The assistant can only run in the cloud when we know where it lives and
-  /// which shop to speak for.
+  /// Cloud features route through the tunnel, so they need it actually up —
+  /// not merely switched on.
   bool get llmReady =>
-      llmUrl.isNotEmpty && relaySubdomain.isNotEmpty && relayEnabled;
+      llmUrl.isNotEmpty && relaySubdomain.isNotEmpty && relayConnected;
 
   bool get invoiceReady =>
-      invoiceUrl.isNotEmpty && relaySubdomain.isNotEmpty && relayEnabled;
+      invoiceUrl.isNotEmpty && relaySubdomain.isNotEmpty && relayConnected;
 }
 
 /// One scan waiting in the cloud inbox for this shop.

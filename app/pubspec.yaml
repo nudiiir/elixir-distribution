@@ -14,6 +14,7 @@ dependencies:
   http: ^1.2.2
   intl: ^0.20.2
   pdf: ^3.11.1
+  qr_flutter: ^4.1.0
   win32: ^5.5.4
   ffi: ^2.1.3
 

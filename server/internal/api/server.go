@@ -30,6 +30,8 @@ func New(db *sql.DB, dbPath string) http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	r.Post("/api/v1/auth/login", s.login)
+	// The phone pairs with a one-time code, so this cannot require a session.
+	r.Post("/api/v1/auth/pair", s.pairExchange)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(s.authMiddleware)
@@ -78,6 +80,9 @@ func New(db *sql.DB, dbPath string) http.Handler {
 		r.Post("/backups/run", s.runBackupNow)
 
 		r.Get("/cloud/status", s.cloudStatus)
+		r.Post("/cloud/connect", s.cloudConnect)
+		r.Post("/cloud/disconnect", s.cloudDisconnect)
+		r.Post("/cloud/pair", s.cloudPair)
 	})
 	return r
 }

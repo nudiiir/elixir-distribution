@@ -207,6 +207,26 @@ class ApiClient {
   Future<CloudConfig> cloudStatus() async =>
       CloudConfig.fromJson(await _get('/api/v1/cloud/status'));
 
+  /// Enrolls this shop with the cloud (once) and turns remote access on.
+  /// Requires the caller's own password again.
+  Future<CloudConfig> cloudConnect(String password) async =>
+      CloudConfig.fromJson(
+          await _post('/api/v1/cloud/connect', {'password': password}));
+
+  Future<CloudConfig> cloudDisconnect() async =>
+      CloudConfig.fromJson(await _post('/api/v1/cloud/disconnect'));
+
+  /// Mints a one-time pairing code for the QR shown to a phone.
+  Future<({String code, int expiresIn, String payload})> cloudPair(
+      String password) async {
+    final j = await _post('/api/v1/cloud/pair', {'password': password});
+    return (
+      code: j['code'] as String,
+      expiresIn: (j['expires_in'] as num?)?.toInt() ?? 300,
+      payload: jsonEncode(j['payload']),
+    );
+  }
+
   Future<Map<String, String>> settings() async {
     final j = await _get('/api/v1/settings') as Map<String, dynamic>;
     return j.map((k, v) => MapEntry(k, v as String));

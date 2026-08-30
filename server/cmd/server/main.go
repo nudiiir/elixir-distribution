@@ -64,9 +64,17 @@ func (p *program) run() {
 	}
 	loadRelay := func() relay.Config {
 		cfg := api.LoadCloudSettings(db)
+		// The websocket endpoint is derived from the (baked-in) relay base, so
+		// there is nothing extra for a shop to configure.
+		url := pick("RELAY_URL", "relay_url", cfg)
+		if url == "" {
+			base := api.RelayBaseURL(cfg)
+			url = strings.Replace(strings.Replace(base, "https://", "wss://", 1),
+				"http://", "ws://", 1) + "/agent-ws"
+		}
 		return relay.Config{
 			Enabled:   pick("RELAY_ENABLED", "relay_enabled", cfg) == "1",
-			URL:       pick("RELAY_URL", "relay_url", cfg),
+			URL:       url,
 			BindingID: pick("RELAY_BINDING_ID", "relay_binding_id", cfg),
 			Token:     pick("RELAY_TOKEN", "relay_token", cfg),
 			LocalAddr: localPort,
