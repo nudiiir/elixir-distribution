@@ -3,6 +3,7 @@ module elixir/server
 go 1.23
 
 require (
+	github.com/coder/websocket v1.8.12
 	github.com/go-chi/chi/v5 v5.2.1
 	github.com/google/uuid v1.6.0
 	github.com/kardianos/service v1.2.2

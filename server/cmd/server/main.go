@@ -1,16 +1,19 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/kardianos/service"
 
 	"elixir/server/internal/api"
+	"elixir/server/internal/relay"
 	"elixir/server/internal/store"
 )
 
@@ -43,6 +46,26 @@ func (p *program) run() {
 		log.Fatalf("seed: %v", err)
 	}
 	api.StartBackupScheduler(db, p.dbPath)
+
+	// Optional outbound relay: lets off-LAN clients (mobile app, LLM service)
+	// reach this server's API through relay.example.com/t/<sub>/*.
+	// The Authorization header is forwarded through, so this server's own auth
+	// stays the gate over the tunnel. Configured via env.
+	localPort := p.addr
+	if i := strings.LastIndex(localPort, ":"); i >= 0 {
+		localPort = "http://127.0.0.1" + localPort[i:]
+	}
+	relayCfg := relay.Config{
+		Enabled:   os.Getenv("RELAY_ENABLED") == "1",
+		URL:       os.Getenv("RELAY_URL"),
+		BindingID: os.Getenv("RELAY_BINDING_ID"),
+		Token:     os.Getenv("RELAY_TOKEN"),
+		LocalAddr: localPort,
+	}
+	if relayCfg.Enabled {
+		go relay.Run(context.Background(), relayCfg)
+		log.Printf("relay client enabled → %s", relayCfg.URL)
+	}
 
 	log.Printf("elixir server listening on %s (db=%s)", p.addr, p.dbPath)
 	if err := http.ListenAndServe(p.addr, api.New(db, p.dbPath)); err != nil {
