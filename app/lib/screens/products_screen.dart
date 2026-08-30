@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
+import '../templates/template_defaults.dart';
+import '../templates/template_model.dart';
+import '../templates/template_render.dart';
 import '../theme/tokens.dart';
 import '../util/export.dart';
 import '../widgets/data_table.dart';
@@ -266,8 +269,13 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
       text: widget.existing?.promoPrice == null
           ? ''
           : editDA(widget.existing!.promoPrice!));
+  late final _warranty = TextEditingController(
+      text: widget.existing == null || widget.existing!.warrantyMonths == 0
+          ? ''
+          : '${widget.existing!.warrantyMonths}');
   late int _vat = widget.existing?.vatRate ?? 1900;
   late bool _weighable = widget.existing?.isWeighable ?? false;
+  bool _generating = false;
   late String? _promoStart = widget.existing?.promoStart;
   late String? _promoEnd = widget.existing?.promoEnd;
   List<Product> _variants = const [];
@@ -296,7 +304,7 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
   void dispose() {
     for (final c in [
       _name, _nameAr, _barcode, _extraBarcodes, _purchase, _retail,
-      _minStock, _promoPrice
+      _minStock, _promoPrice, _warranty
     ]) {
       c.dispose();
     }
@@ -321,6 +329,38 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
           _promoEnd = iso;
         }
       });
+    }
+  }
+
+  Future<void> _generateBarcode() async {
+    setState(() => _generating = true);
+    try {
+      final code = await widget.api.generateBarcode();
+      setState(() => _barcode.text = code);
+    } on ApiException catch (e) {
+      setState(() => _error = e.message);
+    } catch (_) {
+      setState(() => _error = 'Serveur injoignable.');
+    } finally {
+      if (mounted) setState(() => _generating = false);
+    }
+  }
+
+  /// Renders the product's shelf label with the shop's label template.
+  Future<void> _printLabel() async {
+    final p = widget.existing;
+    if (p == null) return;
+    try {
+      final rec = await widget.api.defaultTemplate('label');
+      final tpl =
+          rec == null ? defaultTplDoc('label', 'fr') : TplDoc.fromJson(rec.body);
+      final company = await widget.api.settings();
+      final bytes = await renderTemplateBytes(tpl,
+          lang: rec?.lang ?? 'fr', data: labelData(p, company));
+      await saveAndOpenPdf(bytes, 'etiquette-${p.name}');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = 'Étiquette impossible : $e');
     }
   }
 
@@ -362,6 +402,7 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
         'promo_price': (promo != null && promo > 0) ? promo : null,
         'promo_start': (promo != null && promo > 0) ? _promoStart : null,
         'promo_end': (promo != null && promo > 0) ? _promoEnd : null,
+        'warranty_months': int.tryParse(_warranty.text.trim()) ?? 0,
         'parent_product_id': widget.existing?.parentProductId,
         'variant_label': widget.existing?.variantLabel,
       }, id: widget.existing?.id);
@@ -407,20 +448,44 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
                         label: 'Désignation (arabe)', controller: _nameAr)),
                 const SizedBox(width: 10),
                 Expanded(
-                    child: _Field(label: 'Code-barres', controller: _barcode)),
+                    child: _Field(
+                        label: 'Code-barres',
+                        controller: _barcode,
+                        mono: true,
+                        trailing: Tooltip(
+                          message:
+                              'Générer un code-barres interne (produit sans code)',
+                          child: InkWell(
+                            onTap: _generating ? null : _generateBarcode,
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 8),
+                              child: Icon(
+                                  _generating
+                                      ? Icons.hourglass_top_rounded
+                                      : Icons.auto_fix_high_rounded,
+                                  size: 16,
+                                  color: T.mintDark),
+                            ),
+                          ),
+                        ))),
               ]),
               Row(children: [
                 if (widget.showCost) ...[
                   Expanded(
                       child: _Field(
-                          label: "Prix d'achat HT (DA)",
+                          label: _weighable
+                              ? "Prix d'achat HT (DA/kg)"
+                              : "Prix d'achat HT (DA)",
                           controller: _purchase,
                           mono: true)),
                   const SizedBox(width: 10),
                 ],
                 Expanded(
                     child: _Field(
-                        label: 'Prix de vente TTC (DA)',
+                        label: _weighable
+                            ? 'Prix de vente TTC (DA/kg)'
+                            : 'Prix de vente TTC (DA)',
                         controller: _retail,
                         mono: true)),
               ]),
@@ -483,6 +548,33 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
                       'Codes-barres supplémentaires (séparés par des virgules)',
                   controller: _extraBarcodes,
                   mono: true),
+              Row(children: [
+                Expanded(
+                    child: _Field(
+                        label: 'Garantie (mois) — vide = sans garantie',
+                        controller: _warranty,
+                        mono: true)),
+                const SizedBox(width: 10),
+                if (widget.existing != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: OutlinedButton.icon(
+                      onPressed: _printLabel,
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: T.border3),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(T.rInner)),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 12),
+                      ),
+                      icon: const Icon(Icons.qr_code_2_rounded,
+                          size: 16, color: T.ink),
+                      label: Text('Étiquette',
+                          style: T.small.copyWith(
+                              color: T.ink, fontWeight: FontWeight.w700)),
+                    ),
+                  ),
+              ]),
               // ---- Promotion ----
               const Divider(height: 20),
               const MicroLabel('Promotion'),
@@ -718,10 +810,14 @@ class _VariantDialogState extends State<_VariantDialog> {
 
 class _Field extends StatelessWidget {
   const _Field(
-      {required this.label, required this.controller, this.mono = false});
+      {required this.label,
+      required this.controller,
+      this.mono = false,
+      this.trailing});
   final String label;
   final TextEditingController controller;
   final bool mono;
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
@@ -739,16 +835,21 @@ class _Field extends StatelessWidget {
               borderRadius: BorderRadius.circular(T.rInner),
               border: Border.all(color: T.border),
             ),
-            child: TextField(
-              controller: controller,
-              style: mono ? T.monoBody : T.body,
-              decoration: const InputDecoration(
-                isDense: true,
-                border: InputBorder.none,
-                contentPadding:
-                    EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(children: [
+              Expanded(
+                child: TextField(
+                  controller: controller,
+                  style: mono ? T.monoBody : T.body,
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    border: InputBorder.none,
+                    contentPadding:
+                        EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  ),
+                ),
               ),
-            ),
+              ?trailing,
+            ]),
           ),
         ],
       ),

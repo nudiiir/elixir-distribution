@@ -206,7 +206,25 @@ class _PosScreenState extends State<PosScreen> {
     _searchFocus.requestFocus();
   }
 
-  void _addToCart(Product p) {
+  Future<void> _addToCart(Product p) async {
+    // A product sold by weight can't default to "1": ask for the weight.
+    if (p.isWeighable) {
+      final milli = await _askWeight(p);
+      if (milli == null || milli <= 0) {
+        _searchFocus.requestFocus();
+        return;
+      }
+      setState(() {
+        final existing = _cart.where((l) => l.product.id == p.id);
+        if (existing.isNotEmpty) {
+          existing.first.qtyMilli += milli;
+        } else {
+          _cart.add(CartLine(p)..qtyMilli = milli);
+        }
+      });
+      _searchFocus.requestFocus();
+      return;
+    }
     setState(() {
       final existing = _cart.where((l) => l.product.id == p.id);
       if (existing.isNotEmpty) {
@@ -215,6 +233,78 @@ class _PosScreenState extends State<PosScreen> {
         _cart.add(CartLine(p));
       }
     });
+  }
+
+  /// Weight entry for "produit au poids" — returns milli-kg.
+  Future<int?> _askWeight(Product p) async {
+    final ctrl = TextEditingController();
+    final result = await showDialog<int>(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: T.surface,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(T.rCard)),
+        child: SizedBox(
+          width: 300,
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Text(p.name, style: T.h2, textAlign: TextAlign.center),
+              const SizedBox(height: 4),
+              Text('Poids en kg · ${fmtDA(p.effectivePriceTTC)}/kg',
+                  style: T.small),
+              const SizedBox(height: 12),
+              Container(
+                height: 54,
+                decoration: BoxDecoration(
+                  color: T.bg,
+                  borderRadius: BorderRadius.circular(T.rInner),
+                  border: Border.all(color: T.border),
+                ),
+                child: TextField(
+                  controller: ctrl,
+                  autofocus: true,
+                  textAlign: TextAlign.center,
+                  style: T.monoBig,
+                  onSubmitted: (v) => Navigator.of(context).pop(parseQty(v)),
+                  decoration: InputDecoration(
+                    border: InputBorder.none,
+                    hintText: '0,500',
+                    hintStyle: T.monoBig.copyWith(color: T.ghost),
+                    contentPadding:
+                        const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Wrap(spacing: 6, children: [
+                for (final (label, milli) in [
+                  ('250 g', 250),
+                  ('500 g', 500),
+                  ('1 kg', 1000),
+                  ('2 kg', 2000),
+                ])
+                  ActionChip(
+                    label: Text(label,
+                        style: T.small.copyWith(
+                            fontWeight: FontWeight.w700, color: T.mintDark)),
+                    backgroundColor: T.mintTint,
+                    side: BorderSide.none,
+                    onPressed: () => Navigator.of(context).pop(milli),
+                  ),
+              ]),
+              const SizedBox(height: 12),
+              PrimaryButton(
+                label: 'Ajouter',
+                onPressed: () => Navigator.of(context).pop(parseQty(ctrl.text)),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+    ctrl.dispose();
+    return result;
   }
 
   void _changeQty(CartLine line, int deltaMilli) {
@@ -1033,7 +1123,10 @@ class _CartRowState extends State<_CartRow> {
                         color: T.ink)),
                 const SizedBox(height: 2),
                 Text(
-                    '${fmtDA(line.product.effectivePriceTTC)} × ${fmtQty(line.qtyMilli)}'
+                    '${fmtDA(line.product.effectivePriceTTC)}'
+                    '${line.product.isWeighable ? '/kg' : ''}'
+                    ' × ${fmtQty(line.qtyMilli)}'
+                    '${line.product.isWeighable ? ' kg' : ''}'
                     '${line.product.promoActive ? '  · promo' : ''}',
                     style: T.monoSmall.copyWith(fontSize: 10.5)),
               ],
@@ -1050,11 +1143,12 @@ class _CartRowState extends State<_CartRow> {
             child: Row(children: [
               _StepBtn(
                   icon: Icons.remove,
-                  onTap: () => widget.onDelta(line, -1000)),
+                  onTap: () => widget.onDelta(
+                      line, line.product.isWeighable ? -100 : -1000)),
               InkWell(
                 onTap: widget.onEditQty,
                 child: SizedBox(
-                  width: 34,
+                  width: 40,
                   child: Text(fmtQty(line.qtyMilli),
                       textAlign: TextAlign.center,
                       style: T.monoBody.copyWith(
@@ -1062,7 +1156,9 @@ class _CartRowState extends State<_CartRow> {
                 ),
               ),
               _StepBtn(
-                  icon: Icons.add, onTap: () => widget.onDelta(line, 1000)),
+                  icon: Icons.add,
+                  onTap: () => widget.onDelta(
+                      line, line.product.isWeighable ? 100 : 1000)),
             ]),
           ),
           const SizedBox(width: 10),

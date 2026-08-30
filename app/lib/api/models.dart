@@ -50,6 +50,7 @@ class Product {
   final String? promoEnd; // YYYY-MM-DD inclusive
   final String? parentProductId;
   final String? variantLabel;
+  final int warrantyMonths; // 0 = sold without warranty
   final List<String> barcodes; // additional barcodes
 
   Product.fromJson(Map<String, dynamic> j)
@@ -69,6 +70,7 @@ class Product {
         promoEnd = j['promo_end'] as String?,
         parentProductId = j['parent_product_id'] as String?,
         variantLabel = j['variant_label'] as String?,
+        warrantyMonths = (j['warranty_months'] as num?)?.toInt() ?? 0,
         barcodes = [
           for (final b in (j['barcodes'] as List? ?? const [])) b.toString()
         ];
@@ -344,6 +346,45 @@ class StockMovement {
         docType = j['doc_type'] as String,
         docNumber = j['doc_number'] as String?,
         createdAt = (j['created_at'] as String?) ?? '';
+}
+
+/// A printable document design stored on the server; body is the layout JSON
+/// the designer edits and the renderer consumes.
+class Template {
+  final String id;
+  final String kind; // label | invoice | warranty
+  final String name;
+  final String lang; // fr | ar
+  final Map<String, dynamic> body;
+  final bool isDefault;
+
+  Template.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as String,
+        kind = j['kind'] as String,
+        name = j['name'] as String,
+        lang = (j['lang'] as String?) ?? 'fr',
+        body = (j['body'] as Map<String, dynamic>?) ?? {},
+        isDefault = j['is_default'] == true;
+}
+
+/// A client app currently running against the server (heartbeat-based).
+class PresenceEntry {
+  final String device;
+  final String username;
+  final String fullName;
+  final String screen;
+  final String kind; // desktop | mobile
+  final int secondsAgo;
+
+  PresenceEntry.fromJson(Map<String, dynamic> j)
+      : device = (j['device'] as String?) ?? '',
+        username = (j['username'] as String?) ?? '',
+        fullName = (j['full_name'] as String?) ?? '',
+        screen = (j['screen'] as String?) ?? '',
+        kind = (j['kind'] as String?) ?? 'desktop',
+        secondsAgo = (j['seconds_ago'] as num?)?.toInt() ?? 0;
+
+  String get who => fullName.isEmpty ? username : fullName;
 }
 
 class PostedDoc {

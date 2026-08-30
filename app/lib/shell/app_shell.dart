@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
@@ -7,6 +8,7 @@ import '../api/client.dart';
 import '../api/models.dart';
 import '../screens/assistant_screen.dart';
 import '../screens/dashboard_screen.dart';
+import '../screens/designer_screen.dart';
 import '../screens/inbox_screen.dart';
 import '../screens/partners_screen.dart';
 import '../screens/pos_screen.dart';
@@ -41,6 +43,8 @@ const _allModules = [
   _Module('partners', Icons.people_alt_outlined, 'Partenaires'),
   _Module('assistant', Icons.auto_awesome_outlined, 'Assistant'),
   _Module('delivery', Icons.rocket_launch_outlined, 'Livraison', enabled: false),
+  _Module('designer', Icons.design_services_outlined, 'Modèles',
+      perm: 'settings'),
   _Module('settings', Icons.settings_outlined, 'Paramètres'),
 ];
 
@@ -77,6 +81,8 @@ class _AppShellState extends State<AppShell> {
       if (m.key == 'delivery' || user.can(m.perm)) m,
   ];
 
+  Timer? _presenceTimer;
+
   @override
   void initState() {
     super.initState();
@@ -84,14 +90,29 @@ class _AppShellState extends State<AppShell> {
     _loadCompany();
     _healthTimer =
         Timer.periodic(const Duration(seconds: 15), (_) => _checkHealth());
+    _beat();
+    _presenceTimer =
+        Timer.periodic(const Duration(seconds: 30), (_) => _beat());
   }
 
   @override
   void dispose() {
     _healthTimer?.cancel();
+    _presenceTimer?.cancel();
     _globalSearch.dispose();
     _productsQuery.dispose();
     super.dispose();
+  }
+
+  /// Tells the server this post is alive and which module it shows — feeds
+  /// the dashboard's "Postes connectés" card.
+  Future<void> _beat() async {
+    try {
+      await widget.api.presenceBeat(
+        device: Platform.localHostname,
+        screen: _visible.isEmpty ? '' : _visible[_index].key,
+      );
+    } catch (_) {}
   }
 
   Future<void> _checkHealth() async {
@@ -111,7 +132,10 @@ class _AppShellState extends State<AppShell> {
 
   void goTo(String key) {
     final i = _visible.indexWhere((m) => m.key == key);
-    if (i >= 0 && _visible[i].enabled) setState(() => _index = i);
+    if (i >= 0 && _visible[i].enabled) {
+      setState(() => _index = i);
+      _beat();
+    }
   }
 
   void _onGlobalSearch(String q) {
@@ -139,6 +163,7 @@ class _AppShellState extends State<AppShell> {
             searchRequest: _productsQuery),
         'partners' => PartnersScreen(api: widget.api),
         'assistant' => AssistantScreen(api: widget.api),
+        'designer' => DesignerScreen(api: widget.api),
         'settings' => SettingsScreen(
             api: widget.api,
             session: widget.session,
@@ -249,22 +274,9 @@ class _TopBar extends StatelessWidget {
           // native title bar is gone.
           DragToMoveArea(
             child: Row(children: [
-              Container(
-                width: 32,
-                height: 32,
-                decoration: BoxDecoration(
-                  color: T.ink,
-                  borderRadius: BorderRadius.circular(9),
-                ),
-                alignment: Alignment.center,
-                child: const Text('E',
-                    style: TextStyle(
-                        fontFamily: T.sans,
-                        fontSize: 17,
-                        fontWeight: FontWeight.w800,
-                        color: Colors.white)),
-              ),
-              const SizedBox(width: 9),
+              Image.asset('assets/images/elixir-mark.png',
+                  height: 30, filterQuality: FilterQuality.medium),
+              const SizedBox(width: 8),
               const Text('ELIXIR',
                   style: TextStyle(
                       fontFamily: T.sans,

@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
+import '../templates/template_defaults.dart';
+import '../templates/template_model.dart';
+import '../templates/template_render.dart';
 import '../theme/tokens.dart';
 import '../util/export.dart';
 import '../util/invoice_pdf.dart';
@@ -657,9 +660,80 @@ class _DocDetailDialogState extends State<_DocDetailDialog> {
           partner = await widget.api.getPartner(d.partnerId!);
         } catch (_) {}
       }
-      await openDocumentPdf(company: company, doc: d, partner: partner);
+      // A custom invoice design from the designer takes over the A4 layout;
+      // tickets keep their receipt shape.
+      Template? custom;
+      if (d.docType != 'SALE_TICKET') {
+        try {
+          custom = await widget.api.defaultTemplate('invoice');
+        } catch (_) {}
+      }
+      if (custom != null) {
+        final bytes = await renderTemplateBytes(
+          TplDoc.fromJson(custom.body),
+          lang: custom.lang,
+          data: invoiceData(
+              doc: d,
+              client: partner,
+              company: company,
+              title: (docTypeLabels[d.docType] ?? 'Document').toUpperCase()),
+          tableRows: invoiceTableRows(d),
+        );
+        await saveAndOpenPdf(
+            bytes, d.number ?? 'brouillon-${d.id.substring(0, 8)}');
+      } else {
+        await openDocumentPdf(company: company, doc: d, partner: partner);
+      }
     } catch (e) {
       if (mounted) setState(() => _error = 'PDF impossible : $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// One "bon de garantie" per product of the document sold with a warranty.
+  Future<void> _printWarranty() async {
+    final d = _doc;
+    if (d == null || _busy) return;
+    setState(() => _busy = true);
+    try {
+      final products = <Product>[];
+      for (final id in {
+        for (final l in d.lines)
+          if (l.productId != null) l.productId!
+      }) {
+        try {
+          products.add(await widget.api.getProduct(id));
+        } catch (_) {}
+      }
+      final withWarranty =
+          products.where((p) => p.warrantyMonths > 0).toList();
+      if (withWarranty.isEmpty) {
+        setState(() =>
+            _error = 'Aucun produit sous garantie dans ce document.');
+        return;
+      }
+      final company = await widget.api.settings();
+      Partner? partner;
+      if (d.partnerId != null) {
+        try {
+          partner = await widget.api.getPartner(d.partnerId!);
+        } catch (_) {}
+      }
+      final rec = await widget.api.defaultTemplate('warranty');
+      final tpl = rec == null
+          ? defaultTplDoc('warranty', 'fr')
+          : TplDoc.fromJson(rec.body);
+      for (final p in withWarranty) {
+        final bytes = await renderTemplateBytes(tpl,
+            lang: rec?.lang ?? 'fr',
+            data: warrantyData(
+                product: p, doc: d, client: partner, company: company));
+        await saveAndOpenPdf(bytes,
+            'garantie-${d.number ?? d.id.substring(0, 8)}-${p.name}');
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Garantie impossible : $e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -793,6 +867,19 @@ class _DocDetailDialogState extends State<_DocDetailDialog> {
                           icon: const Icon(Icons.picture_as_pdf_outlined,
                               size: 14, color: T.muted),
                           label: Text('PDF',
+                              style: T.small.copyWith(color: T.muted)),
+                        ),
+                        const SizedBox(width: 6),
+                      ],
+                      if (d.status == 'posted' &&
+                          (d.docType == 'SALE_TICKET' ||
+                              d.docType == 'SALE_INVOICE' ||
+                              d.docType == 'DELIVERY_NOTE')) ...[
+                        TextButton.icon(
+                          onPressed: _busy ? null : _printWarranty,
+                          icon: const Icon(Icons.verified_user_outlined,
+                              size: 14, color: T.muted),
+                          label: Text('Garantie',
                               style: T.small.copyWith(color: T.muted)),
                         ),
                         const SizedBox(width: 6),

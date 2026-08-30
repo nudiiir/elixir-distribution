@@ -11,9 +11,10 @@ import (
 )
 
 type Server struct {
-	db     *sql.DB
-	secret []byte
-	dbPath string
+	db       *sql.DB
+	secret   []byte
+	dbPath   string
+	presence *presenceRegistry
 }
 
 func New(db *sql.DB, dbPath string) http.Handler {
@@ -21,7 +22,7 @@ func New(db *sql.DB, dbPath string) http.Handler {
 	if err != nil {
 		log.Fatalf("auth secret: %v", err)
 	}
-	s := &Server{db: db, secret: secret, dbPath: dbPath}
+	s := &Server{db: db, secret: secret, dbPath: dbPath, presence: newPresenceRegistry()}
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
@@ -44,6 +45,7 @@ func New(db *sql.DB, dbPath string) http.Handler {
 
 		r.Get("/products", s.listProducts)
 		r.Post("/products", s.createProduct)
+		r.Post("/products/generate-barcode", s.generateBarcode)
 		r.Get("/products/{id}", s.getProduct)
 		r.Put("/products/{id}", s.updateProduct)
 		r.Delete("/products/{id}", s.deactivateProduct)
@@ -85,6 +87,16 @@ func New(db *sql.DB, dbPath string) http.Handler {
 		r.Post("/gift-cards/code/{code}/redeem", s.redeemGiftCard)
 		r.Post("/gift-card-uses/{id}/refund", s.refundGiftCardUse)
 		r.Post("/gift-cards/{id}/cancel", s.cancelGiftCard)
+
+		r.Get("/templates", s.listTemplates)
+		r.Post("/templates", s.createTemplate)
+		r.Get("/templates/{id}", s.getTemplate)
+		r.Put("/templates/{id}", s.updateTemplate)
+		r.Delete("/templates/{id}", s.deleteTemplate)
+		r.Post("/templates/{id}/default", s.setDefaultTemplate)
+
+		r.Post("/presence", s.presenceBeat)
+		r.Get("/presence", s.presenceList)
 
 		r.Get("/cloud/status", s.cloudStatus)
 		r.Post("/cloud/connect", s.cloudConnect)

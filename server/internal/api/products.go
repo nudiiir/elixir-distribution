@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/rand"
 	"database/sql"
 	"net/http"
 	"strconv"
@@ -32,6 +33,7 @@ type Product struct {
 	PromoEnd        *string  `json:"promo_end"`
 	ParentProductID *string  `json:"parent_product_id"`
 	VariantLabel    *string  `json:"variant_label"`
+	WarrantyMonths  int64    `json:"warranty_months"`
 	Barcodes        []string `json:"barcodes"`
 	CreatedAt       string   `json:"created_at"`
 	UpdatedAt       string   `json:"updated_at"`
@@ -40,7 +42,7 @@ type Product struct {
 const productCols = `id, barcode, sku, name, name_ar, category_id, unit, is_weighable,
 	vat_rate, purchase_price, price_retail, price_wholesale, min_stock_milli, track_lots,
 	active, promo_price, promo_start, promo_end, parent_product_id, variant_label,
-	created_at, updated_at`
+	warranty_months, created_at, updated_at`
 
 func scanProduct(row interface{ Scan(...any) error }) (Product, error) {
 	var p Product
@@ -49,7 +51,7 @@ func scanProduct(row interface{ Scan(...any) error }) (Product, error) {
 		&weighable, &p.VatRate, &p.PurchasePrice, &p.PriceRetail, &p.PriceWholesale,
 		&p.MinStockMilli, &trackLots, &active,
 		&p.PromoPrice, &p.PromoStart, &p.PromoEnd, &p.ParentProductID, &p.VariantLabel,
-		&p.CreatedAt, &p.UpdatedAt)
+		&p.WarrantyMonths, &p.CreatedAt, &p.UpdatedAt)
 	p.IsWeighable, p.TrackLots, p.Active = weighable == 1, trackLots == 1, active == 1
 	p.Barcodes = []string{}
 	return p, err
@@ -167,6 +169,7 @@ type productInput struct {
 	PromoEnd        *string  `json:"promo_end"`
 	ParentProductID *string  `json:"parent_product_id"`
 	VariantLabel    *string  `json:"variant_label"`
+	WarrantyMonths  int64    `json:"warranty_months"`
 	Barcodes        []string `json:"barcodes"`
 }
 
@@ -202,13 +205,13 @@ func (s *Server) createProduct(w http.ResponseWriter, r *http.Request) {
 	_, err := s.db.Exec(`INSERT INTO products (id, barcode, sku, name, name_ar, category_id, unit,
 			is_weighable, vat_rate, purchase_price, price_retail, price_wholesale, min_stock_milli,
 			track_lots, active, promo_price, promo_start, promo_end,
-			parent_product_id, variant_label, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			parent_product_id, variant_label, warranty_months, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, in.Barcode, in.SKU, in.Name, in.NameAr, in.CategoryID, in.Unit,
 		b2i(in.IsWeighable), in.VatRate, in.PurchasePrice, in.PriceRetail, in.PriceWholesale,
 		in.MinStockMilli, b2i(in.TrackLots), b2i(active),
 		in.PromoPrice, in.PromoStart, in.PromoEnd, in.ParentProductID, in.VariantLabel,
-		now, now)
+		in.WarrantyMonths, now, now)
 	if err != nil {
 		writeErr(w, http.StatusConflict, err.Error())
 		return
@@ -269,13 +272,13 @@ func (s *Server) updateProduct(w http.ResponseWriter, r *http.Request) {
 			unit=?, is_weighable=?, vat_rate=?, purchase_price=?, price_retail=?, price_wholesale=?,
 			min_stock_milli=?, track_lots=?, active=?,
 			promo_price=?, promo_start=?, promo_end=?, parent_product_id=?, variant_label=?,
-			updated_at=?
+			warranty_months=?, updated_at=?
 		WHERE id=?`,
 		in.Barcode, in.SKU, in.Name, in.NameAr, in.CategoryID, in.Unit,
 		b2i(in.IsWeighable), in.VatRate, in.PurchasePrice, in.PriceRetail, in.PriceWholesale,
 		in.MinStockMilli, b2i(in.TrackLots), b2i(active),
 		in.PromoPrice, in.PromoStart, in.PromoEnd, in.ParentProductID, in.VariantLabel,
-		domain.NowISO(), id)
+		in.WarrantyMonths, domain.NowISO(), id)
 	if err != nil {
 		writeErr(w, http.StatusConflict, err.Error())
 		return
@@ -314,4 +317,49 @@ func b2i(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// generateBarcode mints an unused internal EAN-13. The 200 prefix is reserved
+// by GS1 for in-store numbering, so these can never collide with a real
+// manufacturer code.
+func (s *Server) generateBarcode(w http.ResponseWriter, r *http.Request) {
+	if !s.can(r, "products") {
+		forbid(w)
+		return
+	}
+	for tries := 0; tries < 200; tries++ {
+		code, err := randomEAN13("200")
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		var n int
+		s.db.QueryRow(`SELECT (SELECT COUNT(*) FROM products WHERE barcode = ?1)
+			+ (SELECT COUNT(*) FROM product_barcodes WHERE barcode = ?1)`, code).Scan(&n)
+		if n == 0 {
+			writeJSON(w, http.StatusOK, map[string]string{"barcode": code})
+			return
+		}
+	}
+	writeErr(w, http.StatusInternalServerError, "could not generate a unique barcode")
+}
+
+func randomEAN13(prefix string) (string, error) {
+	buf := make([]byte, 12-len(prefix))
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	digits := prefix
+	for _, b := range buf {
+		digits += strconv.Itoa(int(b) % 10)
+	}
+	sum := 0
+	for i, c := range digits {
+		d := int(c - '0')
+		if i%2 == 1 {
+			d *= 3
+		}
+		sum += d
+	}
+	return digits + strconv.Itoa((10-sum%10)%10), nil
 }

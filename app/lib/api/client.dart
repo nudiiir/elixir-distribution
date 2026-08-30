@@ -164,6 +164,9 @@ class ApiClient {
     return Partner.fromJson(j);
   }
 
+  Future<Product> getProduct(String id) async =>
+      Product.fromJson(await _get('/api/v1/products/$id'));
+
   Future<Product> saveProduct(Map<String, dynamic> data, {String? id}) async {
     final j = id == null
         ? await _post('/api/v1/products', data)
@@ -315,6 +318,59 @@ class ApiClient {
       CaisseSession.fromJson(j['session']),
       CaisseReport.fromJson(j['report'])
     );
+  }
+
+  Future<dynamic> _delete(String path) async {
+    final res = await _client.delete(_u(path), headers: _headers);
+    return _handle(res);
+  }
+
+  /// Mints an unused internal EAN-13 (200-prefix, in-store range).
+  Future<String> generateBarcode() async {
+    final j = await _post('/api/v1/products/generate-barcode');
+    return j['barcode'] as String;
+  }
+
+  // ---- Print templates ----
+
+  Future<List<Template>> templates({String? kind}) async {
+    final j = await _get('/api/v1/templates', {'kind': ?kind});
+    return [for (final e in j['items'] as List) Template.fromJson(e)];
+  }
+
+  /// The default template of a kind, or null if none is stored yet.
+  Future<Template?> defaultTemplate(String kind) async {
+    final all = await templates(kind: kind);
+    for (final t in all) {
+      if (t.isDefault) return t;
+    }
+    return all.isEmpty ? null : all.first;
+  }
+
+  Future<Template> saveTemplate(Map<String, dynamic> data, {String? id}) async {
+    final j = id == null
+        ? await _post('/api/v1/templates', data)
+        : await _put('/api/v1/templates/$id', data);
+    return Template.fromJson(j);
+  }
+
+  Future<void> deleteTemplate(String id) async {
+    await _delete('/api/v1/templates/$id');
+  }
+
+  Future<Template> setDefaultTemplate(String id) async =>
+      Template.fromJson(await _post('/api/v1/templates/$id/default'));
+
+  // ---- Presence (connected posts) ----
+
+  Future<void> presenceBeat({required String device, required String screen}) async {
+    await _post('/api/v1/presence',
+        {'device': device, 'screen': screen, 'kind': 'desktop'});
+  }
+
+  Future<List<PresenceEntry>> presenceList() async {
+    final j = await _get('/api/v1/presence');
+    return [for (final e in j['items'] as List) PresenceEntry.fromJson(e)];
   }
 
   // ---- Backups ----

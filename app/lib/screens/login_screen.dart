@@ -122,33 +122,10 @@ class _LoginScreenState extends State<LoginScreen> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Center(
-                  child: Container(
-                    width: 54,
-                    height: 54,
-                    decoration: BoxDecoration(
-                      color: T.ink,
-                      borderRadius: BorderRadius.circular(15),
-                    ),
-                    alignment: Alignment.center,
-                    child: const Text('E',
-                        style: TextStyle(
-                            fontFamily: T.sans,
-                            fontSize: 26,
-                            fontWeight: FontWeight.w800,
-                            color: Colors.white)),
-                  ),
+                  child: Image.asset('assets/images/elixir-logo.png',
+                      height: 96, filterQuality: FilterQuality.medium),
                 ),
-                const SizedBox(height: 14),
-                const Center(
-                  child: Text('ELIXIR',
-                      style: TextStyle(
-                          fontFamily: T.sans,
-                          fontSize: 17,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 3,
-                          color: T.ink)),
-                ),
-                const SizedBox(height: 3),
+                const SizedBox(height: 8),
                 Center(
                   child: Text('GESTION COMMERCIALE',
                       style: T.label.copyWith(fontSize: 8.5)),

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
@@ -52,6 +54,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<StockMovement> _movements = const [];
   List<Partner> _debtors = const [];
   List<DocSummary> _recent = const [];
+  List<PresenceEntry> _presence = const [];
+  Timer? _presenceTimer;
 
   static const _donutColors = [
     T.mint,
@@ -65,6 +69,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void initState() {
     super.initState();
     _load();
+    _loadPresence();
+    _presenceTimer =
+        Timer.periodic(const Duration(seconds: 30), (_) => _loadPresence());
+  }
+
+  @override
+  void dispose() {
+    _presenceTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadPresence() async {
+    try {
+      final items = await widget.api.presenceList();
+      if (mounted) setState(() => _presence = items);
+    } catch (_) {}
   }
 
   String _iso(DateTime d) =>
@@ -356,6 +376,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 Expanded(
                   flex: 3,
                   child: _PanelCard(
+                    title: 'Postes connectés',
+                    child: _presence.isEmpty
+                        ? const EmptyState(
+                            icon: Icons.desktop_windows_outlined,
+                            text: 'Aucun poste actif')
+                        : ListView.separated(
+                            itemCount: _presence.length,
+                            separatorBuilder: (_, _) => const Divider(),
+                            itemBuilder: (context, i) =>
+                                _PresenceRow(e: _presence[i]),
+                          ),
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  flex: 3,
+                  child: _PanelCard(
                     title: 'Alertes stock faible',
                     actionLabel: 'Voir tout',
                     onAction: () => widget.onNavigate('stock'),
@@ -632,6 +669,72 @@ class _PanelCard extends StatelessWidget {
           Expanded(child: child),
         ],
       ),
+    );
+  }
+}
+
+const _screenLabels = {
+  'dashboard': 'Tableau de bord',
+  'pos': 'Caisse',
+  'sales': 'Ventes',
+  'purchases': 'Achats',
+  'inbox': 'Factures',
+  'stock': 'Stock',
+  'products': 'Produits',
+  'partners': 'Partenaires',
+  'assistant': 'Assistant',
+  'designer': 'Modèles',
+  'settings': 'Paramètres',
+};
+
+class _PresenceRow extends StatelessWidget {
+  const _PresenceRow({required this.e});
+  final PresenceEntry e;
+
+  @override
+  Widget build(BuildContext context) {
+    final atPos = e.screen == 'pos';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: const BoxDecoration(
+              color: T.mint, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 9),
+        Icon(
+            e.kind == 'mobile'
+                ? Icons.smartphone_rounded
+                : Icons.desktop_windows_outlined,
+            size: 14,
+            color: T.faint),
+        const SizedBox(width: 7),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(e.device,
+                style: T.body.copyWith(fontSize: 12.5),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis),
+            Text(e.who,
+                style: T.small.copyWith(fontSize: 10.5),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis),
+          ]),
+        ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+          decoration: BoxDecoration(
+            color: atPos ? T.mintTint : T.cream,
+            borderRadius: BorderRadius.circular(T.rChip),
+          ),
+          child: Text(
+              (_screenLabels[e.screen] ?? 'Actif').toUpperCase(),
+              style: T.label.copyWith(
+                  fontSize: 8.5, color: atPos ? T.mintDark : T.faint)),
+        ),
+      ]),
     );
   }
 }
