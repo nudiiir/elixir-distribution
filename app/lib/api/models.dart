@@ -54,6 +54,7 @@ class Product {
   final String? parentProductId;
   final String? variantLabel;
   final int warrantyMonths; // 0 = sold without warranty
+  final String description; // fiche produit (lignes « Clé: Valeur » = specs web)
   final List<String> barcodes; // additional barcodes
 
   Product.fromJson(Map<String, dynamic> j)
@@ -77,6 +78,7 @@ class Product {
         parentProductId = j['parent_product_id'] as String?,
         variantLabel = j['variant_label'] as String?,
         warrantyMonths = (j['warranty_months'] as num?)?.toInt() ?? 0,
+        description = (j['description'] as String?) ?? '',
         barcodes = [
           for (final b in (j['barcodes'] as List? ?? const [])) b.toString()
         ];

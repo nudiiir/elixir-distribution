@@ -36,6 +36,7 @@ type Product struct {
 	VariantLabel    *string  `json:"variant_label"`
 	WarrantyMonths  int64    `json:"warranty_months"`
 	TrackSerials    bool     `json:"track_serials"`
+	Description     string   `json:"description"`
 	Barcodes        []string `json:"barcodes"`
 	CreatedAt       string   `json:"created_at"`
 	UpdatedAt       string   `json:"updated_at"`
@@ -44,7 +45,7 @@ type Product struct {
 const productCols = `id, barcode, sku, name, name_ar, category_id, unit, is_weighable,
 	vat_rate, purchase_price, price_retail, price_wholesale, min_stock_milli, track_lots,
 	active, promo_price, promo_start, promo_end, parent_product_id, variant_label,
-	warranty_months, track_serials, created_at, updated_at`
+	warranty_months, track_serials, description, created_at, updated_at`
 
 func scanProduct(row interface{ Scan(...any) error }) (Product, error) {
 	var p Product
@@ -53,7 +54,7 @@ func scanProduct(row interface{ Scan(...any) error }) (Product, error) {
 		&weighable, &p.VatRate, &p.PurchasePrice, &p.PriceRetail, &p.PriceWholesale,
 		&p.MinStockMilli, &trackLots, &active,
 		&p.PromoPrice, &p.PromoStart, &p.PromoEnd, &p.ParentProductID, &p.VariantLabel,
-		&p.WarrantyMonths, &trackSerials, &p.CreatedAt, &p.UpdatedAt)
+		&p.WarrantyMonths, &trackSerials, &p.Description, &p.CreatedAt, &p.UpdatedAt)
 	p.IsWeighable, p.TrackLots, p.Active = weighable == 1, trackLots == 1, active == 1
 	p.TrackSerials = trackSerials == 1
 	p.Barcodes = []string{}
@@ -174,6 +175,7 @@ type productInput struct {
 	VariantLabel    *string  `json:"variant_label"`
 	WarrantyMonths  int64    `json:"warranty_months"`
 	TrackSerials    bool     `json:"track_serials"`
+	Description     string   `json:"description"`
 	Barcodes        []string `json:"barcodes"`
 }
 
@@ -209,13 +211,14 @@ func (s *Server) createProduct(w http.ResponseWriter, r *http.Request) {
 	_, err := s.db.Exec(`INSERT INTO products (id, barcode, sku, name, name_ar, category_id, unit,
 			is_weighable, vat_rate, purchase_price, price_retail, price_wholesale, min_stock_milli,
 			track_lots, active, promo_price, promo_start, promo_end,
-			parent_product_id, variant_label, warranty_months, track_serials, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			parent_product_id, variant_label, warranty_months, track_serials, description,
+			created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, in.Barcode, in.SKU, in.Name, in.NameAr, in.CategoryID, in.Unit,
 		b2i(in.IsWeighable), in.VatRate, in.PurchasePrice, in.PriceRetail, in.PriceWholesale,
 		in.MinStockMilli, b2i(in.TrackLots), b2i(active),
 		in.PromoPrice, in.PromoStart, in.PromoEnd, in.ParentProductID, in.VariantLabel,
-		in.WarrantyMonths, b2i(in.TrackSerials), now, now)
+		in.WarrantyMonths, b2i(in.TrackSerials), in.Description, now, now)
 	if err != nil {
 		writeErr(w, http.StatusConflict, err.Error())
 		return
@@ -285,13 +288,13 @@ func (s *Server) updateProduct(w http.ResponseWriter, r *http.Request) {
 			unit=?, is_weighable=?, vat_rate=?, purchase_price=?, price_retail=?, price_wholesale=?,
 			min_stock_milli=?, track_lots=?, active=?,
 			promo_price=?, promo_start=?, promo_end=?, parent_product_id=?, variant_label=?,
-			warranty_months=?, updated_at=?
+			warranty_months=?, description=?, updated_at=?
 		WHERE id=?`,
 		in.Barcode, in.SKU, in.Name, in.NameAr, in.CategoryID, in.Unit,
 		b2i(in.IsWeighable), in.VatRate, in.PurchasePrice, in.PriceRetail, in.PriceWholesale,
 		in.MinStockMilli, b2i(in.TrackLots), b2i(active),
 		in.PromoPrice, in.PromoStart, in.PromoEnd, in.ParentProductID, in.VariantLabel,
-		in.WarrantyMonths, domain.NowISO(), id)
+		in.WarrantyMonths, in.Description, domain.NowISO(), id)
 	if err != nil {
 		writeErr(w, http.StatusConflict, err.Error())
 		return

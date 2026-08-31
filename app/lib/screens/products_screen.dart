@@ -346,6 +346,8 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
       text: widget.existing == null || widget.existing!.warrantyMonths == 0
           ? ''
           : '${widget.existing!.warrantyMonths}');
+  late final _description =
+      TextEditingController(text: widget.existing?.description ?? '');
   late final _wholesale = TextEditingController(
       text: widget.existing?.priceWholesale == null
           ? ''
@@ -508,7 +510,7 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
   void dispose() {
     for (final c in [
       _name, _nameAr, _barcode, _extraBarcodes, _purchase, _retail,
-      _minStock, _promoPrice, _warranty, _wholesale
+      _minStock, _promoPrice, _warranty, _wholesale, _description
     ]) {
       c.dispose();
     }
@@ -612,6 +614,7 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
         'track_serials': _trackSerials,
         'parent_product_id': widget.existing?.parentProductId,
         'variant_label': widget.existing?.variantLabel,
+        'description': _description.text.trim(),
       }, id: widget.existing?.id);
       if (mounted) Navigator.of(context).pop(true);
     } on ApiException catch (e) {
@@ -844,6 +847,31 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
                     ),
                   ),
               ]),
+              // ---- Fiche produit (boutique en ligne) ----
+              const MicroLabel(
+                  'Fiche produit — boutique en ligne (« Clé: Valeur » par ligne = tableau de caractéristiques)'),
+              const SizedBox(height: 4),
+              Container(
+                margin: const EdgeInsets.only(bottom: 10),
+                decoration: BoxDecoration(
+                  color: T.bg,
+                  borderRadius: BorderRadius.circular(T.rInner),
+                  border: Border.all(color: T.border),
+                ),
+                child: TextField(
+                  controller: _description,
+                  style: T.body,
+                  maxLines: 4,
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    border: InputBorder.none,
+                    hintText:
+                        'Marque: Samsung\nStockage: 128 Go\nTéléphone neuf sous blister…',
+                    contentPadding:
+                        EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  ),
+                ),
+              ),
               // ---- Serialized units (IMEI) ----
               if (widget.existing != null &&
                   widget.existing!.trackSerials) ...[

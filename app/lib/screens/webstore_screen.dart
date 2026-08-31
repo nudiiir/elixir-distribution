@@ -80,7 +80,8 @@ class _WebstoreScreenState extends State<WebstoreScreen> {
     try {
       final products = await widget.api.allProducts();
       final levels = await widget.api.stockLevels();
-      final cats = {for (final c in await widget.api.categories()) c.id: c.name};
+      final catList = await widget.api.categories();
+      final cats = {for (final c in catList) c.id: c};
       final qty = <String, int>{};
       for (final l in levels) {
         qty[l.productId] = (qty[l.productId] ?? 0) + l.qtyMilli;
@@ -92,13 +93,22 @@ class _WebstoreScreenState extends State<WebstoreScreen> {
             'name': p.name,
             'name_ar': p.nameAr,
             'barcode': p.barcode,
-            'category': p.categoryId == null ? null : cats[p.categoryId],
+            'category':
+                p.categoryId == null ? null : cats[p.categoryId]?.name,
+            // Parent category feeds the two-level navigation of the site.
+            'category_parent': p.categoryId == null
+                ? null
+                : cats[cats[p.categoryId]?.parentId]?.name,
             'unit': p.unit,
             'is_weighable': p.isWeighable,
             'price_centimes': p.priceRetail,
             'promo_price_centimes': p.promoActive ? p.promoPrice : null,
             'promo_end': p.promoActive ? p.promoEnd : null,
             'qty_milli': qty[p.id] ?? 0,
+            'description': p.description,
+            'warranty_months': p.warrantyMonths,
+            'parent_product_id': p.parentProductId,
+            'variant_label': p.variantLabel,
           }
       ];
       final n = await _client.webPublishCatalog(snapshot);
