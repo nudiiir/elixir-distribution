@@ -1,5 +1,5 @@
 ; Elixir Gestion — Client (application de gestion / caisse)
-#define AppVersion "0.1.3"
+#define AppVersion "0.1.4"
 
 [Setup]
 AppId={{8E7A4A2E-11D1-4D3B-9B6A-ELIXIRCLI001}

@@ -5,7 +5,7 @@ import 'package:http/http.dart' as http;
 
 /// Version embarquée dans le binaire — à bumper à chaque release, en même
 /// temps que pubspec.yaml et installer/*.iss.
-const kAppVersion = '0.1.3';
+const kAppVersion = '0.1.4';
 
 /// Dépôt public qui porte les installateurs (GitHub Releases).
 const kReleaseRepo = 'OWNER/elixir-gestion-releases';
@@ -67,8 +67,16 @@ Future<bool> hasLocalServerService() async {
   }
 }
 
-/// Télécharge les installateurs puis lance la réinstallation silencieuse
-/// (une seule invite UAC), et quitte l'application.
+/// Télécharge les installateurs puis lance la réinstallation en élévation.
+///
+/// PIÈGE APPRIS À LA DURE : un process lancé en `detached` MEURT avec l'app
+/// sous Windows — sortir tout de suite tuait la mise à jour avant même
+/// l'invite UAC. On reste donc VIVANT jusqu'à ce qu'un fichier-drapeau
+/// confirme que l'élévation a réussi : le process élevé, lui, est lancé par
+/// Windows (AppInfo) et survit à la fermeture de l'app.
+///
+/// Jette une exception si l'utilisateur refuse l'autorisation Windows ou si
+/// rien ne se passe ; ne quitte l'app QUE lorsque l'installation est lancée.
 Future<void> downloadAndInstall(
   UpdateInfo u, {
   void Function(String status)? onStatus,
@@ -92,27 +100,54 @@ Future<void> downloadAndInstall(
     server = await fetch(u.serverUrl!, 'ElixirServeur-Setup.exe');
   }
 
-  onStatus?.call("Lancement de l'installation…");
-  final lines = <String>[
+  // Script ÉLEVÉ : attend que l'app se ferme, installe, relance.
+  final okFlag = '${dir.path}\\ok.flag';
+  final cancelFlag = '${dir.path}\\cancel.flag';
+  final log = '${dir.path}\\install.log';
+  final install = File('${dir.path}\\install.ps1');
+  await install.writeAsString([
+    'Start-Transcript -Path "$log" -Force | Out-Null',
+    'Start-Sleep -Seconds 2', // laisse l'app se fermer proprement
     if (server != null)
       'Start-Process -FilePath "${server.path}" -ArgumentList \'/VERYSILENT\' -Wait',
     'Start-Process -FilePath "${client.path}" -ArgumentList \'/VERYSILENT\' -Wait',
     r'Start-Process -FilePath "C:\Program Files\Elixir\Client\elixir_app.exe"',
-  ];
-  final script = File('${dir.path}\\install.ps1');
-  await script.writeAsString(lines.join('\r\n'), flush: true);
+    'Stop-Transcript | Out-Null',
+  ].join('\r\n'), flush: true);
 
-  // Un seul passage élevé : les deux setups héritent de l'élévation.
+  // Lanceur NON élevé : déclenche l'UAC et pose le drapeau correspondant.
+  final launcher = File('${dir.path}\\launch.ps1');
+  await launcher.writeAsString([
+    r'try {',
+    '  Start-Process powershell -Verb RunAs -WindowStyle Hidden '
+        '-ArgumentList \'-NoProfile -ExecutionPolicy Bypass -File "${install.path}"\'',
+    '  Set-Content -Path "$okFlag" -Value ok',
+    r'} catch {',
+    '  Set-Content -Path "$cancelFlag" -Value "\$_"',
+    r'}',
+  ].join('\r\n'), flush: true);
+
+  onStatus?.call("Autorisez l'installation dans la fenêtre Windows…");
   await Process.start(
     'powershell',
-    [
-      '-NoProfile',
-      '-Command',
-      'Start-Process powershell -Verb RunAs -WindowStyle Hidden '
-          "-ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','${script.path}'",
-    ],
-    mode: ProcessStartMode.detached,
+    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', launcher.path],
   );
-  await Future<void>.delayed(const Duration(milliseconds: 600));
-  exit(0);
+
+  // L'UAC peut rester affichée un moment : on attend jusqu'à 3 minutes.
+  final deadline = DateTime.now().add(const Duration(minutes: 3));
+  while (DateTime.now().isBefore(deadline)) {
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    if (File(cancelFlag).existsSync()) {
+      throw Exception(
+          "autorisation Windows refusée — la mise à jour a été annulée");
+    }
+    if (File(okFlag).existsSync()) {
+      onStatus?.call('Installation en cours — l\'application va redémarrer…');
+      // L'installeur élevé tourne sous AppInfo : il nous survit.
+      await Future<void>.delayed(const Duration(milliseconds: 800));
+      exit(0);
+    }
+  }
+  throw Exception(
+      "aucune réponse à la demande d'autorisation — mise à jour annulée");
 }

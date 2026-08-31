@@ -150,9 +150,10 @@ class _AppShellState extends State<AppShell> {
         ]),
         content: Text(
             'La version ${info.version} est disponible (vous avez la '
-            '$kAppVersion).\n\nL\'application va se fermer, s\'installer et '
-            'redémarrer toute seule. Les ventes en cours doivent être '
-            'terminées avant.',
+            '$kAppVersion).\n\nAprès le téléchargement, Windows demandera '
+            'une autorisation : cliquez « Oui ». L\'application se fermera, '
+            's\'installera et redémarrera toute seule. Terminez les ventes '
+            'en cours avant.',
             style: T.body.copyWith(height: 1.5)),
         actions: [
           TextButton(
