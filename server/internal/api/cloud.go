@@ -24,6 +24,7 @@ const (
 	defaultRelayURL   = "https://relay.example.com"
 	defaultLLMURL     = "https://llm.example.com"
 	defaultInvoiceURL = "https://invoice.example.com"
+	defaultWebURL     = "https://web.example.com"
 )
 
 func settingOr(cfg map[string]string, key, fallback string) string {
@@ -38,7 +39,8 @@ func settingOr(cfg map[string]string, key, fallback string) string {
 func LoadCloudSettings(db *sql.DB) map[string]string {
 	out := map[string]string{}
 	rows, err := db.Query(`SELECT key, value FROM settings
-		WHERE key LIKE 'relay_%' OR key LIKE 'llm_%' OR key LIKE 'invoice_%'`)
+		WHERE key LIKE 'relay_%' OR key LIKE 'llm_%' OR key LIKE 'invoice_%'
+		OR key LIKE 'web_%'`)
 	if err != nil {
 		return out
 	}
@@ -79,6 +81,7 @@ func (s *Server) cloudStatus(w http.ResponseWriter, r *http.Request) {
 		"relay_subdomain": cfg["relay_subdomain"],
 		"llm_url":         settingOr(cfg, "llm_url", defaultLLMURL),
 		"invoice_url":     settingOr(cfg, "invoice_url", defaultInvoiceURL),
+		"web_url":         settingOr(cfg, "web_url", defaultWebURL),
 	})
 }
 

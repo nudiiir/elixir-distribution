@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../api/client.dart';
+import '../api/cloud.dart';
 import '../api/models.dart';
 import '../screens/assistant_screen.dart';
 import '../screens/dashboard_screen.dart';
@@ -19,6 +20,7 @@ import '../screens/sales_screen.dart';
 import '../screens/sav_screen.dart';
 import '../screens/settings_screen.dart';
 import '../screens/stock_screen.dart';
+import '../screens/webstore_screen.dart';
 import '../theme/tokens.dart';
 import '../util/config.dart';
 import '../util/updater.dart';
@@ -45,6 +47,7 @@ const _allModules = [
   _Module('products', Icons.category_outlined, 'Produits'),
   _Module('partners', Icons.people_alt_outlined, 'Partenaires'),
   _Module('sav', Icons.build_outlined, 'Réparations'),
+  _Module('webstore', Icons.storefront_outlined, 'Boutique en ligne'),
   _Module('reports', Icons.query_stats_rounded, 'Rapports'),
   _Module('assistant', Icons.auto_awesome_outlined, 'Assistant'),
   _Module('delivery', Icons.rocket_launch_outlined, 'Livraison', enabled: false),
@@ -99,6 +102,33 @@ class _AppShellState extends State<AppShell> {
     _presenceTimer =
         Timer.periodic(const Duration(seconds: 30), (_) => _beat());
     _checkUpdate();
+    // La vitrine web affiche les quantités du snapshot : on lui envoie un
+    // battement de stock tant que l'app tourne, pour limiter les surventes.
+    if (user.can('webstore')) {
+      _webstoreTimer = Timer.periodic(
+          const Duration(minutes: 5), (_) => _pushWebstoreStock());
+    }
+  }
+
+  Timer? _webstoreTimer;
+
+  Future<void> _pushWebstoreStock() async {
+    try {
+      final cloud = await widget.api.cloudStatus();
+      if (!cloud.webReady || widget.api.token == null) return;
+      final levels = await widget.api.stockLevels();
+      final qty = <String, int>{};
+      for (final l in levels) {
+        qty[l.productId] = (qty[l.productId] ?? 0) + l.qtyMilli;
+      }
+      final client = CloudClient(config: cloud, token: widget.api.token!);
+      await client.webPushStock([
+        for (final e in qty.entries)
+          {'product_id': e.key, 'qty_milli': e.value}
+      ]);
+    } catch (_) {
+      // Pas de boutique, hors ligne… le prochain battement réessaiera.
+    }
   }
 
   /// Au démarrage : si une version plus récente est publiée, on propose de
@@ -180,6 +210,7 @@ class _AppShellState extends State<AppShell> {
   void dispose() {
     _healthTimer?.cancel();
     _presenceTimer?.cancel();
+    _webstoreTimer?.cancel();
     _globalSearch.dispose();
     _productsQuery.dispose();
     super.dispose();
@@ -245,6 +276,7 @@ class _AppShellState extends State<AppShell> {
             searchRequest: _productsQuery),
         'partners' => PartnersScreen(api: widget.api),
         'sav' => SavScreen(api: widget.api),
+        'webstore' => WebstoreScreen(api: widget.api),
         'reports' => ReportsScreen(api: widget.api, session: widget.session),
         'assistant' => AssistantScreen(api: widget.api),
         'designer' => DesignerScreen(api: widget.api),

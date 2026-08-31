@@ -39,7 +39,7 @@ type AuthUser struct {
 var AllPerms = []string{
 	"dashboard", "pos", "sales", "purchases", "stock",
 	"products", "partners", "assistant", "reports", "sav",
-	"settings", "view_cost", "discount",
+	"webstore", "settings", "view_cost", "discount",
 }
 
 func defaultPerms(role string) map[string]bool {

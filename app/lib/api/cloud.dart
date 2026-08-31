@@ -14,6 +14,7 @@ class CloudConfig {
     this.relaySubdomain = '',
     this.llmUrl = '',
     this.invoiceUrl = '',
+    this.webUrl = '',
   });
 
   final bool enrolled;
@@ -23,6 +24,7 @@ class CloudConfig {
   final String relaySubdomain;
   final String llmUrl;
   final String invoiceUrl;
+  final String webUrl;
 
   CloudConfig.fromJson(Map<String, dynamic> j)
       : enrolled = j['enrolled'] == true,
@@ -31,7 +33,8 @@ class CloudConfig {
         relayBase = (j['relay_base'] as String?) ?? '',
         relaySubdomain = (j['relay_subdomain'] as String?) ?? '',
         llmUrl = (j['llm_url'] as String?) ?? '',
-        invoiceUrl = (j['invoice_url'] as String?) ?? '';
+        invoiceUrl = (j['invoice_url'] as String?) ?? '',
+        webUrl = (j['web_url'] as String?) ?? '';
 
   /// Cloud features route through the tunnel, so they need it actually up —
   /// not merely switched on.
@@ -40,6 +43,108 @@ class CloudConfig {
 
   bool get invoiceReady =>
       invoiceUrl.isNotEmpty && relaySubdomain.isNotEmpty && relayConnected;
+
+  bool get webReady =>
+      webUrl.isNotEmpty && relaySubdomain.isNotEmpty && relayConnected;
+}
+
+// ---------------- Webstore models ----------------
+
+/// The shop's online store as stock-web knows it.
+class WebStore {
+  WebStore.fromJson(Map<String, dynamic> j)
+      : slug = (j['slug'] as String?) ?? '',
+        name = (j['name'] as String?) ?? '',
+        url = (j['url'] as String?) ?? '',
+        theme = (j['theme'] as Map<String, dynamic>?) ?? {},
+        policy = (j['policy'] as Map<String, dynamic>?) ?? {},
+        hasLogo = j['has_logo'] == true,
+        hasCover = j['has_cover'] == true,
+        publishedAt = j['published_at'] as String?,
+        productCount = (j['product_count'] as num?)?.toInt() ?? 0,
+        visibleCount = (j['visible_count'] as num?)?.toInt() ?? 0,
+        pendingOrders = (j['pending_orders'] as num?)?.toInt() ?? 0;
+
+  final String slug;
+  final String name;
+  final String url;
+  final Map<String, dynamic> theme;
+  final Map<String, dynamic> policy;
+  final bool hasLogo;
+  final bool hasCover;
+  final String? publishedAt;
+  final int productCount;
+  final int visibleCount;
+  final int pendingOrders;
+}
+
+/// One published product with its merchant flags.
+class WebStoreProduct {
+  WebStoreProduct.fromJson(Map<String, dynamic> j)
+      : productId = (j['product_id'] as String?) ?? '',
+        name = (j['name'] as String?) ?? '',
+        category = j['category'] as String?,
+        priceCentimes = (j['price_centimes'] as num?)?.toInt() ?? 0,
+        promoPriceCentimes = (j['promo_price_centimes'] as num?)?.toInt(),
+        qtyMilli = (j['qty_milli'] as num?)?.toInt() ?? 0,
+        visible = j['visible'] == true,
+        hidePrice = j['hide_price'] == true,
+        featured = j['featured'] == true;
+
+  final String productId;
+  final String name;
+  final String? category;
+  final int priceCentimes;
+  final int? promoPriceCentimes;
+  final int qtyMilli;
+  bool visible;
+  bool hidePrice;
+  bool featured;
+}
+
+class WebOrderLine {
+  WebOrderLine.fromJson(Map<String, dynamic> j)
+      : productId = (j['product_id'] as String?) ?? '',
+        name = (j['name'] as String?) ?? '',
+        qtyMilli = (j['qty_milli'] as num?)?.toInt() ?? 0,
+        priceCentimes = (j['price_centimes'] as num?)?.toInt() ?? 0;
+
+  final String productId;
+  final String name;
+  final int qtyMilli;
+  final int priceCentimes;
+}
+
+class WebOrder {
+  WebOrder.fromJson(Map<String, dynamic> j)
+      : id = (j['id'] as String?) ?? '',
+        number = (j['number'] as String?) ?? '',
+        customerName = (j['customer_name'] as String?) ?? '',
+        phone = (j['phone'] as String?) ?? '',
+        wilaya = (j['wilaya'] as String?) ?? '',
+        commune = j['commune'] as String?,
+        address = j['address'] as String?,
+        note = j['note'] as String?,
+        totalCentimes = (j['total_centimes'] as num?)?.toInt() ?? 0,
+        status = (j['status'] as String?) ?? 'new',
+        createdAt = (j['created_at'] as String?) ?? '',
+        lines = [
+          for (final l in (j['items'] as List? ?? const []))
+            WebOrderLine.fromJson(l as Map<String, dynamic>)
+        ];
+
+  final String id;
+  final String number;
+  final String customerName;
+  final String phone;
+  final String wilaya;
+  final String? commune;
+  final String? address;
+  final String? note;
+  final int totalCentimes;
+  final String status;
+  final String createdAt;
+  final List<WebOrderLine> lines;
 }
 
 /// One scan waiting in the cloud inbox for this shop.
@@ -155,6 +260,132 @@ class CloudClient {
         .post(Uri.parse('${config.invoiceUrl}/api/v1/inbox/$id/$action'),
             headers: _headers)
         .timeout(const Duration(seconds: 20));
+    if (res.statusCode != 200) throw CloudException(_err(res));
+  }
+
+  // ---------------- Webstore ----------------
+
+  Future<WebStore?> webStore() async {
+    final res = await _client
+        .get(Uri.parse('${config.webUrl}/api/v1/store'), headers: _headers)
+        .timeout(const Duration(seconds: 25));
+    if (res.statusCode != 200) throw CloudException(_err(res));
+    final j = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    final s = j['store'];
+    return s == null ? null : WebStore.fromJson(s as Map<String, dynamic>);
+  }
+
+  Future<(bool, String?)> webCheckSlug(String slug) async {
+    final res = await _client
+        .post(Uri.parse('${config.webUrl}/api/v1/store/check'),
+            headers: {..._headers, 'Content-Type': 'application/json'},
+            body: jsonEncode({'slug': slug}))
+        .timeout(const Duration(seconds: 25));
+    if (res.statusCode != 200) throw CloudException(_err(res));
+    final j = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    return (j['available'] == true, j['reason'] as String?);
+  }
+
+  Future<WebStore> webClaim(String slug, String name) async {
+    final res = await _client
+        .post(Uri.parse('${config.webUrl}/api/v1/store/claim'),
+            headers: {..._headers, 'Content-Type': 'application/json'},
+            body: jsonEncode({'slug': slug, 'name': name}))
+        .timeout(const Duration(seconds: 25));
+    if (res.statusCode != 201) throw CloudException(_err(res));
+    final j = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    return WebStore.fromJson(j['store'] as Map<String, dynamic>);
+  }
+
+  Future<WebStore> webPutConfig(
+      {String? name,
+      Map<String, dynamic>? theme,
+      Map<String, dynamic>? policy}) async {
+    final res = await _client
+        .put(Uri.parse('${config.webUrl}/api/v1/store/config'),
+            headers: {..._headers, 'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'name': ?name,
+              'theme': ?theme,
+              'policy': ?policy,
+            }))
+        .timeout(const Duration(seconds: 25));
+    if (res.statusCode != 200) throw CloudException(_err(res));
+    final j = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    return WebStore.fromJson(j['store'] as Map<String, dynamic>);
+  }
+
+  Future<void> webUploadImage(
+      String kind, List<int> bytes, String contentType) async {
+    final res = await _client
+        .post(Uri.parse('${config.webUrl}/api/v1/store/$kind'),
+            headers: {..._headers, 'Content-Type': contentType},
+            body: bytes)
+        .timeout(const Duration(seconds: 40));
+    if (res.statusCode != 200) throw CloudException(_err(res));
+  }
+
+  Future<int> webPublishCatalog(List<Map<String, dynamic>> products) async {
+    final res = await _client
+        .put(Uri.parse('${config.webUrl}/api/v1/store/catalog'),
+            headers: {..._headers, 'Content-Type': 'application/json'},
+            body: jsonEncode({'products': products}))
+        .timeout(const Duration(minutes: 2));
+    if (res.statusCode != 200) throw CloudException(_err(res));
+    final j = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    return (j['count'] as num?)?.toInt() ?? 0;
+  }
+
+  Future<void> webPushStock(List<Map<String, dynamic>> items) async {
+    final res = await _client
+        .put(Uri.parse('${config.webUrl}/api/v1/store/stock'),
+            headers: {..._headers, 'Content-Type': 'application/json'},
+            body: jsonEncode({'items': items}))
+        .timeout(const Duration(seconds: 60));
+    if (res.statusCode != 200) throw CloudException(_err(res));
+  }
+
+  Future<List<WebStoreProduct>> webStoreProducts() async {
+    final res = await _client
+        .get(Uri.parse('${config.webUrl}/api/v1/store/products'),
+            headers: _headers)
+        .timeout(const Duration(seconds: 30));
+    if (res.statusCode != 200) throw CloudException(_err(res));
+    final j = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    return [
+      for (final e in (j['items'] as List? ?? const []))
+        WebStoreProduct.fromJson(e as Map<String, dynamic>)
+    ];
+  }
+
+  Future<void> webPutFlags(List<Map<String, dynamic>> items) async {
+    final res = await _client
+        .put(Uri.parse('${config.webUrl}/api/v1/store/products'),
+            headers: {..._headers, 'Content-Type': 'application/json'},
+            body: jsonEncode({'items': items}))
+        .timeout(const Duration(seconds: 30));
+    if (res.statusCode != 200) throw CloudException(_err(res));
+  }
+
+  Future<List<WebOrder>> webOrders({String status = 'new'}) async {
+    final res = await _client
+        .get(Uri.parse('${config.webUrl}/api/v1/store/orders?status=$status'),
+            headers: _headers)
+        .timeout(const Duration(seconds: 25));
+    if (res.statusCode != 200) throw CloudException(_err(res));
+    final j = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    return [
+      for (final e in (j['items'] as List? ?? const []))
+        WebOrder.fromJson(e as Map<String, dynamic>)
+    ];
+  }
+
+  Future<void> webAckOrder(String id, {bool accept = true}) async {
+    final res = await _client
+        .post(Uri.parse('${config.webUrl}/api/v1/store/orders/$id/ack'),
+            headers: {..._headers, 'Content-Type': 'application/json'},
+            body: jsonEncode({'action': accept ? 'accept' : 'reject'}))
+        .timeout(const Duration(seconds: 25));
     if (res.statusCode != 200) throw CloudException(_err(res));
   }
 

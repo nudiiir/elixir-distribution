@@ -101,6 +101,22 @@ class ApiClient {
     return [for (final e in j['items'] as List) Product.fromJson(e)];
   }
 
+  /// Pages through the whole catalogue (the server caps a page at 500).
+  Future<List<Product>> allProducts() async {
+    final out = <Product>[];
+    var offset = 0;
+    while (true) {
+      final j = await _get('/api/v1/products', {
+        'limit': '500',
+        'offset': '$offset',
+      });
+      final page = [for (final e in j['items'] as List) Product.fromJson(e)];
+      out.addAll(page);
+      if (page.length < 500) return out;
+      offset += 500;
+    }
+  }
+
   Future<List<Warehouse>> warehouses() async {
     final j = await _get('/api/v1/warehouses');
     return [for (final e in j['items'] as List) Warehouse.fromJson(e)];

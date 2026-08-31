@@ -1,5 +1,5 @@
 ; Elixir Gestion — Serveur (installe server.exe comme service Windows)
-#define AppVersion "0.1.1"
+#define AppVersion "0.1.2"
 
 [Setup]
 AppId={{8E7A4A2E-11D1-4D3B-9B6A-ELIXIRSRV001}

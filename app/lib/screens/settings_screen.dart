@@ -516,6 +516,7 @@ const _permLabels = [
   ('products', 'Produits'),
   ('partners', 'Partenaires'),
   ('sav', 'Réparations'),
+  ('webstore', 'Boutique en ligne'),
   ('reports', 'Rapports'),
   ('assistant', 'Assistant'),
   ('settings', 'Paramètres'),
