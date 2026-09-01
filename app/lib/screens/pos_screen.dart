@@ -272,11 +272,120 @@ class _PosScreenState extends State<PosScreen> {
         _addToCart(pick);
         _searchCtrl.clear();
         _search('');
+      } else if (items.isEmpty && RegExp(r'^\d{6,14}$').hasMatch(q)) {
+        // Démarrage progressif : un code inconnu scanné au comptoir ouvre une
+        // création éclair — après trois semaines, les produits qui se vendent
+        // vraiment existent, sans jamais avoir bloqué une vente.
+        final created = await _quickCreateAtTill(q);
+        if (created != null) {
+          _addToCart(created);
+          _searchCtrl.clear();
+          _search('');
+        }
       } else {
         setState(() => _results = items);
       }
     } catch (_) {}
     _searchFocus.requestFocus();
+  }
+
+  /// Création éclair au comptoir : deux champs, la vente continue.
+  Future<Product?> _quickCreateAtTill(String barcode) async {
+    final name = TextEditingController();
+    final price = TextEditingController();
+    final p = await showDialog<Product>(
+      context: context,
+      builder: (context) {
+        String? error;
+        bool busy = false;
+        return StatefulBuilder(builder: (context, setDlg) {
+          Future<void> create() async {
+            if (name.text.trim().isEmpty ||
+                (parseDA(price.text) ?? 0) <= 0) {
+              setDlg(() => error = 'Nom et prix de vente obligatoires.');
+              return;
+            }
+            setDlg(() => busy = true);
+            try {
+              final created = await widget.api.saveProduct({
+                'name': name.text.trim(),
+                'barcode': barcode,
+                'vat_rate': 0,
+                'purchase_price': 0,
+                'price_retail': parseDA(price.text) ?? 0,
+                'min_stock_milli': 0,
+                'is_weighable': false,
+                'unit': 'piece',
+                'track_lots': false,
+                'track_serials': false,
+                'warranty_months': 0,
+                'description': '',
+                'brand': '',
+                'track_expiry': false,
+              });
+              if (context.mounted) Navigator.of(context).pop(created);
+            } on ApiException catch (e) {
+              setDlg(() {
+                error = e.message;
+                busy = false;
+              });
+            }
+          }
+
+          return AlertDialog(
+            backgroundColor: T.surface,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(T.rCard)),
+            title: Text('Produit inconnu', style: T.h2),
+            content: SizedBox(
+              width: 340,
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Text('Code $barcode — créez-le et encaissez.',
+                    style: T.small),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: name,
+                  autofocus: true,
+                  style: T.body,
+                  decoration:
+                      const InputDecoration(labelText: 'Désignation *'),
+                  onSubmitted: (_) => create(),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: price,
+                  style: T.monoBody,
+                  decoration: const InputDecoration(
+                      labelText: 'Prix de vente TTC *'),
+                  onSubmitted: (_) => create(),
+                ),
+                if (error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(error!,
+                        style: T.small.copyWith(color: T.dangerDark)),
+                  ),
+              ]),
+            ),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Annuler')),
+              FilledButton(
+                  style: FilledButton.styleFrom(
+                      backgroundColor: T.mint, foregroundColor: T.ink),
+                  onPressed: busy ? null : create,
+                  child: Text(busy ? '…' : 'Créer et encaisser')),
+            ],
+          );
+        });
+      },
+    );
+    Future.delayed(const Duration(seconds: 1), () {
+      name.dispose();
+      price.dispose();
+    });
+    return p;
   }
 
   Future<bool> _addScaleItem(RegExpMatch m) async {

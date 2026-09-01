@@ -46,6 +46,7 @@ func (p *program) run() {
 		log.Fatalf("seed: %v", err)
 	}
 	api.StartBackupScheduler(db, p.dbPath)
+	api.StartStockVerifier(db)
 
 	// Optional outbound relay: lets off-LAN clients (mobile app, stock-llm)
 	// reach this server's API through relay.example.com/t/<sub>/*.

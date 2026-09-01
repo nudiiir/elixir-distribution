@@ -49,6 +49,8 @@ func New(db *sql.DB, dbPath string) http.Handler {
 		r.Get("/products/{id}", s.getProduct)
 		r.Put("/products/{id}", s.updateProduct)
 		r.Delete("/products/{id}", s.deactivateProduct)
+		r.Get("/products/{id}/fiche", s.ficheProduct)
+		r.Post("/products/{id}/split", s.splitProduct)
 
 		r.Get("/partners", s.listPartners)
 		r.Post("/partners", s.createPartner)
@@ -65,9 +67,15 @@ func New(db *sql.DB, dbPath string) http.Handler {
 		r.Put("/documents/{id}", s.updateDocument)
 		r.Post("/documents/{id}/post", s.postDocument)
 		r.Post("/documents/{id}/cancel", s.cancelDocument)
+		r.Post("/documents/{id}/void", s.voidDocument)
+		r.Post("/documents/{id}/close", s.closeOrder)
+		r.Get("/documents/{id}/match", s.matchDocument)
+
+		r.Get("/purchases/last-prices", s.lastSupplierPrices)
 
 		r.Get("/stock/levels", s.stockLevels)
 		r.Get("/stock/movements", s.stockMovements)
+		r.Get("/stock/verify", s.verifyStock)
 
 		r.Get("/settings", s.getSettings)
 		r.Put("/settings", s.putSettings)

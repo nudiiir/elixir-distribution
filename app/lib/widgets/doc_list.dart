@@ -39,14 +39,20 @@ const paymentLabels = {
 };
 
 class StatusChip extends StatelessWidget {
-  const StatusChip({super.key, required this.status});
+  const StatusChip({super.key, required this.status, this.orderStatus});
   final String status;
+
+  /// Statut de réception d'un bon de commande (partial/received/closed).
+  final String? orderStatus;
 
   @override
   Widget build(BuildContext context) {
-    final (label, bg, fg) = switch (status) {
-      'posted' => ('validé', T.mintTint, T.mintDark),
-      'cancelled' => ('annulé', T.dangerTint, T.dangerDark),
+    final (label, bg, fg) = switch ((status, orderStatus)) {
+      ('posted', 'partial') => ('partiel', T.warnTint, T.warnDark),
+      ('posted', 'received') => ('reçu', T.mintTint, T.mintDark),
+      ('posted', 'closed') => ('clôturé', T.cream, T.faint),
+      ('posted', _) => ('validé', T.mintTint, T.mintDark),
+      ('cancelled', _) => ('annulé', T.dangerTint, T.dangerDark),
       _ => ('brouillon', T.cream, T.faint),
     };
     return Container(
@@ -86,6 +92,7 @@ class DocListPane extends StatefulWidget {
 class DocListPaneState extends State<DocListPane> {
   String? _typeFilter;
   String? _statusFilter;
+  String? _partnerFilter;
   DateTime? _from;
   DateTime? _to;
   List<DocSummary> _docs = const [];
@@ -123,6 +130,12 @@ class DocListPaneState extends State<DocListPane> {
         ]);
         docs = all.expand((e) => e).toList()
           ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      }
+      if (_partnerFilter != null) {
+        docs = [
+          for (final d in docs)
+            if (d.partnerId == _partnerFilter) d
+        ];
       }
       if (mounted) {
         setState(() {
@@ -162,8 +175,10 @@ class DocListPaneState extends State<DocListPane> {
         'Numéro',
         'Type',
         'Partenaire',
+        'Réf. fournisseur',
         'Statut',
         'Date',
+        'Échéance',
         'Total TTC (DA)'
       ],
       rows: [
@@ -172,8 +187,10 @@ class DocListPaneState extends State<DocListPane> {
             d.number ?? '',
             docTypeLabels[d.docType] ?? d.docType,
             widget.partnerNames?[d.partnerId] ?? '',
-            d.status,
+            d.supplierRef ?? '',
+            d.orderStatus ?? d.status,
             d.docDate,
+            d.dueDate ?? '',
             editDA(d.docType.startsWith('PAYMENT') ? d.amount : d.totalTTC),
           ]
       ],
@@ -259,6 +276,40 @@ class DocListPaneState extends State<DocListPane> {
               ]),
             ),
           ),
+          if ((widget.partnerNames ?? const {}).isNotEmpty) ...[
+            const SizedBox(width: 6),
+            _FilterPill(
+              label: _partnerFilter == null
+                  ? 'Partenaire'
+                  : widget.partnerNames![_partnerFilter] ?? 'Partenaire',
+              selected: _partnerFilter != null,
+              onTap: () async {
+                final entries = widget.partnerNames!.entries.toList()
+                  ..sort((a, b) => a.value.compareTo(b.value));
+                final id = await showDialog<String>(
+                  context: context,
+                  builder: (context) => SimpleDialog(
+                    backgroundColor: T.surface,
+                    title: const Text('Partenaire', style: T.h2),
+                    children: [
+                      SimpleDialogOption(
+                        onPressed: () => Navigator.pop(context, ''),
+                        child: Text('— tous —', style: T.bodyMuted),
+                      ),
+                      for (final e in entries)
+                        SimpleDialogOption(
+                          onPressed: () => Navigator.pop(context, e.key),
+                          child: Text(e.value, style: T.body),
+                        ),
+                    ],
+                  ),
+                );
+                if (id == null) return;
+                setState(() => _partnerFilter = id.isEmpty ? null : id);
+                refresh();
+              },
+            ),
+          ],
           const SizedBox(width: 6),
           _FilterPill(
             label: 'Brouillons',
@@ -335,8 +386,27 @@ class DocListPaneState extends State<DocListPane> {
               ColumnSpec(
                 label: 'Statut',
                 width: 88,
-                sortKey: (d) => d.status,
-                cell: (context, d) => StatusChip(status: d.status),
+                sortKey: (d) => '${d.status}:${d.orderStatus ?? ''}',
+                cell: (context, d) => StatusChip(
+                    status: d.status, orderStatus: d.orderStatus),
+              ),
+              ColumnSpec(
+                label: 'Échéance',
+                width: 84,
+                sortKey: (d) => d.dueDate ?? '',
+                cell: (context, d) {
+                  if (d.dueDate == null) {
+                    return Text('—',
+                        style: T.monoSmall.copyWith(color: T.ghost));
+                  }
+                  final overdue = d.status == 'posted' &&
+                      d.dueDate!.compareTo(todayISO()) < 0;
+                  return Text(d.dueDate!.substring(5),
+                      style: T.monoSmall.copyWith(
+                          color: overdue ? T.warnDark : T.muted,
+                          fontWeight:
+                              overdue ? FontWeight.w800 : FontWeight.w500));
+                },
               ),
               ColumnSpec(
                 label: 'Total TTC',
@@ -648,6 +718,180 @@ class _DocDetailDialogState extends State<_DocDetailDialog> {
     ));
   }
 
+  /// Réceptionner le reliquat d'un bon de commande validé.
+  Future<void> _receive() async {
+    final nav = Navigator.of(context);
+    nav.pop(true);
+    await nav.push(MaterialPageRoute(
+      builder: (_) => DocEditorScreen(
+          api: widget.api,
+          config: purchaseReceiptConfig,
+          receiveFrom: _doc),
+    ));
+  }
+
+  /// Clôture du reliquat : la fin normale de la plupart des BC de ce marché.
+  Future<void> _closeOrder() async {
+    final reason = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: T.surface,
+        title: Text('Clôturer le reliquat', style: T.h2),
+        content: SizedBox(
+          width: 340,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text(
+                'Les quantités non reçues seront annulées. La commande ne '
+                'pourra plus recevoir.',
+                style: T.body.copyWith(height: 1.4)),
+            const SizedBox(height: 10),
+            TextField(
+                controller: reason,
+                style: T.body,
+                decoration: const InputDecoration(labelText: 'Motif')),
+          ]),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Annuler')),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Clôturer')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _busy = true);
+    try {
+      await widget.api.closeOrder(widget.docId, reason: reason.text.trim());
+      _changed = true;
+      await _load();
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _error = e.message);
+    } finally {
+      reason.dispose();
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Contrepassation d'un document validé : écritures inverses, le numéro
+  /// reste, l'erreur reste visible. Un document validé ne s'édite jamais.
+  Future<void> _void() async {
+    final reason = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: T.surface,
+        title: Text('Contrepasser ce document ?', style: T.h2),
+        content: SizedBox(
+          width: 360,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text(
+                'Des écritures inverses seront créées (stock et comptes). Le '
+                'document garde son numéro et reste visible, marqué annulé. '
+                'Créez ensuite le document corrigé.',
+                style: T.body.copyWith(height: 1.4)),
+            const SizedBox(height: 10),
+            TextField(
+                controller: reason,
+                style: T.body,
+                decoration: const InputDecoration(labelText: 'Motif')),
+          ]),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Non')),
+          FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: T.danger),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Contrepasser')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _busy = true);
+    try {
+      await widget.api.voidDocument(widget.docId, reason: reason.text.trim());
+      _changed = true;
+      await _load();
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _error = e.message);
+    } finally {
+      reason.dispose();
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Écarts de rapprochement contre le document lié (facture vs réception,
+  /// réception vs commande).
+  Future<void> _match() async {
+    setState(() => _busy = true);
+    try {
+      final items = await widget.api.matchDocument(widget.docId);
+      if (!mounted) return;
+      setState(() => _busy = false);
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          backgroundColor: T.surface,
+          title: Text('Rapprochement', style: T.h2),
+          content: SizedBox(
+            width: 460,
+            child: items.isEmpty
+                ? Text('Aucun écart : les documents concordent.',
+                    style: T.body)
+                : Column(mainAxisSize: MainAxisSize.min, children: [
+                    for (final x in items)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(children: [
+                          Icon(
+                              switch (x.kind) {
+                                'price' => Icons.price_change_outlined,
+                                'qty' => Icons.exposure_outlined,
+                                _ => Icons.help_outline,
+                              },
+                              size: 16,
+                              color: T.warnDark),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(x.product, style: T.body),
+                                  Text(
+                                      x.kind == 'price'
+                                          ? '${x.detail} : ${fmtDA(x.thisValue)} vs ${fmtDA(x.refValue)}'
+                                          : x.kind == 'qty'
+                                              ? '${x.detail} : ${fmtQty(x.thisValue)} vs ${fmtQty(x.refValue)}'
+                                              : x.detail,
+                                      style: T.small),
+                                ]),
+                          ),
+                        ]),
+                      ),
+                  ]),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Fermer')),
+          ],
+        ),
+      );
+    } on ApiException catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.message;
+          _busy = false;
+        });
+      }
+    }
+  }
+
   Future<void> _pdf() async {
     final d = _doc;
     if (d == null || _busy) return;
@@ -772,7 +1016,10 @@ class _DocDetailDialogState extends State<_DocDetailDialog> {
                             Text(docTypeLabels[d.docType] ?? d.docType,
                                 style: T.h2),
                             const SizedBox(height: 3),
-                            Text('${d.number ?? 'brouillon'} · ${d.docDate}',
+                            Text(
+                                '${d.number ?? 'brouillon'} · ${d.docDate}'
+                                '${d.supplierRef != null ? ' · réf. ${d.supplierRef}' : ''}'
+                                '${d.reason != null ? ' · motif : ${d.reason}' : ''}',
                                 style: T.monoSmall),
                           ],
                         ),
@@ -817,30 +1064,59 @@ class _DocDetailDialogState extends State<_DocDetailDialog> {
                             separatorBuilder: (_, _) => const Divider(),
                             itemBuilder: (context, i) {
                               final l = d.lines[i];
+                              final extras = <String>[
+                                if (l.qtyFreeMilli > 0)
+                                  '+${fmtQty(l.qtyFreeMilli)} gratuit',
+                                if (l.packFactorMilli != 1000)
+                                  'pack ×${fmtQty(l.packFactorMilli)}',
+                                if ((l.lotNumber ?? '').isNotEmpty)
+                                  'lot ${l.lotNumber}',
+                                if ((l.expiryDate ?? '').isNotEmpty)
+                                  'DLC ${l.expiryDate}',
+                                if (d.docType == 'PURCHASE_ORDER' &&
+                                    d.status == 'posted')
+                                  'reçu ${fmtQty(l.qtyReceivedMilli)}/${fmtQty(l.qtyMilli)}'
+                                      '${l.qtyCancelledMilli > 0 ? ' · annulé ${fmtQty(l.qtyCancelledMilli)}' : ''}',
+                              ];
                               return Padding(
                                 padding: const EdgeInsets.symmetric(
                                     horizontal: 16, vertical: 8),
-                                child: Row(children: [
-                                  Expanded(
-                                      child: Text(l.description,
-                                          style: T.body,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis)),
-                                  SizedBox(
-                                      width: 70,
-                                      child: Text('×${fmtQty(l.qtyMilli)}',
-                                          style: T.monoSmall)),
-                                  SizedBox(
-                                      width: 100,
-                                      child: Text(fmtDA(l.unitPrice),
-                                          textAlign: TextAlign.end,
-                                          style: T.monoSmall)),
-                                  SizedBox(
-                                      width: 110,
-                                      child: Text(fmtDA(l.lineTTC),
-                                          textAlign: TextAlign.end,
-                                          style: T.monoBody)),
-                                ]),
+                                child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      Row(children: [
+                                        Expanded(
+                                            child: Text(l.description,
+                                                style: T.body,
+                                                maxLines: 1,
+                                                overflow:
+                                                    TextOverflow.ellipsis)),
+                                        SizedBox(
+                                            width: 70,
+                                            child: Text(
+                                                '×${fmtQty(l.qtyMilli)}',
+                                                style: T.monoSmall)),
+                                        SizedBox(
+                                            width: 100,
+                                            child: Text(fmtDA(l.unitPrice),
+                                                textAlign: TextAlign.end,
+                                                style: T.monoSmall)),
+                                        SizedBox(
+                                            width: 110,
+                                            child: Text(fmtDA(l.lineTTC),
+                                                textAlign: TextAlign.end,
+                                                style: T.monoBody)),
+                                      ]),
+                                      if (extras.isNotEmpty)
+                                        Padding(
+                                          padding:
+                                              const EdgeInsets.only(top: 2),
+                                          child: Text(extras.join('  ·  '),
+                                              style: T.small
+                                                  .copyWith(fontSize: 10.5)),
+                                        ),
+                                    ]),
                               );
                             },
                           ),
@@ -881,6 +1157,48 @@ class _DocDetailDialogState extends State<_DocDetailDialog> {
                               size: 14, color: T.muted),
                           label: Text('Garantie',
                               style: T.small.copyWith(color: T.muted)),
+                        ),
+                        const SizedBox(width: 6),
+                      ],
+                      if (d.status == 'posted' &&
+                          d.docType == 'PURCHASE_ORDER' &&
+                          d.orderStatus != 'closed' &&
+                          d.orderStatus != 'received') ...[
+                        TextButton.icon(
+                          onPressed: _busy ? null : _receive,
+                          icon: const Icon(Icons.move_to_inbox_outlined,
+                              size: 14, color: T.mintDark),
+                          label: Text('Recevoir',
+                              style: T.small.copyWith(
+                                  color: T.mintDark,
+                                  fontWeight: FontWeight.w700)),
+                        ),
+                        TextButton(
+                          onPressed: _busy ? null : _closeOrder,
+                          child: Text('Clôturer',
+                              style: T.small.copyWith(color: T.muted)),
+                        ),
+                        const SizedBox(width: 6),
+                      ],
+                      if (d.status == 'posted' &&
+                          d.refDocumentId != null &&
+                          (d.docType == 'PURCHASE_INVOICE' ||
+                              d.docType == 'PURCHASE_RECEIPT')) ...[
+                        TextButton.icon(
+                          onPressed: _busy ? null : _match,
+                          icon: const Icon(Icons.rule_rounded,
+                              size: 14, color: T.muted),
+                          label: Text('Écarts',
+                              style: T.small.copyWith(color: T.muted)),
+                        ),
+                        const SizedBox(width: 6),
+                      ],
+                      if (d.status == 'posted' &&
+                          !d.docType.startsWith('PAYMENT')) ...[
+                        TextButton(
+                          onPressed: _busy ? null : _void,
+                          child: Text('Contrepasser',
+                              style: T.small.copyWith(color: T.dangerDark)),
                         ),
                         const SizedBox(width: 6),
                       ],

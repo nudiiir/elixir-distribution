@@ -93,10 +93,12 @@ class ApiClient {
     }
   }
 
-  Future<List<Product>> products({String? q, int limit = 100}) async {
+  Future<List<Product>> products(
+      {String? q, int limit = 100, bool includeInactive = false}) async {
     final j = await _get('/api/v1/products', {
       if (q != null && q.isNotEmpty) 'q': q,
       'limit': '$limit',
+      if (includeInactive) 'include_inactive': 'true',
     });
     return [for (final e in j['items'] as List) Product.fromJson(e)];
   }
@@ -115,6 +117,46 @@ class ApiClient {
       if (page.length < 500) return out;
       offset += 500;
     }
+  }
+
+  // ---- Fiche produit + réception pro ----
+
+  Future<FicheData> ficheProduct(String id, {bool full = false}) async =>
+      FicheData.fromJson(
+          await _get('/api/v1/products/$id/fiche', {if (full) 'full': '1'}));
+
+  /// « Séparer en déclinaisons » — items: [{barcode, suffix, qty_milli}].
+  Future<Product> splitProduct(String id, String warehouseId,
+          List<Map<String, dynamic>> items) async =>
+      Product.fromJson(await _post('/api/v1/products/$id/split',
+          {'warehouse_id': warehouseId, 'items': items}));
+
+  /// Dernier prix payé à ce fournisseur, par produit (centimes/unité de base).
+  Future<Map<String, int>> lastSupplierPrices(String partnerId) async {
+    final j = await _get('/api/v1/purchases/last-prices', {'partner_id': partnerId});
+    return {
+      for (final e in (j['prices'] as Map<String, dynamic>? ?? {}).entries)
+        e.key: (e.value as num).toInt()
+    };
+  }
+
+  /// Contrepassation d'un document validé (le numéro reste, l'erreur se voit).
+  Future<DocDetail> voidDocument(String id, {String reason = ''}) async =>
+      DocDetail.fromJson(
+          await _post('/api/v1/documents/$id/void', {'reason': reason}));
+
+  /// Clôture du reliquat d'un bon de commande.
+  Future<DocDetail> closeOrder(String id, {String reason = ''}) async =>
+      DocDetail.fromJson(
+          await _post('/api/v1/documents/$id/close', {'reason': reason}));
+
+  /// Écarts de rapprochement contre le document lié.
+  Future<List<MatchExceptionRow>> matchDocument(String id) async {
+    final j = await _get('/api/v1/documents/$id/match');
+    return [
+      for (final e in (j['items'] as List? ?? const []))
+        MatchExceptionRow.fromJson(e as Map<String, dynamic>)
+    ];
   }
 
   Future<List<Warehouse>> warehouses() async {

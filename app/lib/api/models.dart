@@ -55,7 +55,13 @@ class Product {
   final String? variantLabel;
   final int warrantyMonths; // 0 = sold without warranty
   final String description; // fiche produit (lignes « Clé: Valeur » = specs web)
+  final String brand;
+  final bool trackLots; // n° de lot obligatoire à la réception
+  final bool trackExpiry; // DLC obligatoire à la réception
+  final String? defaultSupplierId; // fournisseur habituel
   final List<String> barcodes; // additional barcodes
+  final List<BarcodeEntry> barcodesEx; // barcodes avec libellé
+  final List<Packaging> packagings; // conditionnements (carton = 24)
 
   Product.fromJson(Map<String, dynamic> j)
       : id = j['id'] as String,
@@ -79,8 +85,20 @@ class Product {
         variantLabel = j['variant_label'] as String?,
         warrantyMonths = (j['warranty_months'] as num?)?.toInt() ?? 0,
         description = (j['description'] as String?) ?? '',
+        brand = (j['brand'] as String?) ?? '',
+        trackLots = j['track_lots'] == true,
+        trackExpiry = j['track_expiry'] == true,
+        defaultSupplierId = j['default_supplier_id'] as String?,
         barcodes = [
           for (final b in (j['barcodes'] as List? ?? const [])) b.toString()
+        ],
+        barcodesEx = [
+          for (final e in (j['barcodes_ex'] as List? ?? const []))
+            BarcodeEntry.fromJson(e as Map<String, dynamic>)
+        ],
+        packagings = [
+          for (final e in (j['packagings'] as List? ?? const []))
+            Packaging.fromJson(e as Map<String, dynamic>)
         ];
 
   /// Is the promotion running today?
@@ -164,6 +182,8 @@ class Partner {
   final int? creditLimit;
   final String? notes;
   final String priceLevel; // retail | wholesale
+  final int minShelfDays; // durée de vie restante minimale exigée
+  final int overReceiptPct; // tolérance de sur-réception, pct x100
   final int balance; // positive = the partner owes us
   final bool active;
 
@@ -181,6 +201,8 @@ class Partner {
         creditLimit = (j['credit_limit'] as num?)?.toInt(),
         notes = j['notes'] as String?,
         priceLevel = (j['price_level'] as String?) ?? 'retail',
+        minShelfDays = (j['min_shelf_days'] as num?)?.toInt() ?? 0,
+        overReceiptPct = (j['over_receipt_pct'] as num?)?.toInt() ?? 500,
         balance = (j['balance'] as num?)?.toInt() ?? 0,
         active = j['active'] == true;
 }
@@ -196,6 +218,14 @@ class DocLine {
   final int lineHT;
   final int lineVAT;
   final int lineTTC;
+  final int? unitCost;
+  final int qtyFreeMilli;
+  final String? lotNumber;
+  final String? expiryDate;
+  final int packFactorMilli;
+  final int? newSalePrice;
+  final int qtyReceivedMilli;
+  final int qtyCancelledMilli;
 
   DocLine.fromJson(Map<String, dynamic> j)
       : id = j['id'] as String?,
@@ -207,7 +237,15 @@ class DocLine {
         vatRate = (j['vat_rate'] as num?)?.toInt() ?? 0,
         lineHT = (j['line_ht'] as num?)?.toInt() ?? 0,
         lineVAT = (j['line_vat'] as num?)?.toInt() ?? 0,
-        lineTTC = (j['line_ttc'] as num?)?.toInt() ?? 0;
+        lineTTC = (j['line_ttc'] as num?)?.toInt() ?? 0,
+        unitCost = (j['unit_cost'] as num?)?.toInt(),
+        qtyFreeMilli = (j['qty_free_milli'] as num?)?.toInt() ?? 0,
+        lotNumber = j['lot_number'] as String?,
+        expiryDate = j['expiry_date'] as String?,
+        packFactorMilli = (j['pack_factor_milli'] as num?)?.toInt() ?? 1000,
+        newSalePrice = (j['new_sale_price'] as num?)?.toInt(),
+        qtyReceivedMilli = (j['qty_received_milli'] as num?)?.toInt() ?? 0,
+        qtyCancelledMilli = (j['qty_cancelled_milli'] as num?)?.toInt() ?? 0;
 }
 
 class DocDetail {
@@ -226,6 +264,12 @@ class DocDetail {
   final int amount;
   final String? paymentMethod;
   final String? notes;
+  final String? refDocumentId;
+  final String? supplierRef;
+  final String? dueDate;
+  final int freightCost;
+  final String? reason;
+  final String? orderStatus;
   final List<DocLine> lines;
 
   DocDetail.fromJson(Map<String, dynamic> j)
@@ -244,6 +288,12 @@ class DocDetail {
         amount = (j['amount'] as num?)?.toInt() ?? 0,
         paymentMethod = j['payment_method'] as String?,
         notes = j['notes'] as String?,
+        refDocumentId = j['ref_document_id'] as String?,
+        supplierRef = j['supplier_ref'] as String?,
+        dueDate = j['due_date'] as String?,
+        freightCost = (j['freight_cost'] as num?)?.toInt() ?? 0,
+        reason = j['reason'] as String?,
+        orderStatus = j['order_status'] as String?,
         lines = [
           for (final e in (j['lines'] as List? ?? const []))
             DocLine.fromJson(e)
@@ -261,6 +311,9 @@ class DocSummary {
   final int amount;
   final String? paymentMethod;
   final String createdAt;
+  final String? orderStatus;
+  final String? dueDate;
+  final String? supplierRef;
 
   DocSummary.fromJson(Map<String, dynamic> j)
       : id = j['id'] as String,
@@ -272,7 +325,10 @@ class DocSummary {
         totalTTC = (j['total_ttc'] as num?)?.toInt() ?? 0,
         amount = (j['amount'] as num?)?.toInt() ?? 0,
         paymentMethod = j['payment_method'] as String?,
-        createdAt = (j['created_at'] as String?) ?? '';
+        createdAt = (j['created_at'] as String?) ?? '',
+        orderStatus = j['order_status'] as String?,
+        dueDate = j['due_date'] as String?,
+        supplierRef = j['supplier_ref'] as String?;
 }
 
 class CaisseSession {
@@ -591,4 +647,156 @@ class PostedDoc {
         totalVAT = (j['total_vat'] as num?)?.toInt() ?? 0,
         timbre = (j['timbre'] as num?)?.toInt() ?? 0,
         totalTTC = (j['total_ttc'] as num?)?.toInt() ?? 0;
+}
+
+/// Un code-barres supplémentaire avec son libellé descriptif optionnel.
+class BarcodeEntry {
+  BarcodeEntry({required this.code, this.label = ''});
+  final String code;
+  final String label;
+
+  BarcodeEntry.fromJson(Map<String, dynamic> j)
+      : code = (j['code'] as String?) ?? '',
+        label = (j['label'] as String?) ?? '';
+
+  Map<String, dynamic> toJson() => {'code': code, 'label': label};
+}
+
+/// Un conditionnement d'achat : carton = 24 pièces.
+class Packaging {
+  Packaging({this.id, required this.name, required this.factorMilli, this.barcode});
+  final String? id;
+  final String name;
+  final int factorMilli; // unités de base par pack (milli)
+  final String? barcode;
+
+  Packaging.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as String?,
+        name = (j['name'] as String?) ?? '',
+        factorMilli = (j['factor_milli'] as num?)?.toInt() ?? 1000,
+        barcode = j['barcode'] as String?;
+
+  Map<String, dynamic> toJson() =>
+      {'name': name, 'factor_milli': factorMilli, 'barcode': barcode};
+}
+
+// ---------------- Fiche produit ----------------
+
+class FicheLevel {
+  FicheLevel.fromJson(Map<String, dynamic> j)
+      : warehouseId = (j['warehouse_id'] as String?) ?? '',
+        warehouse = (j['warehouse'] as String?) ?? '',
+        qtyMilli = (j['qty_milli'] as num?)?.toInt() ?? 0,
+        avgCost = (j['avg_cost'] as num?)?.toInt() ?? 0;
+  final String warehouseId;
+  final String warehouse;
+  final int qtyMilli;
+  final int avgCost;
+}
+
+class FicheLot {
+  FicheLot.fromJson(Map<String, dynamic> j)
+      : id = (j['id'] as String?) ?? '',
+        lotNumber = (j['lot_number'] as String?) ?? '',
+        expiryDate = j['expiry_date'] as String?,
+        qtyMilli = (j['qty_milli'] as num?)?.toInt() ?? 0;
+  final String id;
+  final String lotNumber;
+  final String? expiryDate;
+  final int qtyMilli;
+}
+
+class FicheMove {
+  FicheMove.fromJson(Map<String, dynamic> j)
+      : date = (j['date'] as String?) ?? '',
+        docType = (j['doc_type'] as String?) ?? '',
+        docNumber = j['doc_number'] as String?,
+        docId = (j['doc_id'] as String?) ?? '',
+        warehouse = (j['warehouse'] as String?) ?? '',
+        qtyMilli = (j['qty_milli'] as num?)?.toInt() ?? 0,
+        unitCost = (j['unit_cost'] as num?)?.toInt() ?? 0;
+  final String date;
+  final String docType;
+  final String? docNumber;
+  final String docId;
+  final String warehouse;
+  final int qtyMilli;
+  final int unitCost;
+}
+
+class FicheSupplier {
+  FicheSupplier.fromJson(Map<String, dynamic> j)
+      : partnerId = (j['partner_id'] as String?) ?? '',
+        partner = (j['partner'] as String?) ?? '',
+        unitCost = (j['unit_cost'] as num?)?.toInt() ?? 0,
+        date = (j['date'] as String?) ?? '';
+  final String partnerId;
+  final String partner;
+  final int unitCost;
+  final String date;
+}
+
+class FicheVariant {
+  FicheVariant.fromJson(Map<String, dynamic> j)
+      : product = Product.fromJson(j),
+        stockMilli = (j['stock_milli'] as num?)?.toInt() ?? 0;
+  final Product product;
+  final int stockMilli;
+}
+
+/// La fiche produit complète : rien ici n'est stocké, tout est recalculé.
+class FicheData {
+  FicheData.fromJson(Map<String, dynamic> j)
+      : product = Product.fromJson(j['product'] as Map<String, dynamic>),
+        levels = [
+          for (final e in (j['levels'] as List? ?? const []))
+            FicheLevel.fromJson(e as Map<String, dynamic>)
+        ],
+        lots = [
+          for (final e in (j['lots'] as List? ?? const []))
+            FicheLot.fromJson(e as Map<String, dynamic>)
+        ],
+        moves = [
+          for (final e in (j['moves'] as List? ?? const []))
+            FicheMove.fromJson(e as Map<String, dynamic>)
+        ],
+        suppliers = [
+          for (final e in (j['suppliers'] as List? ?? const []))
+            FicheSupplier.fromJson(e as Map<String, dynamic>)
+        ],
+        variants = [
+          for (final e in (j['variants'] as List? ?? const []))
+            FicheVariant.fromJson(e as Map<String, dynamic>)
+        ];
+
+  final Product product;
+  final List<FicheLevel> levels;
+  final List<FicheLot> lots;
+  final List<FicheMove> moves;
+  final List<FicheSupplier> suppliers;
+  final List<FicheVariant> variants;
+
+  int get stockTotal => levels.fold(0, (s, l) => s + l.qtyMilli);
+  int get valeurStock =>
+      levels.fold(0, (s, l) => s + (l.qtyMilli * l.avgCost) ~/ 1000);
+
+  /// Achat pondéré — null quand le stock est nul (jamais zéro : une moyenne
+  /// de rien n'est pas zéro dinar).
+  int? get achatPondere =>
+      stockTotal <= 0 ? null : (valeurStock * 1000) ~/ stockTotal;
+}
+
+/// Une exception de rapprochement (facture vs réception, réception vs BC).
+class MatchExceptionRow {
+  MatchExceptionRow.fromJson(Map<String, dynamic> j)
+      : kind = (j['kind'] as String?) ?? '',
+        product = (j['product'] as String?) ?? '',
+        thisValue = (j['this_value'] as num?)?.toInt() ?? 0,
+        refValue = (j['ref_value'] as num?)?.toInt() ?? 0,
+        detail = (j['detail'] as String?) ?? '';
+  final String kind;
+  final String product;
+  final int thisValue;
+  final int refValue;
+  final String detail;
 }
