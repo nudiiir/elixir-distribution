@@ -8,21 +8,24 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+
+	"elixir/server/internal/analytics"
 )
 
 type Server struct {
-	db       *sql.DB
-	secret   []byte
-	dbPath   string
-	presence *presenceRegistry
+	db        *sql.DB
+	secret    []byte
+	dbPath    string
+	presence  *presenceRegistry
+	analytics *analytics.Engine
 }
 
-func New(db *sql.DB, dbPath string) http.Handler {
+func New(db *sql.DB, dbPath string, eng *analytics.Engine) http.Handler {
 	secret, err := ensureAuthSecret(db)
 	if err != nil {
 		log.Fatalf("auth secret: %v", err)
 	}
-	s := &Server{db: db, secret: secret, dbPath: dbPath, presence: newPresenceRegistry()}
+	s := &Server{db: db, secret: secret, dbPath: dbPath, presence: newPresenceRegistry(), analytics: eng}
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
@@ -137,6 +140,20 @@ func New(db *sql.DB, dbPath string) http.Handler {
 
 		r.Post("/presence", s.presenceBeat)
 		r.Get("/presence", s.presenceList)
+
+		r.Get("/analytics/schema", s.analyticsSchema)
+		r.Get("/analytics/gallery", s.analyticsGallery)
+		r.Post("/analytics/ask", s.analyticsAsk)
+		r.Post("/analytics/query", s.analyticsQuery)
+		r.Post("/analytics/query/batch", s.analyticsBatch)
+		r.Get("/analytics/reports", s.listReports)
+		r.Post("/analytics/reports", s.createReport)
+		r.Put("/analytics/reports/{id}", s.updateReport)
+		r.Delete("/analytics/reports/{id}", s.deleteReport)
+		r.Get("/analytics/dashboards", s.listDashboards)
+		r.Post("/analytics/dashboards", s.createDashboard)
+		r.Put("/analytics/dashboards/{id}", s.updateDashboard)
+		r.Delete("/analytics/dashboards/{id}", s.deleteDashboard)
 
 		r.Get("/cloud/status", s.cloudStatus)
 		r.Post("/cloud/connect", s.cloudConnect)

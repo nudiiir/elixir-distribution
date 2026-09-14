@@ -12,6 +12,7 @@ import (
 
 	"github.com/kardianos/service"
 
+	"elixir/server/internal/analytics"
 	"elixir/server/internal/api"
 	"elixir/server/internal/relay"
 	"elixir/server/internal/store"
@@ -47,6 +48,17 @@ func (p *program) run() {
 	}
 	api.StartBackupScheduler(db, p.dbPath)
 	api.StartStockVerifier(db)
+
+	// Analyses : pool de lecture dédié (jamais devant la connexion d'écriture)
+	// + vues et tableau de bord par défaut.
+	ro, err := store.OpenReadOnly(p.dbPath, 2)
+	if err != nil {
+		log.Fatalf("open read-only pool: %v", err)
+	}
+	if err := analytics.EnsureDefaults(db); err != nil {
+		log.Printf("analytics defaults: %v", err)
+	}
+	eng := analytics.New(ro)
 
 	// Optional outbound relay: lets off-LAN clients (mobile app, stock-llm)
 	// reach this server's API through relay.example.com/t/<sub>/*.
@@ -85,7 +97,7 @@ func (p *program) run() {
 	go relay.Run(context.Background(), loadRelay)
 
 	log.Printf("elixir server listening on %s (db=%s)", p.addr, p.dbPath)
-	if err := http.ListenAndServe(p.addr, api.New(db, p.dbPath)); err != nil {
+	if err := http.ListenAndServe(p.addr, api.New(db, p.dbPath, eng)); err != nil {
 		log.Fatal(err)
 	}
 }

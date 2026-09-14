@@ -17,6 +17,29 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
+// OpenReadOnly ouvre un second pool, en lecture seule, sur le même fichier :
+// les analyses lisent en parallèle du writer (WAL) sans jamais se placer
+// devant une validation de vente. query_only interdit toute écriture même par
+// erreur de programmation.
+func OpenReadOnly(path string, conns int) (*sql.DB, error) {
+	dsn := fmt.Sprintf(
+		"file:%s?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(5000)",
+		filepath.ToSlash(path),
+	)
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	if conns <= 0 {
+		conns = 2
+	}
+	db.SetMaxOpenConns(conns)
+	if err := db.Ping(); err != nil {
+		return nil, err
+	}
+	return db, nil
+}
+
 // Open opens the SQLite database. One server process owns the file; a single
 // connection serializes all access, which is ample at shop scale and removes
 // every locking concern.

@@ -8,7 +8,7 @@ import '../api/client.dart';
 import '../api/cloud.dart';
 import '../api/models.dart';
 import '../screens/assistant_screen.dart';
-import '../screens/dashboard_screen.dart';
+import '../screens/analytics_screen.dart';
 import '../screens/designer_screen.dart';
 import '../screens/inbox_screen.dart';
 import '../screens/partners_screen.dart';
@@ -38,6 +38,7 @@ class _Module {
 
 const _allModules = [
   _Module('dashboard', Icons.grid_view_rounded, 'Tableau de bord'),
+  _Module('explorer', Icons.insights_rounded, 'Explorateur', perm: 'reports'),
   _Module('pos', Icons.point_of_sale_rounded, 'Caisse'),
   _Module('sales', Icons.receipt_long_outlined, 'Ventes'),
   _Module('purchases', Icons.local_shipping_outlined, 'Achats'),
@@ -90,6 +91,9 @@ class _AppShellState extends State<AppShell> {
   ];
 
   Timer? _presenceTimer;
+
+  /// Passage tableau de bord -> explorateur : la tuile en cours d'édition.
+  final _explorerRequest = ValueNotifier<ExplorerRequest?>(null);
 
   @override
   void initState() {
@@ -214,6 +218,7 @@ class _AppShellState extends State<AppShell> {
     _webstoreTimer?.cancel();
     _globalSearch.dispose();
     _productsQuery.dispose();
+    _explorerRequest.dispose();
     super.dispose();
   }
 
@@ -259,8 +264,22 @@ class _AppShellState extends State<AppShell> {
   }
 
   Widget _screenFor(_Module m) => switch (m.key) {
-        'dashboard' => DashboardScreen(
-            api: widget.api, session: widget.session, onNavigate: goTo),
+        'dashboard' => AnalyticsDashboardScreen(
+            api: widget.api,
+            session: widget.session,
+            onEdit: (r) {
+              _explorerRequest.value = ExplorerRequest(report: r);
+              goTo('explorer');
+            },
+            onNew: () {
+              _explorerRequest.value = null;
+              goTo('explorer');
+            }),
+        'explorer' => AnalyticsExplorerScreen(
+            api: widget.api,
+            session: widget.session,
+            request: _explorerRequest,
+            onDone: () => goTo('dashboard')),
         'pos' => PosScreen(
             api: widget.api,
             config: widget.config,

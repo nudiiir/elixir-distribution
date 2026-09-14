@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'analytics_models.dart';
 import 'cloud.dart';
 import 'models.dart';
 
@@ -296,6 +297,85 @@ class ApiClient {
   Future<void> saveSettings(Map<String, String> values) async {
     await _put('/api/v1/settings', values);
   }
+
+  // ---- Analyses -----------------------------------------------------------------
+  Future<ASchema> analyticsSchema() async =>
+      ASchema.fromJson((await _get('/api/v1/analytics/schema')) as Map<String, dynamic>);
+
+  Future<AResult> analyticsQuery(Map<String, dynamic> spec) async =>
+      AResult.fromJson((await _post('/api/v1/analytics/query', spec)) as Map<String, dynamic>);
+
+  /// Retourne, par identifiant de tuile, soit un AResult soit un message d'erreur.
+  Future<Map<String, Object>> analyticsBatch(List<MapEntry<String, Map<String, dynamic>>> queries,
+      {Map<String, dynamic>? globalRange, String? globalWarehouseId}) async {
+    final j = await _post('/api/v1/analytics/query/batch', {
+      'queries': [for (final q in queries) {'id': q.key, 'request': q.value}],
+      if (globalRange != null) 'global_range': globalRange,
+      if (globalWarehouseId != null) 'global_warehouse_id': globalWarehouseId,
+    }) as Map<String, dynamic>;
+    final out = <String, Object>{};
+    for (final r in (j['results'] as List)) {
+      final m = r as Map<String, dynamic>;
+      if (m['ok'] == true) {
+        out[m['id'] as String] = AResult.fromJson(m['result'] as Map<String, dynamic>);
+      } else {
+        final e = (m['error'] as Map?) ?? const {};
+        out[m['id'] as String] = ApiException(
+            e['code'] == 'forbidden' ? 403 : e['code'] == 'timeout' || e['code'] == 'budget_exceeded' ? 504 : 400,
+            (e['message'] as String?) ?? 'erreur');
+      }
+    }
+    return out;
+  }
+
+  Future<List<GalleryItem>> analyticsGallery() async {
+    final j = await _get('/api/v1/analytics/gallery') as Map<String, dynamic>;
+    return [for (final e in j['items'] as List) GalleryItem.fromJson(e as Map<String, dynamic>)];
+  }
+
+  /// Question en langage naturel → spec + résultat. Un 422 porte quand même
+  /// la réponse (spec proposée, clarification ou erreur) : on la rend telle
+  /// quelle plutôt que de lever.
+  Future<AskAnswer> analyticsAsk(String question) async {
+    final res = await _client.post(_u('/api/v1/analytics/ask'),
+        headers: _headers, body: jsonEncode({'question': question}));
+    final body = res.body.isEmpty ? null : jsonDecode(utf8.decode(res.bodyBytes));
+    if (res.statusCode == 401 && token != null) onUnauthorized?.call();
+    if (res.statusCode == 200 || res.statusCode == 422) {
+      return AskAnswer.fromJson(body as Map<String, dynamic>);
+    }
+    final msg = body is Map && body['error'] != null ? body['error'] as String : 'HTTP ${res.statusCode}';
+    throw ApiException(res.statusCode, msg);
+  }
+
+  Future<List<SavedReport>> savedReports() async {
+    final j = await _get('/api/v1/analytics/reports') as Map<String, dynamic>;
+    return [for (final e in j['items'] as List) SavedReport.fromJson(e as Map<String, dynamic>)];
+  }
+
+  Future<SavedReport> saveReport(Map<String, dynamic> data, {String? id}) async {
+    final j = id == null
+        ? await _post('/api/v1/analytics/reports', data)
+        : await _put('/api/v1/analytics/reports/$id', data);
+    return SavedReport.fromJson(j as Map<String, dynamic>);
+  }
+
+  Future<void> deleteReport(String id) => _delete('/api/v1/analytics/reports/$id');
+
+  Future<List<Dashboard>> dashboards() async {
+    final j = await _get('/api/v1/analytics/dashboards') as Map<String, dynamic>;
+    return [for (final e in j['items'] as List) Dashboard.fromJson(e as Map<String, dynamic>)];
+  }
+
+  Future<Dashboard> saveDashboard(Map<String, dynamic> data, {String? id}) async {
+    final j = id == null
+        ? await _post('/api/v1/analytics/dashboards', data)
+        : await _put('/api/v1/analytics/dashboards/$id', data);
+    return Dashboard.fromJson(j as Map<String, dynamic>);
+  }
+
+  Future<void> deleteDashboard(String id) => _delete('/api/v1/analytics/dashboards/$id');
+
 
   /// Creates a draft sale ticket and posts it. Returns the full posted document.
   /// [paymentMethod] null = paid by gift card (not cash in the drawer).
