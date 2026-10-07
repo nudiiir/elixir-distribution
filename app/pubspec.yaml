@@ -1,7 +1,7 @@
 name: elixir_app
 description: "Elixir - gestion commerciale pour le commerce algerien."
 publish_to: 'none'
-version: 0.2.1+7
+version: 0.2.2+8
 
 environment:
   sdk: ^3.12.2

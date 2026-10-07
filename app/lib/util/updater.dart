@@ -5,7 +5,7 @@ import 'package:http/http.dart' as http;
 
 /// Version embarquée dans le binaire — à bumper à chaque release, en même
 /// temps que pubspec.yaml et installer/*.iss.
-const kAppVersion = '0.2.1';
+const kAppVersion = '0.2.2';
 
 /// Dépôt public qui porte les installateurs (GitHub Releases).
 const kReleaseRepo = 'OWNER/elixir-gestion-releases';
