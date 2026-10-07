@@ -47,9 +47,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _backupDir = '';
   bool _busy = false;
   bool _backingUp = false;
+  bool _allowNegative = false;
   String? _msg;
 
   bool get _isAdmin => widget.session.user.isAdmin;
+
+  Future<void> _setAllowNegative(bool v) async {
+    setState(() => _allowNegative = v);
+    try {
+      await widget.api.saveSettings({'allow_negative_stock': v ? '1' : '0'});
+    } on ApiException catch (e) {
+      if (mounted) {
+        setState(() {
+          _allowNegative = !v;
+          _msg = e.message;
+        });
+      }
+    }
+  }
 
   @override
   void initState() {
@@ -138,6 +153,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _ctrls[key]!.text = settings[key] ?? '';
           }
           _warehouses = results[1] as List<Warehouse>;
+          _allowNegative = settings['allow_negative_stock'] == '1';
         });
       }
     } catch (_) {}
@@ -331,6 +347,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ],
               if (_isAdmin) ...[
+                const SizedBox(height: 14),
+                Card14(
+                  child: SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Autoriser la vente en stock négatif'),
+                    subtitle: const Text(
+                        'Désactivé (recommandé) : une vente ou un transfert '
+                        'supérieur au stock disponible est refusé, ce qui '
+                        'garde le coût moyen et les marges exacts.'),
+                    value: _allowNegative,
+                    onChanged: _setAllowNegative,
+                  ),
+                ),
                 const SizedBox(height: 14),
                 Card14(
                   child: Column(

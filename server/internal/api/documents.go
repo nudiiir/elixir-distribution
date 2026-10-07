@@ -34,6 +34,8 @@ type DocumentLine struct {
 	NewSalePrice      *int64  `json:"new_sale_price"`
 	QtyReceivedMilli  int64   `json:"qty_received_milli"`
 	QtyCancelledMilli int64   `json:"qty_cancelled_milli"`
+	// Inventaire : quantité théorique affichée au moment du comptage
+	ExpectedMilli *int64 `json:"expected_milli,omitempty"`
 }
 
 type Document struct {
@@ -254,11 +256,11 @@ func insertLines(tx *sql.Tx, docID string, lines []DocumentLine, now string) err
 		if _, err := tx.Exec(`INSERT INTO document_lines (id, document_id, position, product_id,
 				lot_id, description, qty_milli, unit_price, discount_pct, vat_rate,
 				line_ht, line_vat, line_ttc, qty_free_milli, lot_number, expiry_date,
-				pack_factor_milli, new_sale_price, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				pack_factor_milli, new_sale_price, expected_milli, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			domain.NewID(), docID, i, l.ProductID, l.LotID, l.Description,
 			l.QtyMilli, l.UnitPrice, l.DiscountPct, l.VatRate, ht, vat, ttc,
-			l.QtyFreeMilli, l.LotNumber, l.ExpiryDate, pack, l.NewSalePrice, now); err != nil {
+			l.QtyFreeMilli, l.LotNumber, l.ExpiryDate, pack, l.NewSalePrice, l.ExpectedMilli, now); err != nil {
 			return err
 		}
 	}
@@ -421,9 +423,12 @@ func (s *Server) voidDocument(w http.ResponseWriter, r *http.Request) {
 		userID = user.ID
 	}
 	if err := domain.Void(s.db, id, userID, in.Reason); err != nil {
+		var pe *domain.PostError
 		switch {
 		case errors.Is(err, domain.ErrNotFound):
 			writeErr(w, http.StatusNotFound, err.Error())
+		case errors.As(err, &pe):
+			writeErr(w, http.StatusConflict, pe.Msg)
 		case errors.Is(err, domain.ErrNotPosted):
 			writeErr(w, http.StatusConflict, err.Error())
 		default:

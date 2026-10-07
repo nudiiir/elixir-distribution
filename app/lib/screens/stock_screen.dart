@@ -837,6 +837,9 @@ class _InventoryDialogState extends State<_InventoryDialog> {
         'product_id': e.key,
         'description': p.isEmpty ? '' : p.first.name,
         'qty_milli': counted,
+        // stock théorique affiché au moment du comptage : le serveur applique
+        // l'écart (compté − théorique), pas la quantité brute.
+        'expected_milli': _current[e.key] ?? 0,
         'unit_price': 0,
         'vat_rate': 0,
         'discount_pct': 0,

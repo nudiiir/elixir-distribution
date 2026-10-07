@@ -48,6 +48,10 @@ type lineRow struct {
 	lineHT   int64
 	baseQty  int64 // billed quantity in base units (milli)
 	baseFree int64 // free quantity in base units (milli)
+	// invoice-on-delivery: part of baseQty already moved by the referenced
+	// BL/receipt (no second stock move) and the cost it moved at (per base unit)
+	skipBase, refCost int64
+	expected          sql.NullInt64 // inventory count: theoretical qty at count time
 }
 
 // baseUnits converts a pack quantity (milli) through the pack factor (milli).
@@ -125,6 +129,24 @@ func Post(db *sql.DB, docID, userID string) (string, error) {
 		}
 	}
 
+	// Facture saisie à la main alors que la réception correspondante existe
+	// déjà (même fournisseur, même n° fournisseur, pas encore facturée) : le
+	// stock entrerait deux fois. On exige le rattachement à la réception.
+	if d.docType == PurchaseInvoice && !d.refDocID.Valid && d.partnerID.Valid &&
+		strings.TrimSpace(d.supplierRef.String) != "" {
+		var rcpt string
+		tx.QueryRow(`SELECT r.number FROM documents r
+			WHERE r.doc_type='PURCHASE_RECEIPT' AND r.status='posted' AND r.partner_id = ?
+			  AND TRIM(LOWER(r.supplier_ref)) = TRIM(LOWER(?))
+			  AND NOT EXISTS (SELECT 1 FROM documents i WHERE i.ref_document_id = r.id
+			                  AND i.doc_type='PURCHASE_INVOICE' AND i.status='posted')
+			LIMIT 1`, d.partnerID.String, d.supplierRef.String).Scan(&rcpt)
+		if rcpt != "" {
+			return "", &PostError{fmt.Sprintf(
+				"la réception %s porte déjà ce n° fournisseur : rattachez la facture à cette réception (sinon le stock entrerait deux fois)", rcpt)}
+		}
+	}
+
 	// ---- Lines and totals -------------------------------------------------
 	var lines []lineRow
 	var totalHT, totalVAT, totalTTC, totalDiscount int64
@@ -139,7 +161,8 @@ func Post(db *sql.DB, docID, userID string) (string, error) {
 		totalTTC = d.amount
 	} else {
 		rows, err := tx.Query(`SELECT id, product_id, lot_id, qty_milli, unit_price, discount_pct,
-				vat_rate, qty_free_milli, pack_factor_milli, lot_number, expiry_date, new_sale_price
+				vat_rate, qty_free_milli, pack_factor_milli, lot_number, expiry_date, new_sale_price,
+				expected_milli
 			FROM document_lines WHERE document_id = ? ORDER BY position, created_at`, docID)
 		if err != nil {
 			return "", err
@@ -148,7 +171,7 @@ func Post(db *sql.DB, docID, userID string) (string, error) {
 			var l lineRow
 			if err := rows.Scan(&l.id, &l.productID, &l.lotID, &l.qtyMilli, &l.unitPrice,
 				&l.discount, &l.vat, &l.qtyFree, &l.packFactor, &l.lotNumber, &l.expiryDate,
-				&l.newSalePrice); err != nil {
+				&l.newSalePrice, &l.expected); err != nil {
 				rows.Close()
 				return "", err
 			}
@@ -202,25 +225,60 @@ func Post(db *sql.DB, docID, userID string) (string, error) {
 
 	// ---- Stock ledger -----------------------------------------------------
 	sign := stockSign[d.docType]
-	skipStock := false
+
+	// Invoice on a posted delivery note / receipt: only the quantity the
+	// referenced document has not already moved is moved now. What the BL
+	// already took out is not taken twice, but lines (or excess quantities) the
+	// BL did not carry still move stock, and the cost the BL moved at is
+	// inherited so margin and price-variance stay exact.
+	onRef := false
 	if sign != 0 && d.refDocID.Valid {
-		// An invoice referencing a posted delivery/receipt must not move stock twice.
 		var refType, refStatus string
 		err := tx.QueryRow(`SELECT doc_type, status FROM documents WHERE id = ?`, d.refDocID.String).
 			Scan(&refType, &refStatus)
-		if err == nil && refStatus == "posted" &&
+		onRef = err == nil && refStatus == "posted" &&
 			((d.docType == SaleInvoice && refType == DeliveryNote) ||
-				(d.docType == PurchaseInvoice && refType == PurchaseReceipt)) {
-			skipStock = true
+				(d.docType == PurchaseInvoice && refType == PurchaseReceipt))
+	}
+	if onRef {
+		remaining := map[string]int64{}
+		costs := map[string]int64{}
+		for i := range lines {
+			l := &lines[i]
+			if !l.productID.Valid {
+				continue
+			}
+			pid := l.productID.String
+			rem, seen := remaining[pid]
+			if !seen {
+				q, c := refMovement(tx, d.refDocID.String, pid)
+				rem = q - refConsumed(tx, d.refDocID.String, pid, docID)
+				costs[pid] = c
+			}
+			if rem < 0 {
+				rem = 0
+			}
+			s := l.baseQty
+			if s > rem {
+				s = rem
+			}
+			if s < 0 {
+				s = 0
+			}
+			remaining[pid] = rem - s
+			l.skipBase, l.refCost = s, costs[pid]
 		}
 	}
 
-	if sign != 0 && !skipStock {
-		if !d.warehouseID.Valid {
-			return "", ErrNoWarehouse
-		}
+	if sign != 0 {
 		if d.docType == StockTransfer && !d.destWarehouseID.Valid {
 			return "", ErrNoDestWare
+		}
+		needWarehouse := func() error {
+			if !d.warehouseID.Valid {
+				return ErrNoWarehouse
+			}
+			return nil
 		}
 
 		// Frais d'approche : alloués aux lignes au prorata de la valeur HT.
@@ -251,12 +309,17 @@ func Post(db *sql.DB, docID, userID string) (string, error) {
 			}
 		}
 
+		allowNeg := allowNegativeStock(tx)
+		salesFamily := d.docType == SaleTicket || d.docType == SaleInvoice ||
+			d.docType == DeliveryNote || d.docType == SaleCreditNote
+
 		for _, l := range lines {
 			if !l.productID.Valid {
 				continue
 			}
+			pid := l.productID.String
 
-			var delta, unitCost int64
+			var delta, unitCost, lineCostBase int64
 			updateAvg := isCostBearing(d.docType)
 			if isCostBearing(d.docType) {
 				// Coût effectif : (net HT + frais alloués) / (qté + gratuit),
@@ -267,13 +330,25 @@ func Post(db *sql.DB, docID, userID string) (string, error) {
 					continue
 				}
 				unitCost = roundDiv((l.lineHT+freightAlloc[l.id])*1000, units)
-				delta = sign * units
+				lineCostBase = unitCost
+				delta = sign * (l.baseQty - l.skipBase + l.baseFree)
 			} else {
 				if l.baseQty == 0 {
 					continue
 				}
-				unitCost = currentAvgCost(tx, l.productID.String, d.warehouseID.String)
-				delta = sign * l.baseQty
+				unitCost = currentAvgCost(tx, pid, d.warehouseID.String)
+				// Un retour client rentre au coût auquel la vente l'a sorti,
+				// pas au CMUP du jour : la marge nette reste juste.
+				if d.docType == SaleCreditNote && d.refDocID.Valid {
+					if c, ok := refLineCost(tx, d.refDocID.String, pid); ok {
+						unitCost = c
+					}
+				}
+				delta = sign * (l.baseQty - l.skipBase)
+				lineCostBase = unitCost
+				if l.skipBase > 0 {
+					lineCostBase = roundDiv(l.skipBase*l.refCost+(l.baseQty-l.skipBase)*unitCost, l.baseQty)
+				}
 				// Un ajustement ENTRANT est valorisé : au coût déclaré sur la
 				// ligne (stock initial) ou, à défaut, au CMUP courant — dans
 				// les deux cas l'écriture porte son coût, ce qui rend le
@@ -282,38 +357,77 @@ func Post(db *sql.DB, docID, userID string) (string, error) {
 					if l.unitPrice > 0 {
 						unitCost = l.unitPrice
 					}
+					lineCostBase = unitCost
 					updateAvg = true
 				}
 			}
 
-			if err := applyStockMove(tx, l.productID.String, d.warehouseID.String, l.lotID,
-				delta, unitCost, updateAvg, docID, l.id, now); err != nil {
-				return "", err
+			if delta != 0 {
+				if err := needWarehouse(); err != nil {
+					return "", err
+				}
+				if delta < 0 && !allowNeg {
+					if err := checkOutflow(tx, pid, d.warehouseID.String, -delta); err != nil {
+						return "", err
+					}
+				}
+				chunks := []lotChunk{{l.lotID, delta}}
+				if delta < 0 && !l.lotID.Valid && d.docType != StockTransfer && productIsLotTracked(tx, pid) {
+					chunks = fefoSplit(tx, pid, -delta)
+				}
+				for _, c := range chunks {
+					if err := applyStockMove(tx, pid, d.warehouseID.String, c.lot,
+						c.qty, unitCost, updateAvg, docID, l.id, now); err != nil {
+						return "", err
+					}
+				}
+				if d.docType == StockTransfer {
+					if err := applyStockMove(tx, pid, d.destWarehouseID.String, l.lotID,
+						-delta, unitCost, true, docID, l.id, now); err != nil {
+						return "", err
+					}
+				}
 			}
-			if d.docType == StockTransfer {
-				if err := applyStockMove(tx, l.productID.String, d.destWarehouseID.String, l.lotID,
-					-delta, unitCost, true, docID, l.id, now); err != nil {
+
+			// Facture fournisseur sur réception : la part déjà entrée au prix de
+			// la réception est réévaluée si le prix facturé diffère.
+			if isCostBearing(d.docType) && l.skipBase > 0 && unitCost != l.refCost {
+				if err := needWarehouse(); err != nil {
+					return "", err
+				}
+				if err := revalueAvg(tx, pid, d.warehouseID.String,
+					unitCost-l.refCost, l.skipBase, docID, now); err != nil {
 					return "", err
 				}
 			}
-			if _, err := tx.Exec(`UPDATE document_lines SET unit_cost=? WHERE id=?`, unitCost, l.id); err != nil {
+
+			lineCost := lineCostBase
+			if salesFamily {
+				// Coût porté PAR UNITÉ DE LA LIGNE (carton, pièce…) : les rapports
+				// multiplient qty_milli × unit_cost.
+				lineCost = roundDiv(lineCostBase*l.packFactor, 1000)
+			}
+			if _, err := tx.Exec(`UPDATE document_lines SET unit_cost=? WHERE id=?`, lineCost, l.id); err != nil {
 				return "", err
 			}
 
 			// Historique du dernier prix payé au fournisseur.
-			if isCostBearing(d.docType) && d.partnerID.Valid {
+			if isCostBearing(d.docType) && d.partnerID.Valid &&
+				(l.skipBase == 0 || unitCost != l.refCost) {
 				if _, err := tx.Exec(`INSERT INTO supplier_prices
 					(id, partner_id, product_id, unit_cost, document_id, created_at)
 					VALUES (?, ?, ?, ?, ?, ?)`,
-					NewID(), d.partnerID.String, l.productID.String, unitCost, docID, now); err != nil {
+					NewID(), d.partnerID.String, pid, unitCost, docID, now); err != nil {
 					return "", err
 				}
 			}
 		}
 	}
 
-	// ---- Inventory count: lines carry the COUNTED absolute quantity; the
-	// posting writes the delta against the current level, at current CUMP.
+	// ---- Inventory count: lines carry the COUNTED absolute quantity. The
+	// variance is counted − theoretical-at-count-time (expected_milli, stamped
+	// by the client); applied on top of the CURRENT level so sales/receipts
+	// recorded between the count and its validation are not wiped out.
 	if d.docType == InventoryCount {
 		if !d.warehouseID.Valid {
 			return "", ErrNoWarehouse
@@ -322,10 +436,21 @@ func Post(db *sql.DB, docID, userID string) (string, error) {
 			if !l.productID.Valid {
 				continue
 			}
+			if l.qtyMilli < 0 {
+				return "", &PostError{"une quantité comptée ne peut pas être négative"}
+			}
 			var current int64
 			tx.QueryRow(`SELECT qty_milli FROM stock_levels WHERE product_id=? AND warehouse_id=?`,
 				l.productID.String, d.warehouseID.String).Scan(&current)
-			delta := l.qtyMilli - current
+			base := current
+			if l.expected.Valid {
+				base = l.expected.Int64
+			}
+			delta := l.qtyMilli - base
+			if current+delta < 0 {
+				// Le comptage contredit les mouvements postérieurs : on ramène à 0.
+				delta = -current
+			}
 			if delta == 0 {
 				continue
 			}
@@ -387,7 +512,24 @@ func Post(db *sql.DB, docID, userID string) (string, error) {
 			ledgerAmount, ledgerKind = totalTTC, "invoice"
 		}
 	case SaleCreditNote:
-		if d.partnerID.Valid {
+		// Un avoir se règle d'UNE seule façon : remboursé en espèces/carte (le
+		// compte client n'est pas touché) OU porté au crédit du compte client.
+		// Si la vente d'origine était à crédit, l'avoir vient en déduction de la
+		// dette, jamais en espèces.
+		method := d.paymentMethod.String
+		paidOut := method == "cash" || method == "cib" || method == "edahabia"
+		if d.refDocID.Valid {
+			var refMethod sql.NullString
+			tx.QueryRow(`SELECT payment_method FROM documents WHERE id = ?`, d.refDocID.String).
+				Scan(&refMethod)
+			if refMethod.String == "credit" && paidOut {
+				paidOut = false
+				if _, err := tx.Exec(`UPDATE documents SET payment_method='credit' WHERE id=?`, docID); err != nil {
+					return "", err
+				}
+			}
+		}
+		if d.partnerID.Valid && !paidOut {
 			ledgerAmount, ledgerKind = -totalTTC, "credit_note"
 		}
 	case PurchaseInvoice:
@@ -629,8 +771,9 @@ func Void(db *sql.DB, docID, userID, reason string) error {
 	now := NowISO()
 
 	// Contrepassation du stock : une écriture inverse par écriture d'origine,
-	// au même coût. Le CUMP n'est pas recalculé (une sortie ne le change pas ;
-	// annuler une entrée le laisse tel quel, la trace reste dans le journal).
+	// au même coût. Annuler une sortie ne change pas le CUMP ; annuler une
+	// entrée valorisée (réception, facture, ajustement, arrivée de transfert)
+	// retire sa valeur de la moyenne pondérée.
 	rows, err := tx.Query(`SELECT product_id, warehouse_id, lot_id, qty_delta_milli, unit_cost, line_id
 		FROM stock_ledger WHERE document_id = ?`, docID)
 	if err != nil {
@@ -652,13 +795,26 @@ func Void(db *sql.DB, docID, userID, reason string) error {
 		moves = append(moves, m)
 	}
 	rows.Close()
+	allowNeg := allowNegativeStock(tx)
+	valued := isCostBearing(d.docType) || d.docType == StockTransfer || d.docType == StockAdjustment
 	for _, m := range moves {
+		if m.delta == 0 { // réévaluation de prix : pas de quantité à contrepasser
+			continue
+		}
 		lineID := ""
 		if m.lineID.Valid {
 			lineID = m.lineID.String
 		}
-		if err := applyStockMove(tx, m.productID, m.warehouseID, m.lotID,
-			-m.delta, m.cost, false, docID, lineID, now); err != nil {
+		// Défaire une entrée dont la marchandise est déjà sortie ferait passer
+		// le stock en négatif : on refuse (sauf réglage contraire).
+		if m.delta > 0 && !allowNeg {
+			if err := checkOutflow(tx, m.productID, m.warehouseID, m.delta); err != nil {
+				return &PostError{"contrepassation impossible : " + err.Error()}
+			}
+		}
+		// Contrepasser une entrée valorisée retire aussi son coût du CUMP.
+		if err := applyMove(tx, m.productID, m.warehouseID, m.lotID, -m.delta, m.cost,
+			moveOpts{unwind: m.delta > 0 && valued, reversal: true}, docID, lineID, now); err != nil {
 			return err
 		}
 	}
@@ -751,7 +907,8 @@ type StockDivergence struct {
 // requires. When repair is true, divergent cache rows are rewritten from the
 // ledger.
 func VerifyStock(db *sql.DB, repair bool) ([]StockDivergence, error) {
-	rows, err := db.Query(`SELECT sl.product_id, sl.warehouse_id, sl.qty_delta_milli, sl.unit_cost, d.doc_type
+	rows, err := db.Query(`SELECT sl.product_id, sl.warehouse_id, sl.qty_delta_milli, sl.unit_cost, d.doc_type,
+			sl.is_reversal, sl.avg_after
 		FROM stock_ledger sl JOIN documents d ON d.id = sl.document_id
 		ORDER BY sl.created_at, sl.id`)
 	if err != nil {
@@ -762,8 +919,9 @@ func VerifyStock(db *sql.DB, repair bool) ([]StockDivergence, error) {
 	state := map[key]*acc{}
 	for rows.Next() {
 		var p, w, dt string
-		var delta, cost int64
-		if err := rows.Scan(&p, &w, &delta, &cost, &dt); err != nil {
+		var delta, cost, rev int64
+		var avgAfter sql.NullInt64
+		if err := rows.Scan(&p, &w, &delta, &cost, &dt, &rev, &avgAfter); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -776,7 +934,19 @@ func VerifyStock(db *sql.DB, repair bool) ([]StockDivergence, error) {
 		// Même règle que le posting : seules les entrées valorisées
 		// (réception/facture d'achat, arrivée d'un transfert, ajustement
 		// entrant) recalculent la moyenne pondérée, au coût porté par la ligne.
-		updateAvg := delta > 0 && (isCostBearing(dt) || dt == StockTransfer || dt == StockAdjustment)
+		valued := isCostBearing(dt) || dt == StockTransfer || dt == StockAdjustment
+		if avgAfter.Valid { // réévaluation : CUMP absolu, aucune quantité
+			a.avg = avgAfter.Int64
+			continue
+		}
+		if rev == 1 { // contrepassation : défait le CUMP d'une entrée valorisée
+			if delta < 0 && valued {
+				a.avg = unwindAvg(a.qty, a.avg, -delta, cost)
+			}
+			a.qty += delta
+			continue
+		}
+		updateAvg := delta > 0 && valued
 		if updateAvg {
 			if a.qty <= 0 {
 				a.avg = cost
@@ -862,13 +1032,36 @@ func currentAvgCost(tx *sql.Tx, productID, warehouseID string) int64 {
 // cost (CUMP) is recomputed.
 func applyStockMove(tx *sql.Tx, productID, warehouseID string, lotID sql.NullString,
 	deltaMilli, unitCost int64, updateAvg bool, docID, lineID, now string) error {
+	return applyMove(tx, productID, warehouseID, lotID, deltaMilli, unitCost,
+		moveOpts{updateAvg: updateAvg}, docID, lineID, now)
+}
 
+// moveOpts: updateAvg folds an inbound move into the CUMP; unwind (reversal of
+// an inbound valued move) takes it back out; reversal marks the ledger row so
+// the nightly replay can tell a void from an ordinary movement.
+type moveOpts struct{ updateAvg, unwind, reversal bool }
+
+func applyMove(tx *sql.Tx, productID, warehouseID string, lotID sql.NullString,
+	deltaMilli, unitCost int64, o moveOpts, docID, lineID, now string) error {
+	updateAvg := o.updateAvg
+
+	rev := 0
+	if o.reversal {
+		rev = 1
+	}
 	if _, err := tx.Exec(`INSERT INTO stock_ledger
-		(id, product_id, warehouse_id, lot_id, qty_delta_milli, unit_cost, document_id, line_id, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(id, product_id, warehouse_id, lot_id, qty_delta_milli, unit_cost, document_id, line_id,
+		 created_at, is_reversal)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		NewID(), productID, warehouseID, lotID, deltaMilli, unitCost, docID,
-		nullIfEmpty(lineID), now); err != nil {
+		nullIfEmpty(lineID), now, rev); err != nil {
 		return err
+	}
+	if lotID.Valid {
+		if _, err := tx.Exec(`UPDATE lots SET qty_milli = qty_milli + ? WHERE id = ?`,
+			deltaMilli, lotID.String); err != nil {
+			return err
+		}
 	}
 
 	var oldQty, oldAvg int64
@@ -889,6 +1082,8 @@ func applyStockMove(tx *sql.Tx, productID, warehouseID string, lotID sql.NullStr
 		} else {
 			newAvg = roundDiv(oldQty*oldAvg+deltaMilli*unitCost, oldQty+deltaMilli)
 		}
+	} else if o.unwind && deltaMilli < 0 {
+		newAvg = unwindAvg(oldQty, oldAvg, -deltaMilli, unitCost)
 	}
 
 	if exists {

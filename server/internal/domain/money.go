@@ -29,17 +29,31 @@ func LineDiscount(unitPrice, qtyMilli, discountPct int64) int64 {
 	return gross - net
 }
 
-// Timbre computes the droit de timbre for cash-paid invoices:
-// 1% of TTC, minimum 5 DA, maximum 2500 DA. Exempt for electronic payments
-// (art. 258 quinquies) — the caller decides applicability by payment method.
-// TODO: verify against the LF 2025 progressive scale before go-live.
+// Timbre computes the droit de timbre de quittance on a cash-paid sale, using
+// the progressive scale of the Code du timbre (art. 100-I as reworked by the
+// finance law that introduced art. 258 quinquies): nothing up to 300 DA, then
+// per started tranche of 100 DA — 1 DA up to 30 000 DA, 1,5 DA from 30 000 to
+// 100 000 DA, 2 DA beyond — rounded up to a whole DA, floor 5 DA, ceiling
+// 10 000 DA. Exempt for electronic payments (the caller decides by method).
+// TODO(fiscal): confirm the ceiling and the 5 DA floor against the current LF.
 func Timbre(totalTTC int64) int64 {
-	t := roundDiv(totalTTC, 100) // 1%
-	if t < 500 {
-		t = 500 // 5 DA
+	if totalTTC <= 30000 { // 300 DA
+		return 0
 	}
-	if t > 250000 {
-		t = 250000 // 2500 DA
+	rate := int64(100) // centimes per started 100 DA tranche
+	switch {
+	case totalTTC > 10000000: // 100 000 DA
+		rate = 200
+	case totalTTC > 3000000: // 30 000 DA
+		rate = 150
+	}
+	t := ((totalTTC + 9999) / 10000) * rate
+	t = ((t + 99) / 100) * 100 // whole DA, rounded up
+	if t < 500 {
+		t = 500
+	}
+	if t > 1000000 {
+		t = 1000000
 	}
 	return t
 }

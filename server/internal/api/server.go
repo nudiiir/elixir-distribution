@@ -60,6 +60,7 @@ func New(db *sql.DB, dbPath string, eng *analytics.Engine) http.Handler {
 		r.Get("/partners/{id}", s.getPartner)
 		r.Put("/partners/{id}", s.updatePartner)
 		r.Get("/partners/{id}/balance", s.partnerBalance)
+		r.Get("/partners/{id}/open-items", s.partnerOpenItems)
 
 		r.Get("/warehouses", s.listWarehouses)
 		r.Post("/warehouses", s.createWarehouse)

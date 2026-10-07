@@ -531,10 +531,7 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
         _lines.isEmpty) {
       return 0;
     }
-    var t = roundDiv(_totalHT + _totalVAT, 100);
-    if (t < 500) t = 500;
-    if (t > 250000) t = 250000;
-    return t;
+    return timbreFor(_totalHT + _totalVAT);
   }
 
   int get _totalTTC => _totalHT + _totalVAT + _timbre;

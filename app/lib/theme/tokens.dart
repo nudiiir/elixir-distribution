@@ -134,6 +134,19 @@ int roundDiv(int n, int d) {
   return -((-n + d ~/ 2) ~/ d);
 }
 
+/// Droit de timbre de quittance — mirror of the server's domain.Timbre:
+/// nothing up to 300 DA, then per started 100 DA tranche 1 DA (≤ 30 000 DA),
+/// 1,5 DA (≤ 100 000 DA) or 2 DA beyond, whole DA, floor 5 DA, ceiling 10 000 DA.
+int timbreFor(int totalTTC) {
+  if (totalTTC <= 30000) return 0;
+  final rate = totalTTC > 10000000 ? 200 : (totalTTC > 3000000 ? 150 : 100);
+  var t = ((totalTTC + 9999) ~/ 10000) * rate;
+  t = ((t + 99) ~/ 100) * 100;
+  if (t < 500) t = 500;
+  if (t > 1000000) t = 1000000;
+  return t;
+}
+
 /// Parses a DA amount ("649,44" / "649.44" / "1 200") to centimes. Null if invalid.
 int? parseDA(String input) {
   final s = input.trim().replaceAll(' ', '').replaceAll(',', '.');

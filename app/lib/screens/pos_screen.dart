@@ -731,10 +731,7 @@ class _PosScreenState extends State<PosScreen> {
   int get _totalVAT => _cart.fold(0, (s, l) => s + l.lineVAT(_priceLevel));
   int get _timbre {
     if (_paymentMethod != 'cash' || _cart.isEmpty) return 0;
-    var t = roundDiv(_totalHT + _totalVAT, 100);
-    if (t < 500) t = 500;
-    if (t > 250000) t = 250000;
-    return t;
+    return timbreFor(_totalHT + _totalVAT);
   }
 
   int get _totalTTC => _totalHT + _totalVAT + _timbre;

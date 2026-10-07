@@ -4,8 +4,15 @@ import (
 	"net/http"
 )
 
-// Sales reporting. All queries cover posted SALE_TICKET + SALE_INVOICE between
-// from/to (doc_date, inclusive); avoirs are surfaced separately as refunds.
+// Sales reporting over posted SALE_TICKET + SALE_INVOICE between from/to
+// (doc_date, inclusive). Avoirs (SALE_CREDIT_NOTE) are surfaced as refunds AND
+// netted out of the net_* figures, the VAT-by-rate table, the margin and the
+// breakdowns, so a returned item never keeps counting as profit or collected
+// VAT. The timbre is a tax collected for the State, not revenue: it is reported
+// on its own line and excluded from ca_ttc.
+
+// sgn: +1 for a sale, -1 for a credit note.
+const sgn = "(CASE WHEN d.doc_type='SALE_CREDIT_NOTE' THEN -1 ELSE 1 END)"
 
 func reportRange(r *http.Request) (string, string) {
 	from := r.URL.Query().Get("from")
@@ -41,6 +48,7 @@ func (s *Server) reportSummary(w http.ResponseWriter, r *http.Request) {
 		WHERE status='posted' AND doc_type IN ('SALE_TICKET','SALE_INVOICE')
 		  AND doc_date >= ? AND doc_date <= ?`, from, to).
 		Scan(&caTTC, &caHT, &vat, &timbre, &tickets)
+	caTTC -= timbre // le timbre n'est pas du chiffre d'affaires
 	out["ca_ttc"] = caTTC
 	out["ca_ht"] = caHT
 	out["vat"] = vat
@@ -52,17 +60,22 @@ func (s *Server) reportSummary(w http.ResponseWriter, r *http.Request) {
 		out["avg_ticket"] = 0
 	}
 
-	var refunds int64
-	s.db.QueryRow(`SELECT COALESCE(SUM(total_ttc),0) FROM documents
+	var refunds, refundsHT, refundsVAT int64
+	s.db.QueryRow(`SELECT COALESCE(SUM(total_ttc),0), COALESCE(SUM(total_ht),0),
+			COALESCE(SUM(total_vat),0) FROM documents
 		WHERE status='posted' AND doc_type='SALE_CREDIT_NOTE'
-		  AND doc_date >= ? AND doc_date <= ?`, from, to).Scan(&refunds)
+		  AND doc_date >= ? AND doc_date <= ?`, from, to).Scan(&refunds, &refundsHT, &refundsVAT)
 	out["refunds"] = refunds
+	out["refunds_ht"] = refundsHT
+	out["net_ca_ttc"] = caTTC - refunds
+	out["net_ca_ht"] = caHT - refundsHT
+	out["net_vat"] = vat - refundsVAT
 
-	// VAT collected by rate — the G50 helper.
-	byVat := map[string]int64{}
-	if rows, err := s.db.Query(`SELECT l.vat_rate, COALESCE(SUM(l.line_vat),0), COALESCE(SUM(l.line_ht),0)
+	// VAT collected by rate, net of returns — the G50 helper.
+	if rows, err := s.db.Query(`SELECT l.vat_rate, COALESCE(SUM(`+sgn+` * l.line_vat),0),
+			COALESCE(SUM(`+sgn+` * l.line_ht),0)
 		FROM document_lines l JOIN documents d ON d.id = l.document_id
-		WHERE d.status='posted' AND d.doc_type IN ('SALE_TICKET','SALE_INVOICE')
+		WHERE d.status='posted' AND d.doc_type IN ('SALE_TICKET','SALE_INVOICE','SALE_CREDIT_NOTE')
 		  AND d.doc_date >= ? AND d.doc_date <= ?
 		GROUP BY l.vat_rate`, from, to); err == nil {
 		type vatRow struct {
@@ -80,14 +93,15 @@ func (s *Server) reportSummary(w http.ResponseWriter, r *http.Request) {
 		rows.Close()
 		out["by_vat_rate"] = vats
 	}
-	_ = byVat
 
 	if s.can(r, "view_cost") {
+		// unit_cost est porté par unité de la ligne : qty_milli × unit_cost est
+		// le coût de la ligne, avoirs déduits (retour au coût de la vente).
 		var lineHT, costMilli int64
-		s.db.QueryRow(`SELECT COALESCE(SUM(l.line_ht),0),
-				COALESCE(SUM(l.qty_milli * COALESCE(l.unit_cost,0)),0)
+		s.db.QueryRow(`SELECT COALESCE(SUM(`+sgn+` * l.line_ht),0),
+				COALESCE(SUM(`+sgn+` * l.qty_milli * COALESCE(l.unit_cost,0)),0)
 			FROM document_lines l JOIN documents d ON d.id = l.document_id
-			WHERE d.status='posted' AND d.doc_type IN ('SALE_TICKET','SALE_INVOICE')
+			WHERE d.status='posted' AND d.doc_type IN ('SALE_TICKET','SALE_INVOICE','SALE_CREDIT_NOTE')
 			  AND d.doc_date >= ? AND d.doc_date <= ?`, from, to).
 			Scan(&lineHT, &costMilli)
 		out["margin"] = lineHT - halfUp1000(costMilli)
@@ -115,7 +129,9 @@ func (s *Server) reportBreakdown(w http.ResponseWriter, r *http.Request) {
 	by := r.URL.Query().Get("by")
 	showMargin := s.can(r, "view_cost")
 
-	const salesWhere = `d.status='posted' AND d.doc_type IN ('SALE_TICKET','SALE_INVOICE')
+	// Sales and credit notes together, credit notes counted negatively.
+	const salesWhere = `d.status='posted'
+		AND d.doc_type IN ('SALE_TICKET','SALE_INVOICE','SALE_CREDIT_NOTE')
 		AND d.doc_date >= ? AND d.doc_date <= ?`
 
 	items := []breakdownRow{}
@@ -131,8 +147,10 @@ func (s *Server) reportBreakdown(w http.ResponseWriter, r *http.Request) {
 		if by == "user" {
 			join = " LEFT JOIN users u ON u.id = d.posted_by"
 		}
-		rows, err := s.db.Query(`SELECT `+key+`, COUNT(*), COALESCE(SUM(d.total_ht),0),
-				COALESCE(SUM(d.total_ttc),0)
+		rows, err := s.db.Query(`SELECT `+key+`,
+				COALESCE(SUM(CASE WHEN d.doc_type='SALE_CREDIT_NOTE' THEN 0 ELSE 1 END),0),
+				COALESCE(SUM(`+sgn+` * d.total_ht),0),
+				COALESCE(SUM(`+sgn+` * (d.total_ttc - d.timbre)),0)
 			FROM documents d`+join+` WHERE `+salesWhere+
 			` GROUP BY `+key+` ORDER BY `+key, from, to)
 		if err != nil {
@@ -155,14 +173,16 @@ func (s *Server) reportBreakdown(w http.ResponseWriter, r *http.Request) {
 			key = "COALESCE(p.name, l.description)"
 			join = " LEFT JOIN products p ON p.id = l.product_id"
 		}
-		rows, err := s.db.Query(`SELECT `+key+`, COUNT(DISTINCT d.id),
-				COALESCE(SUM(l.qty_milli),0), COALESCE(SUM(l.line_ht),0),
-				COALESCE(SUM(l.line_ttc),0),
-				COALESCE(SUM(l.qty_milli * COALESCE(l.unit_cost,0)),0)
+		rows, err := s.db.Query(`SELECT `+key+`,
+				COUNT(DISTINCT CASE WHEN d.doc_type<>'SALE_CREDIT_NOTE' THEN d.id END),
+				COALESCE(SUM(`+sgn+` * l.qty_milli * COALESCE(NULLIF(l.pack_factor_milli,0),1000) / 1000),0),
+				COALESCE(SUM(`+sgn+` * l.line_ht),0),
+				COALESCE(SUM(`+sgn+` * l.line_ttc),0),
+				COALESCE(SUM(`+sgn+` * l.qty_milli * COALESCE(l.unit_cost,0)),0)
 			FROM document_lines l
 			JOIN documents d ON d.id = l.document_id`+join+
 			` WHERE `+salesWhere+
-			` GROUP BY `+key+` ORDER BY SUM(l.line_ttc) DESC LIMIT 100`, from, to)
+			` GROUP BY `+key+` ORDER BY SUM(`+sgn+` * l.line_ttc) DESC LIMIT 100`, from, to)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return

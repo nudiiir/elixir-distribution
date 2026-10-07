@@ -187,7 +187,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
         const SizedBox(height: 16),
         // ---- Summary cards ----
         Row(children: [
-          _SumCard(label: 'Chiffre d\'affaires TTC', value: fmtDA(_num('ca_ttc')), loading: _loading),
+          // net : avoirs déduits, timbre exclu (taxe, pas du chiffre d'affaires)
+          _SumCard(label: 'CA net TTC', value: fmtDA(_num('net_ca_ttc')), loading: _loading),
           const SizedBox(width: 12),
           _SumCard(label: 'Tickets / factures', value: '${_num('tickets')}', loading: _loading),
           const SizedBox(width: 12),
@@ -203,7 +204,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
           const SizedBox(width: 12),
           _SumCard(
               label: 'TVA collectée',
-              value: fmtDA(_num('vat')),
+              value: fmtDA(_num('net_vat')),
               loading: _loading),
           const SizedBox(width: 12),
           _SumCard(

@@ -97,7 +97,7 @@ func (s *Server) ficheProduct(w http.ResponseWriter, r *http.Request) {
 		FROM stock_ledger sl
 		JOIN documents d ON d.id = sl.document_id
 		JOIN warehouses w ON w.id = sl.warehouse_id
-		WHERE sl.product_id = ?
+		WHERE sl.product_id = ? AND sl.qty_delta_milli <> 0
 		ORDER BY sl.created_at DESC, sl.id DESC LIMIT ?`, id, ficheMoveLimit(r))
 	if err == nil {
 		for rows.Next() {

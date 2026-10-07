@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -233,4 +234,90 @@ func (s *Server) partnerBalance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"partner_id": id, "balance": balance.Int64})
+}
+
+// partnerOpenItems matches payments and credit notes to the oldest invoices
+// first (FIFO) and returns what is still open per invoice, with its age. The
+// ledger itself stays a plain running balance; this is the derived aging view.
+// Cancelled documents (and their void rows) are ignored entirely.
+func (s *Server) partnerOpenItems(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var kind string
+	if err := s.db.QueryRow(`SELECT kind FROM partners WHERE id = ?`, id).Scan(&kind); err != nil {
+		writeErr(w, http.StatusNotFound, "partner not found")
+		return
+	}
+	sgn := int64(1) // positive = the partner owes us
+	if kind == "supplier" {
+		sgn = -1
+	}
+	rows, err := s.db.Query(`SELECT pl.amount, pl.document_id, COALESCE(d.number,''),
+			COALESCE(d.doc_date,''), COALESCE(d.due_date,'')
+		FROM partner_ledger pl LEFT JOIN documents d ON d.id = pl.document_id
+		WHERE pl.partner_id = ? AND COALESCE(d.status,'posted') <> 'cancelled'
+		ORDER BY pl.created_at, pl.id`, id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer rows.Close()
+
+	type item struct {
+		DocumentID  string `json:"document_id"`
+		Number      string `json:"number"`
+		DocDate     string `json:"doc_date"`
+		DueDate     string `json:"due_date"`
+		Total       int64  `json:"total"`
+		Outstanding int64  `json:"outstanding"`
+		AgeDays     int    `json:"age_days"`
+		Overdue     bool   `json:"overdue"`
+	}
+	var items []*item
+	var credit int64 // settlements beyond every open invoice
+	for rows.Next() {
+		var amt int64
+		var doc, num, date, due string
+		if err := rows.Scan(&amt, &doc, &num, &date, &due); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		amt *= sgn
+		if amt > 0 {
+			items = append(items, &item{DocumentID: doc, Number: num, DocDate: date,
+				DueDate: due, Total: amt, Outstanding: amt})
+			continue
+		}
+		settle := -amt
+		for _, it := range items {
+			if settle == 0 {
+				break
+			}
+			take := it.Outstanding
+			if take > settle {
+				take = settle
+			}
+			it.Outstanding -= take
+			settle -= take
+		}
+		credit += settle
+	}
+	today := time.Now()
+	open := []*item{}
+	var totalOpen int64
+	for _, it := range items {
+		if it.Outstanding <= 0 {
+			continue
+		}
+		if t, err := time.Parse("2006-01-02", it.DocDate); err == nil {
+			it.AgeDays = int(today.Sub(t).Hours() / 24)
+		}
+		if t, err := time.Parse("2006-01-02", it.DueDate); err == nil && today.After(t.AddDate(0, 0, 1)) {
+			it.Overdue = true
+		}
+		totalOpen += it.Outstanding
+		open = append(open, it)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"partner_id": id, "open_items": open, "total_open": totalOpen, "unallocated_credit": credit,
+	})
 }

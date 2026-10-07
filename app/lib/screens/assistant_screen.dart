@@ -891,9 +891,11 @@ class _Brain {
     }
     if (q.contains('timbre')) {
       return _Msg.bot(
-          'Le timbre fiscal s’applique aux paiements en espèces : 1% du TTC, '
-          'minimum 5 DA, plafonné à 2 500 DA. Les paiements électroniques en '
-          'sont exonérés — il est calculé automatiquement à la caisse.');
+          'Le timbre fiscal s’applique aux paiements en espèces : rien jusqu’à '
+          '300 DA, puis 1 DA par tranche de 100 DA (1,5 DA au-delà de 30 000 DA, '
+          '2 DA au-delà de 100 000 DA), minimum 5 DA, plafonné à 10 000 DA. Les '
+          'paiements électroniques en sont exonérés — il est calculé '
+          'automatiquement à la caisse.');
     }
     if (q.contains('credit')) {
       return _Msg.bot(

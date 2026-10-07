@@ -35,6 +35,7 @@ func (s *Server) stockMovements(w http.ResponseWriter, r *http.Request) {
 		FROM stock_ledger sl
 		JOIN products p ON p.id = sl.product_id
 		JOIN documents d ON d.id = sl.document_id
+		WHERE sl.qty_delta_milli <> 0
 		ORDER BY sl.created_at DESC, sl.id DESC LIMIT ?`, limit)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
