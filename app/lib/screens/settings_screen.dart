@@ -5,6 +5,8 @@ import '../api/models.dart';
 import '../theme/tokens.dart';
 import '../util/config.dart';
 import '../util/raw_printer.dart';
+import '../util/updater.dart' show kAppVersion;
+import 'settings_profile.dart';
 import '../widgets/cloud_card.dart';
 import '../widgets/ui.dart';
 
@@ -361,6 +363,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
                 const SizedBox(height: 14),
+                StoreProfileCard(api: widget.api),
+                const SizedBox(height: 14),
+                DefaultsCard(api: widget.api),
+                const SizedBox(height: 14),
                 Card14(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -525,7 +531,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const Spacer(),
                   const MicroLabel('Version'),
                   const SizedBox(width: 8),
-                  Text('0.1.0', style: T.monoSmall),
+                  Text(kAppVersion, style: T.monoSmall),
                 ]),
               ),
             ]),

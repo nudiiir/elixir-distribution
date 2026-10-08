@@ -81,6 +81,7 @@ List<int> buildTicket({
   required String cashierName,
   int? received,
   int? change,
+  List<PosPayment> payments = const [], // paiement mixte : une ligne par moyen
 }) {
   final p = EscPos();
 
@@ -133,8 +134,16 @@ List<int> buildTicket({
     'cheque': 'Cheque',
     'transfer': 'Virement',
     'credit': 'Credit',
+    'gift': 'Carte cadeau',
   };
-  p.row('Paiement', methods[doc.paymentMethod] ?? '');
+  if (payments.isNotEmpty) {
+    p.row('Paiement', 'Mixte');
+    for (final pay in payments) {
+      p.row('  ${methods[pay.method] ?? pay.method}', _da(pay.amount));
+    }
+  } else {
+    p.row('Paiement', methods[doc.paymentMethod] ?? '');
+  }
   if (received != null && received > 0) {
     p.row('Recu', _da(received));
     p.row('A rendre', _da(change ?? 0));

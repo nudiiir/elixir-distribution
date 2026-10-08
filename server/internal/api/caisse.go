@@ -111,23 +111,38 @@ func (s *Server) caisseOpen(w http.ResponseWriter, r *http.Request) {
 // report computes cash and sales activity between two instants.
 func (s *Server) buildReport(openingCash int64, from string, to string) (*CaisseReport, error) {
 	rep := &CaisseReport{OpeningCash: openingCash}
-	rows, err := s.db.Query(`SELECT COALESCE(payment_method,''), COUNT(*), COALESCE(SUM(total_ttc),0)
+	// Single-method documents count under documents.payment_method; a mixed
+	// payment (rows in document_payments) counts each row under its method —
+	// the cash row already includes the timbre, like a cash-only total_ttc.
+	if err := s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_ttc),0)
 		FROM documents
 		WHERE status='posted' AND doc_type IN ('SALE_TICKET','SALE_INVOICE')
-		  AND posted_at >= ? AND posted_at <= ?
-		GROUP BY payment_method`, from, to)
+		  AND posted_at >= ? AND posted_at <= ?`, from, to).
+		Scan(&rep.TicketCount, &rep.TotalSales); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(`SELECT method, COALESCE(SUM(amount),0) FROM (
+			SELECT COALESCE(d.payment_method,'') AS method, d.total_ttc AS amount
+			FROM documents d
+			WHERE d.status='posted' AND d.doc_type IN ('SALE_TICKET','SALE_INVOICE')
+			  AND d.posted_at >= ? AND d.posted_at <= ?
+			  AND NOT EXISTS (SELECT 1 FROM document_payments p WHERE p.document_id = d.id)
+			UNION ALL
+			SELECT p.method, p.amount
+			FROM document_payments p JOIN documents d ON d.id = p.document_id
+			WHERE d.status='posted' AND d.doc_type IN ('SALE_TICKET','SALE_INVOICE')
+			  AND d.posted_at >= ? AND d.posted_at <= ?
+		) GROUP BY method`, from, to, from, to)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var method string
-		var count, sum int64
-		if err := rows.Scan(&method, &count, &sum); err != nil {
+		var sum int64
+		if err := rows.Scan(&method, &sum); err != nil {
 			return nil, err
 		}
-		rep.TicketCount += count
-		rep.TotalSales += sum
 		switch method {
 		case "cash":
 			rep.CashSales += sum
@@ -138,6 +153,9 @@ func (s *Server) buildReport(openingCash int64, from string, to string) (*Caisse
 		default:
 			rep.OtherSales += sum
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
 	q := func(docType string) (int64, error) {

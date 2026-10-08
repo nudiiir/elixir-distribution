@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
-import '../theme/tokens.dart';
+import '../api/models.dart';
 import '../widgets/doc_editor.dart';
 import '../widgets/doc_list.dart';
-import '../widgets/ui.dart';
+import '../widgets/list_toolbar.dart';
 
 const _saleTypes = [
   'SALE_TICKET',
@@ -49,11 +49,15 @@ class _SalesScreenState extends State<SalesScreen> {
     } catch (_) {}
   }
 
-  Future<void> _newDoc(DocEditorConfig cfg) async {
+  Future<void> _newDoc(DocEditorConfig cfg, {Partner? partner}) async {
     final changed = await Navigator.of(context).push<bool>(MaterialPageRoute(
-      builder: (_) => DocEditorScreen(api: widget.api, config: cfg),
+      builder: (_) =>
+          DocEditorScreen(api: widget.api, config: cfg, initialPartner: partner),
     ));
-    if (changed == true) _listKey.currentState?.refresh();
+    if (changed == true) {
+      _loadPartners();
+      _listKey.currentState?.refresh();
+    }
   }
 
   @override
@@ -63,22 +67,19 @@ class _SalesScreenState extends State<SalesScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [
-            const Expanded(child: Text('Ventes', style: T.h1)),
-            _NewMenu(onPick: _newDoc, items: const [
-              (label: 'Devis', cfg: quoteConfig),
-              (label: 'Bon de livraison', cfg: deliveryNoteConfig),
-              (label: 'Avoir client', cfg: saleCreditNoteConfig),
-            ]),
-            const SizedBox(width: 8),
-            SizedBox(
-              width: 170,
-              child: PrimaryButton(
-                label: 'Nouvelle facture',
-                onPressed: () => _newDoc(saleInvoiceConfig),
-              ),
-            ),
-          ]),
+          PageHeader(
+            title: 'Ventes',
+            primaryLabel: 'Nouvelle facture',
+            onPrimary: () => _newDoc(saleInvoiceConfig),
+            more: [
+              MenuEntry('Devis', Icons.request_quote_outlined,
+                  () => _newDoc(quoteConfig)),
+              MenuEntry('Bon de livraison', Icons.local_shipping_outlined,
+                  () => _newDoc(deliveryNoteConfig)),
+              MenuEntry('Avoir client', Icons.assignment_return_outlined,
+                  () => _newDoc(saleCreditNoteConfig)),
+            ],
+          ),
           const SizedBox(height: 16),
           Expanded(
             child: DocListPane(
@@ -86,52 +87,18 @@ class _SalesScreenState extends State<SalesScreen> {
               api: widget.api,
               allTypes: _saleTypes,
               partnerNames: _partnerNames,
+              partnerKind: 'customer',
               editorFor: saleEditorFor,
               exportName: 'ventes',
+              exportTitle: 'Ventes',
+              prefsKey: 'sales',
+              emptyActions: [
+                ('Nouveau devis', () => _newDoc(quoteConfig)),
+                ('Nouvelle facture', () => _newDoc(saleInvoiceConfig)),
+              ],
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _NewMenu extends StatelessWidget {
-  const _NewMenu({required this.onPick, required this.items});
-  final void Function(DocEditorConfig) onPick;
-  final List<({String label, DocEditorConfig cfg})> items;
-
-  @override
-  Widget build(BuildContext context) {
-    return PopupMenuButton<DocEditorConfig>(
-      tooltip: 'Autres documents',
-      color: T.surface,
-      shape:
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(T.rInner)),
-      onSelected: onPick,
-      itemBuilder: (context) => [
-        for (final it in items)
-          PopupMenuItem(
-              value: it.cfg, child: Text(it.label, style: T.body)),
-      ],
-      child: Container(
-        height: 40,
-        padding: const EdgeInsets.symmetric(horizontal: 14),
-        decoration: BoxDecoration(
-          color: T.surface,
-          borderRadius: BorderRadius.circular(T.rInner),
-          border: Border.all(color: T.border3),
-        ),
-        child: const Row(children: [
-          Text('Autres',
-              style: TextStyle(
-                  fontFamily: T.sans,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  color: T.muted)),
-          SizedBox(width: 6),
-          Icon(Icons.expand_more, size: 16, color: T.faint),
-        ]),
       ),
     );
   }

@@ -5,6 +5,11 @@ import 'package:http/http.dart' as http;
 import 'analytics_models.dart';
 import 'cloud.dart';
 import 'models.dart';
+import 'shell_models.dart';
+import 'stock_models.dart';
+
+export 'shell_models.dart';
+export 'stock_models.dart';
 
 class ApiException implements Exception {
   final int status;
@@ -95,6 +100,15 @@ class ApiClient {
     return User.fromJson(j);
   }
 
+  /// What needs attention today (alerts bell of the top bar).
+  Future<List<AlertItem>> alerts() async {
+    final j = await _get('/api/v1/alerts');
+    return [
+      for (final e in (j['items'] as List? ?? const []))
+        AlertItem.fromJson(e as Map<String, dynamic>)
+    ];
+  }
+
   Future<bool> health() async {
     try {
       final j = await _get('/health');
@@ -178,13 +192,70 @@ class ApiClient {
   Future<Warehouse> createWarehouse(String name) async =>
       Warehouse.fromJson(await _post('/api/v1/warehouses', {'name': name}));
 
-  Future<List<StockLevel>> stockLevels({String? warehouseId, String? q}) async {
+  /// [full] = one row per active stocked product (zeros included), summed
+  /// over the depots unless [warehouseId] is given — the Stock screen mode.
+  Future<List<StockLevel>> stockLevels(
+      {String? warehouseId, String? q, bool full = false}) async {
     final j = await _get('/api/v1/stock/levels', {
       'warehouse_id': ?warehouseId,
       if (q != null && q.isNotEmpty) 'q': q,
+      if (full) 'full': '1',
     });
     return [for (final e in j['items'] as List) StockLevel.fromJson(e)];
   }
+
+  // ---- Écran Stock : journal, réapprovisionnement, documents de stock ----
+
+  Future<StockLedger> stockLedger({
+    String? from,
+    String? to,
+    String? warehouseId,
+    String? productId,
+    List<String> kinds = const [],
+    String? q,
+    int? limit,
+  }) async =>
+      StockLedger.fromJson(await _get('/api/v1/stock/ledger', {
+        'from': ?from,
+        'to': ?to,
+        'warehouse_id': ?warehouseId,
+        'product_id': ?productId,
+        if (kinds.isNotEmpty) 'kind': kinds.join(','),
+        if (q != null && q.isNotEmpty) 'q': q,
+        if (limit != null) 'limit': '$limit',
+      }) as Map<String, dynamic>);
+
+  Future<List<ReorderRow>> stockReorder({String? warehouseId}) async {
+    final j = await _get('/api/v1/stock/reorder', {'warehouse_id': ?warehouseId});
+    return [
+      for (final e in j['items'] as List)
+        ReorderRow.fromJson(e as Map<String, dynamic>)
+    ];
+  }
+
+  Future<List<StockDoc>> stockDocuments({
+    List<String> types = const [],
+    String? from,
+    String? to,
+    String? warehouseId,
+    String? status,
+  }) async {
+    final j = await _get('/api/v1/stock/documents', {
+      if (types.isNotEmpty) 'types': types.join(','),
+      'from': ?from,
+      'to': ?to,
+      'warehouse_id': ?warehouseId,
+      'status': ?status,
+    });
+    return [
+      for (final e in j['items'] as List)
+        StockDoc.fromJson(e as Map<String, dynamic>)
+    ];
+  }
+
+  /// A saved inventory session (draft INVENTORY_COUNT) with its expected qty.
+  Future<InvDraft> inventoryDraft(String id) async => InvDraft.fromJson(
+      await _get('/api/v1/stock/inventory/$id') as Map<String, dynamic>);
 
   Future<List<StockMovement>> stockMovements({int limit = 20}) async {
     final j = await _get('/api/v1/stock/movements', {'limit': '$limit'});
@@ -196,17 +267,69 @@ class ApiClient {
     String? status,
     String? from,
     String? to,
+    String? q,
     int limit = 100,
+    List<String>? types,
+    String? partnerId,
+    String? paymentMethod,
+    int offset = 0,
   }) async {
     final j = await _get('/api/v1/documents', {
       'type': ?type,
+      if (type == null && types != null && types.isNotEmpty)
+        'types': types.join(','),
       'status': ?status,
       'from': ?from,
       'to': ?to,
+      if (q != null && q.trim().isNotEmpty) 'q': q.trim(),
+      'partner_id': ?partnerId,
+      'payment_method': ?paymentMethod,
       'limit': '$limit',
+      if (offset > 0) 'offset': '$offset',
     });
     return [for (final e in j['items'] as List) DocSummary.fromJson(e)];
   }
+
+  // ---- Pièces jointes des documents ----
+
+  Future<List<DocAttachment>> documentAttachments(String docId) async {
+    final j = await _get('/api/v1/documents/$docId/attachments');
+    return [
+      for (final e in (j['items'] as List? ?? const []))
+        DocAttachment.fromJson(e as Map<String, dynamic>)
+    ];
+  }
+
+  /// Envoie un fichier (5 Mo max) en pièce jointe d'un document.
+  Future<DocAttachment> addDocumentAttachment(
+      String docId, String name, List<int> bytes) async {
+    final res = await _client.post(
+        _u('/api/v1/documents/$docId/attachments', {'name': name}),
+        headers: {
+          ...authHeaders,
+          'Content-Type': 'application/octet-stream'
+        },
+        body: bytes);
+    return DocAttachment.fromJson(_handle(res) as Map<String, dynamic>);
+  }
+
+  Future<List<int>> documentAttachmentBytes(String docId, String id) async {
+    final res = await _client.get(
+        _u('/api/v1/documents/$docId/attachments/$id'),
+        headers: authHeaders);
+    if (res.statusCode >= 400) _handle(res);
+    return res.bodyBytes;
+  }
+
+  Future<void> deleteDocumentAttachment(String docId, String id) async {
+    await _delete('/api/v1/documents/$docId/attachments/$id');
+  }
+
+  /// Échéancier d'un partenaire (FIFO) : factures ouvertes + avoir non affecté.
+  Future<PartnerOpenItems> partnerOpenItems(String partnerId) async =>
+      PartnerOpenItems.fromJson(
+          await _get('/api/v1/partners/$partnerId/open-items')
+              as Map<String, dynamic>);
 
   Future<dynamic> _put(String path, Object body) async {
     final res = await _client.put(_u(path),
@@ -409,6 +532,44 @@ class ApiClient {
     return DocDetail.fromJson(posted);
   }
 
+  /// POS: creates AND posts a sale ticket in one call. Either one
+  /// [paymentMethod] or several [payments] rows (paiement mixte; the cash row
+  /// includes the timbre due on the cash part). A refused sale leaves no draft.
+  Future<(DocDetail, List<PosPayment>)> posCheckout({
+    required String warehouseId,
+    required List<Map<String, dynamic>> lines,
+    String? paymentMethod,
+    List<PosPayment> payments = const [],
+    String? partnerId,
+    String? caisseSessionId,
+  }) async {
+    final j = await _post('/api/v1/pos/checkout', {
+      'doc_date': todayISO(),
+      'warehouse_id': warehouseId,
+      'payment_method': paymentMethod,
+      'payments': [for (final p in payments) p.toJson()],
+      'partner_id': partnerId,
+      'caisse_session_id': caisseSessionId,
+      'lines': lines,
+    });
+    return (
+      DocDetail.fromJson(j['document'] as Map<String, dynamic>),
+      [
+        for (final e in (j['payments'] as List? ?? const []))
+          PosPayment.fromJson(e as Map<String, dynamic>)
+      ],
+    );
+  }
+
+  /// POS: last tickets of the open caisse session (with their payment rows).
+  Future<List<PosRecentTicket>> posRecentTickets({int limit = 20}) async {
+    final j = await _get('/api/v1/pos/recent', {'limit': '$limit'});
+    return [
+      for (final e in j['items'] as List)
+        PosRecentTicket.fromJson(e as Map<String, dynamic>)
+    ];
+  }
+
   // ---- Gift cards ----
 
   Future<GiftCard> createGiftCard(int amount,
@@ -477,6 +638,35 @@ class ApiClient {
   Future<String> generateBarcode() async {
     final j = await _post('/api/v1/products/generate-barcode');
     return j['barcode'] as String;
+  }
+
+  // ---- Produits : photos + modifications groupées ----
+
+  /// Uploads a JPEG/PNG photo (max 2 Mo); returns the updated product.
+  Future<Product> uploadProductImage(
+      String productId, List<int> bytes, String mime) async {
+    final res = await _client.post(
+        _u('/api/v1/products/$productId/images'),
+        headers: {...authHeaders, 'Content-Type': mime},
+        body: bytes);
+    return Product.fromJson(_handle(res));
+  }
+
+  Future<Product> deleteProductImage(String productId, int index) async =>
+      Product.fromJson(
+          await _delete('/api/v1/products/$productId/images/$index'));
+
+  Future<Product> setMainProductImage(String productId, int index) async =>
+      Product.fromJson(
+          await _post('/api/v1/products/$productId/images/$index/main'));
+
+  /// op: set_category | set_vat | set_promo | clear_promo | deactivate |
+  /// activate. Returns the number of products updated.
+  Future<int> bulkProducts(List<String> ids, String op,
+      {Map<String, dynamic> extra = const {}}) async {
+    final j = await _post(
+        '/api/v1/products/bulk', {'ids': ids, 'op': op, ...extra});
+    return (j['updated'] as num?)?.toInt() ?? 0;
   }
 
   // ---- Categories ----

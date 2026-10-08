@@ -10,11 +10,16 @@ import '../templates/template_defaults.dart';
 import '../templates/template_model.dart';
 import '../templates/template_render.dart';
 import '../theme/tokens.dart';
-import '../util/export.dart';
+import '../util/features.dart';
+import '../util/feedback.dart';
 import '../util/file_dialog.dart';
+import '../util/prefs.dart';
 import '../widgets/data_table.dart';
 import '../widgets/fiche_produit.dart';
+import '../widgets/list_toolbar.dart';
+import '../widgets/product_thumb.dart';
 import '../widgets/ui.dart';
+import 'product_page.dart';
 
 class ProductsScreen extends StatefulWidget {
   const ProductsScreen(
@@ -29,8 +34,21 @@ class ProductsScreen extends StatefulWidget {
   State<ProductsScreen> createState() => _ProductsScreenState();
 }
 
+/// Suivi filter values → label (each shown only when its feature is on).
+const _trackLabels = {
+  'lots': 'Lot & DLC',
+  'serials': 'N° de série',
+  'weighed': 'Au poids',
+  'variants': 'Déclinaisons',
+  'service': 'Service',
+};
+
 class _ProductsScreenState extends State<ProductsScreen> {
+  static const _pk = 'products'; // UiPrefs screen key
+
   bool get _viewCost => widget.session.user.can('view_cost');
+  bool get _canEdit => widget.session.user.can('products');
+  Features get _f => Features.instance;
 
   final _searchCtrl = TextEditingController();
   Timer? _debounce;
@@ -40,20 +58,54 @@ class _ProductsScreenState extends State<ProductsScreen> {
   List<Warehouse> _warehouses = const [];
   List<Partner> _suppliers = const [];
   Set<String> _expiringSoon = const {};
-  String? _catFilter;
-  String? _warehouseFilter; // null = tous les dépôts combinés
-  String? _brandFilter;
-  String? _supplierFilter;
-  String _stockFilter = ''; // '' | rupture | sous_min | peremption
-  bool _showInactive = false;
+  Map<String, String> _company = const {};
+
+  // Filtres mémorisés par utilisateur (UiPrefs).
+  String? _warehouseFilter = UiPrefs.instance.get<String>(_pk, 'f_wh');
+  String? _catFilter = UiPrefs.instance.get<String>(_pk, 'f_cat');
+  String? _brandFilter = UiPrefs.instance.get<String>(_pk, 'f_brand');
+  String? _supplierFilter = UiPrefs.instance.get<String>(_pk, 'f_sup');
+  String _status = UiPrefs.instance.get<String>(_pk, 'f_status') ?? 'active';
+  String? _track = UiPrefs.instance.get<String>(_pk, 'f_track');
+  String _quick = UiPrefs.instance.get<String>(_pk, 'f_quick') ?? '';
+
   bool _loading = true;
+  String? _error;
+  final _ctl = DataListController<Product>();
+  String? _openId; // produit ouvert dans le panneau latéral
 
   @override
   void initState() {
     super.initState();
     widget.searchRequest?.addListener(_onExternalSearch);
+    _f.addListener(_onFeatures);
+    final q = widget.searchRequest?.value ?? '';
+    if (q.isNotEmpty) _searchCtrl.text = q;
     _load();
     _loadCats();
+    widget.api.settings().then((s) {
+      if (mounted) setState(() => _company = s);
+    }).catchError((_) {});
+  }
+
+  void _onFeatures() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    widget.searchRequest?.removeListener(_onExternalSearch);
+    _f.removeListener(_onFeatures);
+    _debounce?.cancel();
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  void _onExternalSearch() {
+    final q = widget.searchRequest?.value ?? '';
+    if (q.isEmpty) return;
+    _searchCtrl.text = q;
+    _load();
   }
 
   Future<void> _loadCats() async {
@@ -70,45 +122,43 @@ class _ProductsScreenState extends State<ProductsScreen> {
     return '—';
   }
 
-  Future<void> _manageCats() async {
-    await showDialog<void>(
-      context: context,
-      builder: (_) => _CategoriesDialog(api: widget.api),
-    );
-    _loadCats();
-    _load();
-  }
-
-  void _onExternalSearch() {
-    final q = widget.searchRequest?.value ?? '';
-    if (q.isEmpty) return;
-    _searchCtrl.text = q;
-    _load();
-  }
-
-  @override
-  void dispose() {
-    widget.searchRequest?.removeListener(_onExternalSearch);
-    _debounce?.cancel();
-    _searchCtrl.dispose();
-    super.dispose();
+  String _supplierName(String? id) {
+    for (final s in _suppliers) {
+      if (s.id == id) return s.name;
+    }
+    return '';
   }
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final items = await widget.api.products(
           q: _searchCtrl.text.trim(),
           limit: 500,
-          includeInactive: _showInactive);
+          includeInactive: _status != 'active');
       if (mounted) {
         setState(() {
           _items = items;
           _loading = false;
         });
       }
+    } on ApiException catch (e) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = e.message;
+        });
+      }
     } catch (_) {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = 'Serveur injoignable.';
+        });
+      }
     }
     _loadContext();
   }
@@ -122,47 +172,65 @@ class _ProductsScreenState extends State<ProductsScreen> {
       final whs = await widget.api.warehouses();
       if (mounted) setState(() => _warehouses = whs);
     } catch (_) {}
-    try {
-      final lots = await widget.api.lots(expiringDays: 90);
-      if (mounted) {
-        setState(() => _expiringSoon = {for (final l in lots) l.productId});
-      }
-    } catch (_) {}
+    if (_f.lots) {
+      try {
+        final lots = await widget.api.lots(expiringDays: 90);
+        if (mounted) {
+          setState(() => _expiringSoon = {for (final l in lots) l.productId});
+        }
+      } catch (_) {}
+    }
     try {
       final sup = await widget.api.partners(kind: 'supplier', limit: 500);
       if (mounted) setState(() => _suppliers = sup);
     } catch (_) {}
   }
 
-  /// Stock du produit pour le dépôt sélectionné (ou tous combinés).
-  int _stockOf(Product p) {
-    var s = 0;
+  // ---------------------------------------------------------------- calculs
+
+  // Cumuls par produit pour le dépôt filtré, recalculés seulement quand les
+  // niveaux ou le dépôt changent (les cellules et pastilles les lisent souvent).
+  List<StockLevel>? _aggSrc;
+  String? _aggWh;
+  Map<String, int> _stockMap = const {};
+  Map<String, int> _cmupMap = const {};
+
+  void _ensureAgg() {
+    if (identical(_aggSrc, _levels) && _aggWh == _warehouseFilter) return;
+    final stock = <String, int>{};
+    final posQty = <String, int>{};
+    final posValue = <String, int>{};
     for (final l in _levels) {
-      if (l.productId != p.id) continue;
       if (_warehouseFilter != null && l.warehouseId != _warehouseFilter) {
         continue;
       }
-      s += l.qtyMilli;
+      stock[l.productId] = (stock[l.productId] ?? 0) + l.qtyMilli;
+      if (l.qtyMilli > 0) {
+        posQty[l.productId] = (posQty[l.productId] ?? 0) + l.qtyMilli;
+        posValue[l.productId] =
+            (posValue[l.productId] ?? 0) + (l.qtyMilli * l.avgCost) ~/ 1000;
+      }
     }
-    return s;
+    _stockMap = stock;
+    _cmupMap = {
+      for (final e in posQty.entries)
+        e.key: ((posValue[e.key] ?? 0) * 1000) ~/ e.value,
+    };
+    _aggSrc = _levels;
+    _aggWh = _warehouseFilter;
+  }
+
+  /// Stock du produit pour le dépôt sélectionné (ou tous combinés).
+  int _stockOf(Product p) {
+    _ensureAgg();
+    return _stockMap[p.id] ?? 0;
   }
 
   /// CMUP pour le dépôt sélectionné — moyenne pondérée quand « tous ». Tiret
   /// (null) quand le stock est nul : une moyenne de rien n'est pas zéro.
   int? _cmupOf(Product p) {
-    var qty = 0, value = 0;
-    for (final l in _levels) {
-      if (l.productId != p.id) continue;
-      if (_warehouseFilter != null && l.warehouseId != _warehouseFilter) {
-        continue;
-      }
-      if (l.qtyMilli > 0) {
-        qty += l.qtyMilli;
-        value += (l.qtyMilli * l.avgCost) ~/ 1000;
-      }
-    }
-    if (qty <= 0) return null;
-    return (value * 1000) ~/ qty;
+    _ensureAgg();
+    return _cmupMap[p.id];
   }
 
   /// Marge sur PV_HT contre CMUP (spec §2.4) — en pct x100.
@@ -173,28 +241,251 @@ class _ProductsScreenState extends State<ProductsScreen> {
     return roundDiv((pvHT - cmup) * 10000, cmup);
   }
 
-  bool _hasVariantPool(Product p) =>
-      p.parentProductId == null &&
-      _stockOf(p) > 0 &&
-      _items.any((v) => v.parentProductId == p.id);
-
-  List<Product> get _filtered => [
+  Set<String> get _parentIds => {
         for (final p in _items)
-          if ((_catFilter == null || p.categoryId == _catFilter) &&
-              (_brandFilter == null || p.brand == _brandFilter) &&
-              (_supplierFilter == null ||
-                  p.defaultSupplierId == _supplierFilter) &&
-              (_showInactive || p.active) &&
-              switch (_stockFilter) {
-                'rupture' => _stockOf(p) <= 0,
-                'sous_min' => p.minStockMilli > 0 &&
-                    _stockOf(p) > 0 &&
-                    _stockOf(p) < p.minStockMilli,
-                'peremption' => _expiringSoon.contains(p.id),
-                _ => true,
-              })
-            p
-      ];
+          if (p.parentProductId != null) p.parentProductId!
+      };
+
+  bool _hasVariantPool(Product p, Set<String> parents) =>
+      p.parentProductId == null && _stockOf(p) > 0 && parents.contains(p.id);
+
+  bool _isLow(Product p) =>
+      !p.isService &&
+      p.minStockMilli > 0 &&
+      _stockOf(p) > 0 &&
+      _stockOf(p) < p.minStockMilli;
+
+  bool _quickMatch(String q, Product p) => switch (q) {
+        'rupture' => !p.isService && _stockOf(p) <= 0,
+        'sous_min' => _isLow(p),
+        'peremption' => _f.lots && _expiringSoon.contains(p.id),
+        _ => true,
+      };
+
+  bool _trackOn(String key) => switch (key) {
+        'lots' => _f.lots,
+        'serials' => _f.serials,
+        'weighed' => _f.weighed,
+        'variants' => _f.variants,
+        'service' => _f.services,
+        _ => false,
+      };
+
+  /// Tous les filtres sauf la pastille rapide (sert aussi à compter les pastilles).
+  List<Product> get _base {
+    final parents = _parentIds;
+    final track = _track != null && _trackOn(_track!) ? _track : null;
+    return [
+      for (final p in _items)
+        if ((_catFilter == null || p.categoryId == _catFilter) &&
+            (_brandFilter == null || p.brand == _brandFilter) &&
+            (_supplierFilter == null || p.defaultSupplierId == _supplierFilter) &&
+            switch (_status) {
+              'inactive' => !p.active,
+              'all' => true,
+              _ => p.active,
+            } &&
+            switch (track) {
+              'lots' => p.trackLots || p.trackExpiry,
+              'serials' => p.trackSerials,
+              'weighed' => p.isWeighable,
+              'variants' =>
+                p.parentProductId != null || parents.contains(p.id),
+              'service' => p.isService,
+              _ => true,
+            })
+          p
+    ];
+  }
+
+  List<Product> get _filtered {
+    final base = _base;
+    if (_quick.isEmpty) return base;
+    return [for (final p in base) if (_quickMatch(_quick, p)) p];
+  }
+
+  // ---------------------------------------------------------------- filtres
+
+  void _setPref(String key, Object? v) => UiPrefs.instance.set(_pk, key, v);
+
+  void _setQuick(String q) {
+    setState(() => _quick = _quick == q ? '' : q);
+    _setPref('f_quick', _quick.isEmpty ? null : _quick);
+  }
+
+  void _setStatus(String? v) {
+    final s = v ?? 'active';
+    final reload = (s == 'active') != (_status == 'active');
+    setState(() => _status = s);
+    _setPref('f_status', s == 'active' ? null : s);
+    if (reload) _load();
+  }
+
+  void _clearFilters() {
+    final reload = _status != 'active';
+    setState(() {
+      _warehouseFilter = null;
+      _catFilter = null;
+      _brandFilter = null;
+      _supplierFilter = null;
+      _track = null;
+      _quick = '';
+      _status = 'active';
+    });
+    for (final k in ['f_wh', 'f_cat', 'f_brand', 'f_sup', 'f_track', 'f_quick', 'f_status']) {
+      _setPref(k, null);
+    }
+    if (reload) _load();
+  }
+
+  List<ActiveFilter> get _activeFilters {
+    String whName(String id) => _warehouses
+        .firstWhere((w) => w.id == id,
+            orElse: () => Warehouse.fromJson({'id': id, 'name': 'Dépôt'}))
+        .name;
+    return [
+      if (_warehouseFilter != null)
+        ActiveFilter('Dépôt : ${whName(_warehouseFilter!)}', () {
+          setState(() => _warehouseFilter = null);
+          _setPref('f_wh', null);
+        }),
+      if (_catFilter != null)
+        ActiveFilter('Catégorie : ${_catName(_catFilter)}', () {
+          setState(() => _catFilter = null);
+          _setPref('f_cat', null);
+        }),
+      if (_brandFilter != null)
+        ActiveFilter('Marque : $_brandFilter', () {
+          setState(() => _brandFilter = null);
+          _setPref('f_brand', null);
+        }),
+      if (_supplierFilter != null)
+        ActiveFilter('Fournisseur : ${_supplierName(_supplierFilter)}', () {
+          setState(() => _supplierFilter = null);
+          _setPref('f_sup', null);
+        }),
+      if (_status != 'active')
+        ActiveFilter(
+            'Statut : ${_status == 'inactive' ? 'Inactifs' : 'Tous'}',
+            () => _setStatus(null)),
+      if (_track != null && _trackOn(_track!))
+        ActiveFilter('Suivi : ${_trackLabels[_track] ?? _track}', () {
+          setState(() => _track = null);
+          _setPref('f_track', null);
+        }),
+    ];
+  }
+
+  Widget _toolbar() {
+    final base = _base;
+    int count(String q) => base.where((p) => _quickMatch(q, p)).length;
+    final brands = {
+      for (final p in _items)
+        if (p.brand.isNotEmpty) p.brand
+    }.toList()
+      ..sort();
+    final trackOptions = [
+      for (final e in _trackLabels.entries)
+        if (_trackOn(e.key)) (e.key, e.value),
+    ];
+    return ListToolbar(
+      search: _searchCtrl,
+      searchHint: 'Rechercher un produit ou scanner…',
+      onSearchChanged: (_) {
+        _debounce?.cancel();
+        _debounce = Timer(const Duration(milliseconds: 250), _load);
+      },
+      onSearchSubmitted: (_) => _load(),
+      quickFilters: [
+        FilterPill(
+            label: 'Rupture',
+            icon: Icons.remove_shopping_cart_outlined,
+            active: _quick == 'rupture',
+            count: count('rupture'),
+            onTap: () => _setQuick('rupture')),
+        FilterPill(
+            label: 'Sous le minimum',
+            icon: Icons.trending_down_rounded,
+            active: _quick == 'sous_min',
+            count: count('sous_min'),
+            onTap: () => _setQuick('sous_min')),
+        if (_f.lots)
+          FilterPill(
+              label: 'Péremption < 90 j',
+              icon: Icons.hourglass_bottom_rounded,
+              active: _quick == 'peremption',
+              count: count('peremption'),
+              onTap: () => _setQuick('peremption')),
+      ],
+      panel: FilterPanel(fields: [
+        if (_warehouses.length > 1)
+          FilterField<String>(
+            label: 'Dépôt',
+            value: _warehouseFilter,
+            allLabel: 'Tous les dépôts',
+            options: [for (final w in _warehouses) (w.id, w.name)],
+            onChanged: (v) {
+              setState(() => _warehouseFilter = v);
+              _setPref('f_wh', v);
+            },
+          ),
+        FilterField<String>(
+          label: 'Catégorie',
+          value: _cats.any((c) => c.id == _catFilter) ? _catFilter : null,
+          allLabel: 'Toutes',
+          options: [for (final c in _cats) (c.id, c.name)],
+          onChanged: (v) {
+            setState(() => _catFilter = v);
+            _setPref('f_cat', v);
+          },
+        ),
+        if (brands.isNotEmpty)
+          FilterField<String>(
+            label: 'Marque',
+            value: brands.contains(_brandFilter) ? _brandFilter : null,
+            allLabel: 'Toutes',
+            options: [for (final b in brands) (b, b)],
+            onChanged: (v) {
+              setState(() => _brandFilter = v);
+              _setPref('f_brand', v);
+            },
+          ),
+        if (_suppliers.isNotEmpty)
+          FilterField<String>(
+            label: 'Fournisseur',
+            value: _suppliers.any((s) => s.id == _supplierFilter)
+                ? _supplierFilter
+                : null,
+            options: [for (final s in _suppliers) (s.id, s.name)],
+            onChanged: (v) {
+              setState(() => _supplierFilter = v);
+              _setPref('f_sup', v);
+            },
+          ),
+        FilterField<String>(
+          label: 'Statut',
+          value: _status == 'active' ? null : _status,
+          allLabel: 'Actifs',
+          options: const [('inactive', 'Inactifs'), ('all', 'Tous')],
+          onChanged: _setStatus,
+        ),
+        if (trackOptions.isNotEmpty)
+          FilterField<String>(
+            label: 'Suivi',
+            value: _track != null && _trackOn(_track!) ? _track : null,
+            options: trackOptions,
+            onChanged: (v) {
+              setState(() => _track = v);
+              _setPref('f_track', v);
+            },
+          ),
+      ]),
+      active: _activeFilters,
+      onClearAll: _clearFilters,
+    );
+  }
+
+  // ---------------------------------------------------------------- actions
 
   Future<void> _importCsv() async {
     final done = await showDialog<bool>(
@@ -204,236 +495,540 @@ class _ProductsScreenState extends State<ProductsScreen> {
     if (done == true) _load();
   }
 
-  void _openFiche(Product p) {
-    showFicheProduit(
+  Future<void> _manageCats() async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _CategoriesDialog(api: widget.api),
+    );
+    _loadCats();
+    _load();
+  }
+
+  Future<void> _quickCreate() async {
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => _ProductFormDialog(api: widget.api, showCost: _viewCost),
+    );
+    if (saved == true) _load();
+  }
+
+  List<String> get _brandList => {
+        for (final p in _items)
+          if (p.brand.isNotEmpty) p.brand
+      }.toList()
+        ..sort();
+
+  Future<void> _openPage({Product? existing, Product? template}) async {
+    final saved = await openProductPage(context,
+        api: widget.api,
+        existing: existing,
+        template: template,
+        showCost: _viewCost,
+        brands: _brandList);
+    if (saved == true) _load();
+  }
+
+  Future<void> _openFiche(Product p, {bool moves = false}) async {
+    setState(() => _openId = p.id);
+    await showFicheProduit(
       context,
       widget.api,
       p.id,
       canCost: _viewCost,
       onChanged: _load,
-      onEdit: (prod) {
-        Navigator.of(context).pop();
-        _openForm(existing: prod);
+      onEdit: _canEdit ? (prod) => _openPage(existing: prod) : null,
+      navigate: (cur, delta) {
+        final rows = _ctl.rows;
+        final i = rows.indexWhere((r) => r.id == cur);
+        final j = i + delta;
+        return i >= 0 && j >= 0 && j < rows.length ? rows[j].id : null;
       },
+      onShown: (id) {
+        if (mounted) setState(() => _openId = id);
+      },
+      focusMoves: moves,
     );
+    if (mounted) setState(() => _openId = null);
   }
 
-  Future<void> _openForm({Product? existing}) async {
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (_) => _ProductFormDialog(
-          api: widget.api, existing: existing, showCost: _viewCost),
-    );
-    if (saved == true) _load();
-  }
-
-  Future<void> _export(List<Product> rows) async {
-    final path = await exportCsv(
-      baseName: 'produits',
-      headers: [
-        'Produit',
-        'Marque',
-        'Code-barres',
-        'Stock',
-        'TVA (%)',
-        if (_viewCost) 'CMUP (DA)',
-        'Vente TTC (DA)',
-        if (_viewCost) 'Marge (%)',
-      ],
-      rows: [
-        for (final p in rows)
-          [
-            p.name,
-            p.brand,
-            p.barcode ?? '',
-            fmtQty(_stockOf(p)),
-            '${p.vatRate ~/ 100}',
-            if (_viewCost)
-              _cmupOf(p) == null ? '' : editDA(_cmupOf(p)!),
-            editDA(p.priceRetail),
-            if (_viewCost)
-              _marginOf(p) == null
-                  ? ''
-                  : (_marginOf(p)! / 100).toStringAsFixed(1),
-          ]
-      ],
-    );
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        backgroundColor: T.ink,
-        behavior: SnackBarBehavior.floating,
-        content: Text('Exporté : $path',
-            style: const TextStyle(
-                fontFamily: T.mono, fontSize: 12, color: Colors.white)),
-      ));
+  Future<void> _adjust(Product p) async {
+    final done = await showAdjustStock(context, widget.api, p.id);
+    if (done) {
+      _load();
+      if (mounted) showToast(context, 'Stock de « ${p.name} » ajusté');
     }
+  }
+
+  Future<int?> _bulk(List<Product> rows, String op,
+      [Map<String, dynamic> extra = const {}]) async {
+    try {
+      final n = await widget.api
+          .bulkProducts([for (final p in rows) p.id], op, extra: extra);
+      if (mounted) {
+        showToast(context, '$n produit${n > 1 ? 's' : ''} mis à jour');
+      }
+      _load();
+      return n;
+    } on ApiException catch (e) {
+      if (mounted) showToast(context, e.message, kind: ToastKind.error);
+      return null;
+    }
+  }
+
+  Future<void> _setActive(Product p, bool active) async {
+    if (!active) {
+      final ok = await confirmAction(context,
+          title: 'Désactiver « ${p.name} » ?',
+          message:
+              'Le produit disparaît de la caisse et des listes ; son historique et son stock restent. Vous pourrez le réactiver.',
+          confirmLabel: 'Désactiver',
+          danger: true);
+      if (!ok) return;
+    }
+    await _bulk([p], active ? 'activate' : 'deactivate');
+  }
+
+  Future<void> _printDisplayed() async {
+    final rows = _ctl.rows;
+    if (rows.isEmpty) return;
+    if (rows.length > 40) {
+      final ok = await confirmAction(context,
+          title: 'Imprimer ${rows.length} étiquettes ?',
+          message:
+              'Toutes les lignes affichées. Astuce : sélectionnez des lignes pour n’imprimer qu’elles.',
+          confirmLabel: 'Imprimer');
+      if (!ok || !mounted) return;
+    }
+    await printProductLabels(context, widget.api, rows);
+  }
+
+  List<RowAction<Product>> _rowMenu(Product p) => [
+        RowAction('Voir la fiche', Icons.visibility_outlined, (p) => _openFiche(p)),
+        if (_canEdit)
+          RowAction('Modifier', Icons.edit_outlined, (p) => _openPage(existing: p)),
+        if (!p.isService)
+          RowAction('Ajuster le stock', Icons.tune_rounded, _adjust),
+        RowAction('Imprimer étiquettes', Icons.qr_code_2_rounded,
+            (p) => printProductLabels(context, widget.api, [p])),
+        if (!p.isService)
+          RowAction('Historique des mouvements', Icons.history_rounded,
+              (p) => _openFiche(p, moves: true)),
+        if (_canEdit)
+          RowAction('Dupliquer', Icons.copy_all_rounded,
+              (p) => _openPage(template: p)),
+        if (_canEdit)
+          p.active
+              ? RowAction('Désactiver', Icons.block_rounded,
+                  (p) => _setActive(p, false),
+                  danger: true)
+              : RowAction('Réactiver', Icons.restore_rounded,
+                  (p) => _setActive(p, true)),
+      ];
+
+  List<BulkAction<Product>> get _bulkActions => [
+        BulkAction('Imprimer étiquettes', Icons.qr_code_2_rounded, (rows) async {
+          await printProductLabels(context, widget.api, rows);
+          return false;
+        }),
+        if (_canEdit) ...[
+          BulkAction('Changer de catégorie', Icons.sell_outlined, (rows) async {
+            final v = await showDialog<(String?,)>(
+              context: context,
+              builder: (_) => _PickCategoryDialog(cats: _cats, count: rows.length),
+            );
+            if (v == null) return false;
+            return await _bulk(rows, 'set_category', {'category_id': v.$1}) != null;
+          }),
+          BulkAction('Changer la TVA', Icons.percent_rounded, (rows) async {
+            final v = await showDialog<int>(
+              context: context,
+              builder: (_) => _PickVatDialog(count: rows.length),
+            );
+            if (v == null) return false;
+            return await _bulk(rows, 'set_vat', {'vat_rate': v}) != null;
+          }),
+          BulkAction('Définir une promotion', Icons.local_offer_outlined,
+              (rows) async {
+            final v = await showDialog<Map<String, dynamic>>(
+              context: context,
+              builder: (_) => _PromoDialog(count: rows.length),
+            );
+            if (v == null) return false;
+            return await _bulk(rows, 'set_promo', v) != null;
+          }),
+          BulkAction('Retirer la promotion', Icons.money_off_rounded,
+              (rows) async {
+            final ok = await confirmAction(context,
+                title: 'Retirer la promotion de ${rows.length} produit(s) ?',
+                confirmLabel: 'Retirer');
+            if (!ok) return false;
+            return await _bulk(rows, 'clear_promo') != null;
+          }),
+          if (_status != 'active')
+            BulkAction('Réactiver', Icons.restore_rounded, (rows) async {
+              return await _bulk(rows, 'activate') != null;
+            }),
+          BulkAction('Désactiver', Icons.block_rounded, (rows) async {
+            final ok = await confirmAction(context,
+                title: 'Désactiver ${rows.length} produit(s) ?',
+                message:
+                    'Ils disparaissent de la caisse et des listes ; historique et stock restent. Réactivables depuis le filtre Statut.',
+                confirmLabel: 'Désactiver',
+                danger: true);
+            if (!ok) return false;
+            return await _bulk(rows, 'deactivate') != null;
+          }, danger: true),
+        ],
+      ];
+
+  // ---------------------------------------------------------------- build
+
+  String _unitOf(Product p) => p.isWeighable || p.unit == 'kg' ? 'kg' : 'u.';
+
+  String _pct(int m) =>
+      '${(m / 100).toStringAsFixed(1).replaceAll('.', ',')}%';
+
+  List<ColumnSpec<Product>> _columns(Set<String> parents) => [
+        ColumnSpec(
+          id: 'name',
+          label: 'Produit',
+          flex: 5,
+          hideable: false,
+          sortKey: (p) => p.name.toLowerCase(),
+          exportValue: (p) => p.name,
+          cell: (context, p) => Row(children: [
+            ProductThumb(api: widget.api, product: p, size: 32),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(p.name,
+                      style: T.body.copyWith(color: p.active ? T.ink : T.ghost),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis),
+                  if (p.brand.isNotEmpty)
+                    Text(p.brand,
+                        style: T.small.copyWith(fontSize: 10.5),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
+                ],
+              ),
+            ),
+          ]),
+        ),
+        ColumnSpec(
+          id: 'category',
+          label: 'Catégorie',
+          flex: 2,
+          sortKey: (p) => _catName(p.categoryId),
+          exportValue: (p) => p.categoryId == null ? '' : _catName(p.categoryId),
+          cell: (context, p) => Text(_catName(p.categoryId),
+              style: T.small.copyWith(fontSize: 11.5),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis),
+        ),
+        ColumnSpec(
+          id: 'barcode',
+          label: 'Code-barres',
+          flex: 3,
+          sortKey: (p) => p.barcode ?? '',
+          exportValue: (p) =>
+              [if (p.barcode != null) p.barcode!, ...p.barcodes].join(' '),
+          cell: (context, p) => Text(
+              p.barcodes.isEmpty
+                  ? (p.barcode ?? '—')
+                  : '${p.barcode ?? p.barcodes.first} +${p.barcode == null ? p.barcodes.length - 1 : p.barcodes.length}',
+              style: T.monoSmall,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis),
+        ),
+        ColumnSpec(
+          id: 'stock',
+          label: 'Stock',
+          width: 100,
+          numeric: true,
+          sortKey: (p) => p.isService ? 1 << 40 : _stockOf(p),
+          exportValue: (p) => p.isService ? '' : _stockOf(p) / 1000,
+          cell: (context, p) {
+            if (p.isService) {
+              return Text('service', style: T.small.copyWith(fontSize: 11));
+            }
+            final s = _stockOf(p);
+            final low = p.minStockMilli > 0 && s < p.minStockMilli;
+            final color = s <= 0
+                ? T.dangerDark
+                : low
+                    ? T.warnDark
+                    : T.ink;
+            return Text.rich(
+              TextSpan(children: [
+                TextSpan(text: fmtQty(s)),
+                TextSpan(
+                    text: ' ${_unitOf(p)}',
+                    style: T.small.copyWith(fontSize: 10.5, color: T.faint)),
+              ]),
+              textAlign: TextAlign.end,
+              style: T.monoBody.copyWith(color: color),
+            );
+          },
+        ),
+        ColumnSpec(
+          id: 'vat',
+          label: 'TVA',
+          width: 56,
+          visibleByDefault: false,
+          sortKey: (p) => p.vatRate,
+          exportValue: (p) => p.vatRate / 100,
+          cell: (context, p) => Text('${p.vatRate ~/ 100}%', style: T.monoSmall),
+        ),
+        ColumnSpec(
+          id: 'price',
+          label: 'Vente TTC',
+          width: 120,
+          numeric: true,
+          sortKey: (p) => p.priceRetail,
+          exportValue: (p) => p.priceRetail / 100,
+          cell: (context, p) {
+            final dg = _f.wholesale && p.priceWholesale != null && p.priceWholesale! > 0;
+            final price = Text(fmtDA(p.priceRetail),
+                style: T.monoBody.copyWith(
+                    color: p.promoActive ? T.warnDark : null));
+            final main = p.promoActive
+                ? Tooltip(
+                    message: 'Promotion en cours : ${fmtDA(p.promoPrice!)}',
+                    child: price)
+                : price;
+            if (!dg) return main;
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                main,
+                Text('DG ${fmtDA(p.priceWholesale!)}',
+                    style: T.monoSmall.copyWith(fontSize: 10, color: T.faint)),
+              ],
+            );
+          },
+        ),
+        if (_viewCost)
+          ColumnSpec(
+            id: 'cmup',
+            label: 'Achat (CMUP)',
+            width: 110,
+            numeric: true,
+            sortKey: (p) => _cmupOf(p) ?? -1,
+            exportValue: (p) {
+              final c = _cmupOf(p);
+              return c == null ? '' : c / 100;
+            },
+            cell: (context, p) {
+              final c = _cmupOf(p);
+              return Text(c == null ? '—' : fmtDA(c),
+                  style: T.monoBody.copyWith(color: T.muted));
+            },
+          ),
+        if (_viewCost)
+          ColumnSpec(
+            id: 'margin',
+            label: 'Marge',
+            width: 75,
+            numeric: true,
+            sortKey: (p) => _marginOf(p) ?? -999999,
+            exportValue: (p) {
+              final m = _marginOf(p);
+              return m == null ? '' : m / 100;
+            },
+            cell: (context, p) {
+              final m = _marginOf(p);
+              return Text(m == null ? '—' : _pct(m),
+                  style: T.monoSmall.copyWith(
+                      color: m != null && m < 0 ? T.dangerDark : T.mintDark));
+            },
+          ),
+        if (_viewCost)
+          ColumnSpec(
+            id: 'value_cost',
+            label: 'Valeur au coût',
+            width: 120,
+            numeric: true,
+            visibleByDefault: false,
+            sortKey: (p) => (_stockOf(p) * (_cmupOf(p) ?? 0)) ~/ 1000,
+            exportValue: (p) =>
+                ((_stockOf(p) * (_cmupOf(p) ?? 0)) ~/ 1000) / 100,
+            cell: (context, p) => Text(
+                fmtDA((_stockOf(p).clamp(0, 1 << 50) * (_cmupOf(p) ?? 0)) ~/ 1000),
+                style: T.monoSmall),
+          ),
+        ColumnSpec(
+          id: 'value_sale',
+          label: 'Valeur de vente',
+          width: 120,
+          numeric: true,
+          visibleByDefault: false,
+          sortKey: (p) => (_stockOf(p) * p.priceRetail) ~/ 1000,
+          exportValue: (p) => ((_stockOf(p) * p.priceRetail) ~/ 1000) / 100,
+          cell: (context, p) => Text(
+              fmtDA((_stockOf(p).clamp(0, 1 << 50) * p.priceRetail) ~/ 1000),
+              style: T.monoSmall),
+        ),
+        ColumnSpec(
+          id: 'brand',
+          label: 'Marque',
+          flex: 2,
+          visibleByDefault: false,
+          sortKey: (p) => p.brand.toLowerCase(),
+          exportValue: (p) => p.brand,
+          cell: (context, p) => Text(p.brand.isEmpty ? '—' : p.brand,
+              style: T.small, maxLines: 1, overflow: TextOverflow.ellipsis),
+        ),
+        ColumnSpec(
+          id: 'supplier',
+          label: 'Fournisseur',
+          flex: 2,
+          visibleByDefault: false,
+          sortKey: (p) => _supplierName(p.defaultSupplierId).toLowerCase(),
+          exportValue: (p) => _supplierName(p.defaultSupplierId),
+          cell: (context, p) {
+            final n = _supplierName(p.defaultSupplierId);
+            return Text(n.isEmpty ? '—' : n,
+                style: T.small, maxLines: 1, overflow: TextOverflow.ellipsis);
+          },
+        ),
+        ColumnSpec(
+          id: 'alerts',
+          label: 'Alertes',
+          width: 86,
+          sortKey: (p) =>
+              (!p.isService && _stockOf(p) <= 0 ? 0 : 1) * 100 +
+              (_expiringSoon.contains(p.id) ? 0 : 10),
+          exportValue: (p) => [
+            if (!p.isService && _stockOf(p) <= 0) 'Rupture',
+            if (_isLow(p)) 'Sous le minimum',
+            if (_f.lots && _expiringSoon.contains(p.id)) 'Péremption < 90 j',
+            if (_hasVariantPool(p, parents)) 'Stock à ventiler',
+          ].join(', '),
+          cell: (context, p) {
+            final icons = <Widget>[];
+            final s = _stockOf(p);
+            if (!p.isService && s <= 0) {
+              icons.add(const Tooltip(
+                  message: 'Rupture',
+                  child: Icon(Icons.remove_shopping_cart_outlined,
+                      size: 14, color: T.dangerDark)));
+            } else if (_isLow(p)) {
+              icons.add(const Tooltip(
+                  message: 'Sous le minimum',
+                  child: Icon(Icons.trending_down_rounded,
+                      size: 14, color: T.warnDark)));
+            }
+            if (_f.lots && _expiringSoon.contains(p.id)) {
+              icons.add(const Tooltip(
+                  message: 'Péremption < 90 j',
+                  child: Icon(Icons.hourglass_bottom_rounded,
+                      size: 14, color: T.warnDark)));
+            }
+            if (_hasVariantPool(p, parents)) {
+              icons.add(const Tooltip(
+                  message: 'Stock à ventiler entre les déclinaisons',
+                  child: Icon(Icons.call_split_rounded,
+                      size: 14, color: T.warnDark)));
+            }
+            if (p.promoActive) {
+              icons.add(const Tooltip(
+                  message: 'Promotion en cours',
+                  child: Icon(Icons.local_offer_outlined,
+                      size: 14, color: T.warnDark)));
+            }
+            return Row(children: [
+              for (final w in icons)
+                Padding(
+                    padding: const EdgeInsetsDirectional.only(end: 4),
+                    child: w),
+            ]);
+          },
+        ),
+      ];
+
+  Widget _empty() {
+    final filtered = _quick.isNotEmpty ||
+        _activeFilters.isNotEmpty ||
+        _searchCtrl.text.trim().isNotEmpty;
+    if (filtered && _items.isNotEmpty || _searchCtrl.text.trim().isNotEmpty) {
+      return EmptyState(
+        icon: Icons.filter_alt_off_outlined,
+        text: 'Aucun produit ne correspond à la recherche ou aux filtres.',
+        actions: [
+          ('Effacer les filtres', () {
+            _searchCtrl.clear();
+            _clearFilters();
+            _load();
+          }),
+        ],
+      );
+    }
+    return EmptyState(
+      icon: Icons.category_outlined,
+      text: 'Aucun produit pour l’instant.\nImportez votre catalogue ou créez le premier produit.',
+      actions: [
+        if (_canEdit) ('Importer un fichier', _importCsv),
+        if (_canEdit) ('Nouveau produit', () => _openPage()),
+      ],
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final rows = _filtered;
+    final parents = _parentIds;
+    final total = _items.where((p) => _status == 'active' ? p.active : true).length;
     return Padding(
       padding: const EdgeInsets.all(24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [
-            const Text('Produits', style: T.h1),
-            const Spacer(),
-            OutlinedButton.icon(
-              onPressed: _importCsv,
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: T.border3),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(T.rInner)),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              ),
-              icon: const Icon(Icons.upload_file_outlined,
-                  size: 16, color: T.ink),
-              label: Text('Importer',
-                  style: T.small
-                      .copyWith(color: T.ink, fontWeight: FontWeight.w700)),
-            ),
-            const SizedBox(width: 8),
-            OutlinedButton.icon(
-              onPressed: _manageCats,
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: T.border3),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(T.rInner)),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              ),
-              icon: const Icon(Icons.sell_outlined, size: 16, color: T.ink),
-              label: Text('Catégories',
-                  style: T.small
-                      .copyWith(color: T.ink, fontWeight: FontWeight.w700)),
-            ),
-            const SizedBox(width: 8),
-            SizedBox(
-              width: 180,
-              child: PrimaryButton(
-                label: 'Nouveau produit',
-                onPressed: () => _openForm(),
-              ),
-            ),
-          ]),
+          PageHeader(
+            title: 'Produits',
+            subtitle: _loading && _items.isEmpty
+                ? null
+                : rows.length == total
+                    ? '$total produit${total > 1 ? 's' : ''}${total >= 500 ? ' (500 premiers — affinez la recherche)' : ''}'
+                    : '${rows.length} / $total produits',
+            primaryLabel: _canEdit ? 'Nouveau produit' : null,
+            onPrimary: () => _openPage(),
+            more: [
+              if (_canEdit)
+                MenuEntry('Importer un fichier', Icons.upload_file_outlined,
+                    _importCsv),
+              if (_canEdit)
+                MenuEntry('Catégories', Icons.sell_outlined, _manageCats),
+              if (_canEdit)
+                MenuEntry('Création rapide', Icons.bolt_rounded, _quickCreate),
+              MenuEntry('Imprimer des étiquettes', Icons.qr_code_2_rounded,
+                  _printDisplayed),
+            ],
+          ),
           const SizedBox(height: 16),
-          SearchField(
-            controller: _searchCtrl,
-            hint: 'Rechercher un produit ou scanner…',
-            onChanged: (_) {
-              _debounce?.cancel();
-              _debounce = Timer(const Duration(milliseconds: 250), _load);
-            },
-            onSubmitted: (_) => _load(),
-          ),
-          const SizedBox(height: 10),
-          SizedBox(
-            height: 32,
-            child: ListView(scrollDirection: Axis.horizontal, children: [
-              // Dépôt : toutes les colonnes monétaires se recalculent contre.
-              if (_warehouses.length > 1) ...[
-                _CatFilterChip(
-                  label: _warehouseFilter == null
-                      ? 'Tous les dépôts'
-                      : _warehouses
-                          .firstWhere((w) => w.id == _warehouseFilter)
-                          .name,
-                  selected: _warehouseFilter != null,
-                  onTap: () => setState(() {
-                    final ids = [null, ..._warehouses.map((w) => w.id)];
-                    final i = ids.indexOf(_warehouseFilter);
-                    _warehouseFilter = ids[(i + 1) % ids.length];
-                  }),
-                ),
-                const SizedBox(width: 8),
-              ],
-              _CatFilterChip(
-                label: 'Rupture',
-                selected: _stockFilter == 'rupture',
-                onTap: () => setState(() => _stockFilter =
-                    _stockFilter == 'rupture' ? '' : 'rupture'),
-              ),
-              _CatFilterChip(
-                label: 'Sous le minimum',
-                selected: _stockFilter == 'sous_min',
-                onTap: () => setState(() => _stockFilter =
-                    _stockFilter == 'sous_min' ? '' : 'sous_min'),
-              ),
-              _CatFilterChip(
-                label: 'Péremption < 90 j',
-                selected: _stockFilter == 'peremption',
-                onTap: () => setState(() => _stockFilter =
-                    _stockFilter == 'peremption' ? '' : 'peremption'),
-              ),
-              _CatFilterChip(
-                label: 'Inactifs',
-                selected: _showInactive,
-                onTap: () {
-                  setState(() => _showInactive = !_showInactive);
-                  _load();
-                },
-              ),
-              // Marques distinctes.
-              if (_items.any((p) => p.brand.isNotEmpty))
-                _CatFilterChip(
-                  label: _brandFilter ?? 'Marque',
-                  selected: _brandFilter != null,
-                  onTap: () async {
-                    final brands = {
-                      for (final p in _items)
-                        if (p.brand.isNotEmpty) p.brand
-                    }.toList()
-                      ..sort();
-                    final v = await _pickFromList(context, 'Marque', brands);
-                    if (v != _kNoPick) setState(() => _brandFilter = v);
-                  },
-                ),
-              if (_suppliers.isNotEmpty)
-                _CatFilterChip(
-                  label: _supplierFilter == null
-                      ? 'Fournisseur'
-                      : _suppliers
-                          .firstWhere((s) => s.id == _supplierFilter,
-                              orElse: () => _suppliers.first)
-                          .name,
-                  selected: _supplierFilter != null,
-                  onTap: () async {
-                    final v = await _pickFromList(context, 'Fournisseur',
-                        [for (final s in _suppliers) s.name]);
-                    if (v == _kNoPick) return;
-                    setState(() => _supplierFilter = v == null
-                        ? null
-                        : _suppliers.firstWhere((s) => s.name == v).id);
-                  },
-                ),
-              if (_cats.isNotEmpty) ...[
-                const SizedBox(width: 8),
-                _CatFilterChip(
-                  label: 'Toutes',
-                  selected: _catFilter == null,
-                  onTap: () => setState(() => _catFilter = null),
-                ),
-                for (final c in _cats)
-                  _CatFilterChip(
-                    label: c.name,
-                    selected: _catFilter == c.id,
-                    onTap: () => setState(
-                        () => _catFilter = _catFilter == c.id ? null : c.id),
-                  ),
-              ],
-            ]),
-          ),
+          _toolbar(),
           const SizedBox(height: 14),
           Expanded(
             child: DataListView<Product>(
-              items: _filtered,
+              prefsKey: _pk,
+              items: rows,
+              rowId: (p) => p.id,
+              controller: _ctl,
+              highlight: (p) => p.id == _openId,
+              loading: _loading,
+              error: _error,
+              onRetry: _load,
               onTap: _openFiche,
-              onExport: _export,
-              empty: EmptyState(
-                  icon: Icons.category_outlined,
-                  text: _loading ? 'Chargement…' : 'Aucun produit'),
+              rowMenu: _rowMenu,
+              bulkActions: _bulkActions,
+              exportTitle: 'Produits',
+              exportBaseName: 'produits',
+              company: _company,
+              empty: _empty(),
               aggregates: (rows) {
                 if (!_viewCost) return const [];
                 // Valeur du stock + marge PONDÉRÉE par la valeur du stock —
@@ -453,159 +1048,10 @@ class _ProductsScreenState extends State<ProductsScreen> {
                     value <= 0 ? null : roundDiv(weighted * 10000, value);
                 return [
                   ('Valeur du stock', fmtDA(value)),
-                  if (marginPct != null)
-                    (
-                      'Marge pondérée',
-                      '${(marginPct / 100).toStringAsFixed(1).replaceAll('.', ',')}%'
-                    ),
+                  if (marginPct != null) ('Marge pondérée', _pct(marginPct)),
                 ];
               },
-              columns: [
-                ColumnSpec(
-                  label: 'Produit',
-                  flex: 5,
-                  sortKey: (p) => p.name.toLowerCase(),
-                  cell: (context, p) => Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(p.name,
-                          style: T.body.copyWith(
-                              color: p.active ? T.ink : T.ghost),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis),
-                      if (p.brand.isNotEmpty)
-                        Text(p.brand,
-                            style: T.small.copyWith(fontSize: 10.5),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis),
-                    ],
-                  ),
-                ),
-                ColumnSpec(
-                  label: 'Catégorie',
-                  flex: 2,
-                  sortKey: (p) => _catName(p.categoryId),
-                  cell: (context, p) => Text(_catName(p.categoryId),
-                      style: T.small.copyWith(fontSize: 11.5),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis),
-                ),
-                ColumnSpec(
-                  label: 'Code-barres',
-                  flex: 3,
-                  sortKey: (p) => p.barcode ?? '',
-                  cell: (context, p) => Text(
-                      p.barcodes.isEmpty
-                          ? (p.barcode ?? '—')
-                          : '${p.barcode ?? p.barcodes.first} +${p.barcodes.length}',
-                      style: T.monoSmall),
-                ),
-                ColumnSpec(
-                  label: 'Stock',
-                  width: 84,
-                  numeric: true,
-                  sortKey: (p) => _stockOf(p),
-                  cell: (context, p) {
-                    final s = _stockOf(p);
-                    final low = p.minStockMilli > 0 && s < p.minStockMilli;
-                    return Text(fmtQty(s),
-                        textAlign: TextAlign.end,
-                        style: T.monoBody.copyWith(
-                            color: s <= 0
-                                ? T.dangerDark
-                                : low
-                                    ? T.warnDark
-                                    : T.ink));
-                  },
-                ),
-                ColumnSpec(
-                  label: 'TVA',
-                  width: 56,
-                  sortKey: (p) => p.vatRate,
-                  cell: (context, p) =>
-                      Text('${p.vatRate ~/ 100}%', style: T.monoSmall),
-                ),
-                if (_viewCost)
-                  ColumnSpec(
-                    label: 'Achat (CMUP)',
-                    width: 110,
-                    numeric: true,
-                    sortKey: (p) => _cmupOf(p) ?? -1,
-                    cell: (context, p) {
-                      final c = _cmupOf(p);
-                      return Text(c == null ? '—' : fmtDA(c),
-                          style: T.monoBody.copyWith(color: T.muted));
-                    },
-                  ),
-                ColumnSpec(
-                  label: 'Vente TTC',
-                  width: 110,
-                  numeric: true,
-                  sortKey: (p) => p.priceRetail,
-                  cell: (context, p) =>
-                      Text(fmtDA(p.priceRetail), style: T.monoBody),
-                ),
-                if (_viewCost)
-                  ColumnSpec(
-                    label: 'Marge',
-                    width: 75,
-                    numeric: true,
-                    sortKey: (p) => _marginOf(p) ?? -999999,
-                    cell: (context, p) {
-                      final m = _marginOf(p);
-                      return Text(
-                          m == null
-                              ? '—'
-                              : '${(m / 100).toStringAsFixed(1).replaceAll('.', ',')}%',
-                          style: T.monoSmall.copyWith(
-                              color: m != null && m < 0
-                                  ? T.dangerDark
-                                  : T.mintDark));
-                    },
-                  ),
-                ColumnSpec(
-                  label: 'Alertes',
-                  width: 86,
-                  sortKey: (p) =>
-                      (_stockOf(p) <= 0 ? 0 : 1) * 100 +
-                      (_expiringSoon.contains(p.id) ? 0 : 10),
-                  cell: (context, p) {
-                    final icons = <Widget>[];
-                    final s = _stockOf(p);
-                    if (s <= 0) {
-                      icons.add(const Tooltip(
-                          message: 'Rupture',
-                          child: Icon(Icons.remove_shopping_cart_outlined,
-                              size: 14, color: T.dangerDark)));
-                    } else if (p.minStockMilli > 0 && s < p.minStockMilli) {
-                      icons.add(const Tooltip(
-                          message: 'Sous le minimum',
-                          child: Icon(Icons.trending_down_rounded,
-                              size: 14, color: T.warnDark)));
-                    }
-                    if (_expiringSoon.contains(p.id)) {
-                      icons.add(const Tooltip(
-                          message: 'Péremption < 90 j',
-                          child: Icon(Icons.hourglass_bottom_rounded,
-                              size: 14, color: T.warnDark)));
-                    }
-                    if (_hasVariantPool(p)) {
-                      icons.add(const Tooltip(
-                          message: 'Stock à ventiler entre les déclinaisons',
-                          child: Icon(Icons.call_split_rounded,
-                              size: 14, color: T.warnDark)));
-                    }
-                    return Row(children: [
-                      for (final w in icons)
-                        Padding(
-                            padding:
-                                const EdgeInsetsDirectional.only(end: 4),
-                            child: w),
-                    ]);
-                  },
-                ),
-              ],
+              columns: _columns(parents),
             ),
           ),
         ],
@@ -614,12 +1060,218 @@ class _ProductsScreenState extends State<ProductsScreen> {
   }
 }
 
+// ---------------- Dialogues des actions groupées ----------------
+
+class _PickCategoryDialog extends StatefulWidget {
+  const _PickCategoryDialog({required this.cats, required this.count});
+  final List<Category> cats;
+  final int count;
+
+  @override
+  State<_PickCategoryDialog> createState() => _PickCategoryDialogState();
+}
+
+class _PickCategoryDialogState extends State<_PickCategoryDialog> {
+  String? _id;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: T.surface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(T.rCard)),
+      title: Text('Changer de catégorie', style: T.h2),
+      content: SizedBox(
+        width: 340,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('${widget.count} produit(s) sélectionné(s)', style: T.bodyMuted),
+            const SizedBox(height: 10),
+            DropdownButton<String?>(
+              isExpanded: true,
+              value: _id,
+              items: [
+                const DropdownMenuItem<String?>(
+                    value: null, child: Text('Sans catégorie')),
+                for (final c in widget.cats)
+                  DropdownMenuItem<String?>(value: c.id, child: Text(c.name)),
+              ],
+              onChanged: (v) => setState(() => _id = v),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Annuler')),
+        PrimaryButton(
+            label: 'Appliquer',
+            onPressed: () => Navigator.of(context).pop((_id,))),
+      ],
+    );
+  }
+}
+
+class _PickVatDialog extends StatefulWidget {
+  const _PickVatDialog({required this.count});
+  final int count;
+
+  @override
+  State<_PickVatDialog> createState() => _PickVatDialogState();
+}
+
+class _PickVatDialogState extends State<_PickVatDialog> {
+  late int _vat = Features.instance.defaultVat;
+
+  @override
+  Widget build(BuildContext context) {
+    final vats = {1900, 900, 0, Features.instance.defaultVat}.toList();
+    return AlertDialog(
+      backgroundColor: T.surface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(T.rCard)),
+      title: Text('Changer la TVA', style: T.h2),
+      content: SizedBox(
+        width: 340,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+                '${widget.count} produit(s). Le prix de vente TTC ne change pas ; le HT est recalculé.',
+                style: T.bodyMuted),
+            const SizedBox(height: 12),
+            Wrap(spacing: 6, children: [
+              for (final v in vats)
+                ChoiceChip(
+                  label: Text('${v ~/ 100} %'),
+                  selected: _vat == v,
+                  selectedColor: T.mintTint,
+                  showCheckmark: false,
+                  onSelected: (_) => setState(() => _vat = v),
+                ),
+            ]),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Annuler')),
+        PrimaryButton(
+            label: 'Appliquer', onPressed: () => Navigator.of(context).pop(_vat)),
+      ],
+    );
+  }
+}
+
+class _PromoDialog extends StatefulWidget {
+  const _PromoDialog({required this.count});
+  final int count;
+
+  @override
+  State<_PromoDialog> createState() => _PromoDialogState();
+}
+
+class _PromoDialogState extends State<_PromoDialog> {
+  final _price = TextEditingController();
+  String? _start;
+  String? _end;
+  String? _error;
+
+  @override
+  void dispose() {
+    _price.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pick(bool start) async {
+    final d = await showDatePicker(
+      context: context,
+      initialDate: DateTime.tryParse((start ? _start : _end) ?? '') ?? DateTime.now(),
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (d == null) return;
+    final iso =
+        '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+    setState(() => start ? _start = iso : _end = iso);
+  }
+
+  void _ok() {
+    final p = parseDA(_price.text);
+    if (p == null || p <= 0) {
+      setState(() => _error = 'Saisissez le prix promo TTC.');
+      return;
+    }
+    if (_start != null && _end != null && _end!.compareTo(_start!) < 0) {
+      setState(() => _error = 'La fin précède le début.');
+      return;
+    }
+    Navigator.of(context)
+        .pop({'promo_price': p, 'promo_start': _start, 'promo_end': _end});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: T.surface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(T.rCard)),
+      title: Text('Définir une promotion', style: T.h2),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('${widget.count} produit(s) — même prix promo pour tous.',
+                style: T.bodyMuted),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _price,
+              autofocus: true,
+              style: T.monoBody,
+              decoration: InputDecoration(
+                  labelText: 'Prix promo TTC (DA)', errorText: _error),
+              onSubmitted: (_) => _ok(),
+            ),
+            const SizedBox(height: 12),
+            Row(children: [
+              Expanded(
+                child: OutlinedButton(
+                    onPressed: () => _pick(true),
+                    child: Text('Du ${_start ?? '—'}')),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton(
+                    onPressed: () => _pick(false),
+                    child: Text('Au ${_end ?? '—'}')),
+              ),
+            ]),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Annuler')),
+        PrimaryButton(label: 'Appliquer', onPressed: _ok),
+      ],
+    );
+  }
+}
+
+/// « Création rapide » : le formulaire court d'origine (modification et
+/// création complète passent par la page produit).
 class _ProductFormDialog extends StatefulWidget {
-  const _ProductFormDialog(
-      {required this.api, this.existing, this.showCost = true});
+  const _ProductFormDialog({required this.api, this.showCost = true});
   final ApiClient api;
-  final Product? existing;
   final bool showCost;
+
+  /// Toujours une création ici.
+  Product? get existing => null;
 
   @override
   State<_ProductFormDialog> createState() => _ProductFormDialogState();
@@ -1597,40 +2249,6 @@ class _ProductFormDialogState extends State<_ProductFormDialog> {
   }
 }
 
-class _CatFilterChip extends StatelessWidget {
-  const _CatFilterChip(
-      {required this.label, required this.selected, required this.onTap});
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsetsDirectional.only(end: 6),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(999),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: selected ? T.ink : T.surface,
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: selected ? T.ink : T.border),
-          ),
-          child: Text(label,
-              style: TextStyle(
-                fontFamily: T.sans,
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: selected ? Colors.white : T.muted,
-              )),
-        ),
-      ),
-    );
-  }
-}
-
 /// Gestion des catégories (rayons) : ajouter, renommer, supprimer.
 class _CategoriesDialog extends StatefulWidget {
   const _CategoriesDialog({required this.api});
@@ -2052,34 +2670,6 @@ class _Field extends StatelessWidget {
       ),
     );
   }
-}
-
-
-/// Sentinelle : distinguer « rien choisi » de « effacer le filtre ».
-const _kNoPick = '\u0000nopick';
-
-Future<String?> _pickFromList(
-    BuildContext context, String title, List<String> options) async {
-  final v = await showDialog<String>(
-    context: context,
-    builder: (context) => SimpleDialog(
-      backgroundColor: T.surface,
-      title: Text(title, style: T.h2),
-      children: [
-        SimpleDialogOption(
-          onPressed: () => Navigator.pop(context, ''),
-          child: Text('— tous —', style: T.bodyMuted),
-        ),
-        for (final o in options)
-          SimpleDialogOption(
-            onPressed: () => Navigator.pop(context, o),
-            child: Text(o, style: T.body),
-          ),
-      ],
-    ),
-  );
-  if (v == null) return _kNoPick;
-  return v.isEmpty ? null : v;
 }
 
 /// Une boîte pour un conditionnement : nom, facteur, code-barres du pack.

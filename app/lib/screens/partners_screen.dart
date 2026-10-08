@@ -5,10 +5,15 @@ import 'package:flutter/material.dart';
 import '../api/client.dart';
 import '../api/models.dart';
 import '../theme/tokens.dart';
-import '../util/export.dart';
+import '../util/feedback.dart';
+import '../util/prefs.dart';
 import '../widgets/data_table.dart';
-import '../widgets/doc_list.dart' show paymentLabels;
+import '../widgets/doc_editor.dart';
+import '../widgets/doc_list.dart' show paymentLabels, showDocDetailDialog;
+import '../widgets/list_toolbar.dart';
 import '../widgets/ui.dart';
+
+const _prefs = 'partners';
 
 class PartnersScreen extends StatefulWidget {
   const PartnersScreen({super.key, required this.api});
@@ -25,10 +30,14 @@ class _PartnersScreenState extends State<PartnersScreen> {
   bool _onlyDebtors = false;
   List<Partner> _items = const [];
   bool _loading = true;
+  String? _error;
 
   @override
   void initState() {
     super.initState();
+    final k = UiPrefs.instance.get<String>(_prefs, 'kind');
+    _kind = k == 'customer' || k == 'supplier' ? k : null;
+    _onlyDebtors = UiPrefs.instance.get<bool>(_prefs, 'with_balance') ?? false;
     _load();
   }
 
@@ -40,7 +49,10 @@ class _PartnersScreenState extends State<PartnersScreen> {
   }
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final items = await widget.api
           .partners(q: _searchCtrl.text.trim(), kind: _kind, limit: 500);
@@ -50,9 +62,24 @@ class _PartnersScreenState extends State<PartnersScreen> {
           _loading = false;
         });
       }
-    } catch (_) {
-      if (mounted) setState(() => _loading = false);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = 'Impossible de charger les partenaires : $e';
+        });
+      }
     }
+  }
+
+  void _setKind(String? k, {bool debtors = false}) {
+    setState(() {
+      _kind = k;
+      _onlyDebtors = debtors;
+    });
+    UiPrefs.instance.set(_prefs, 'kind', k);
+    UiPrefs.instance.set(_prefs, 'with_balance', debtors);
+    _load();
   }
 
   List<Partner> get _visible =>
@@ -82,142 +109,113 @@ class _PartnersScreenState extends State<PartnersScreen> {
     _load();
   }
 
-  Future<void> _export(List<Partner> rows) async {
-    final path = await exportCsv(
-      baseName: 'partenaires',
-      headers: [
-        'Nom',
-        'Type',
-        'Téléphone',
-        'Adresse',
-        'NIF',
-        'NIS',
-        'RC',
-        'AI',
-        'Solde (DA)'
-      ],
-      rows: [
-        for (final p in rows)
-          [
-            p.name,
-            p.kind,
-            p.phone ?? '',
-            p.address ?? '',
-            p.nif ?? '',
-            p.nis ?? '',
-            p.rc ?? '',
-            p.ai ?? '',
-            editDA(p.balance),
-          ]
-      ],
+  Future<void> _openStatement(Partner p) async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _StatementDialog(api: widget.api, partner: p),
     );
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        backgroundColor: T.ink,
-        behavior: SnackBarBehavior.floating,
-        content: Text('Exporté : $path',
-            style: const TextStyle(
-                fontFamily: T.mono, fontSize: 12, color: Colors.white)),
-      ));
-    }
+    _load();
   }
+
+  Future<void> _newDoc(Partner p, DocEditorConfig cfg) async {
+    final changed = await Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) =>
+          DocEditorScreen(api: widget.api, config: cfg, initialPartner: p),
+    ));
+    if (changed == true) _load();
+  }
+
+  List<RowAction<Partner>> _rowMenu(Partner p) => [
+        RowAction('Modifier', Icons.edit_outlined, (p) => _openForm(existing: p)),
+        RowAction(p.kind == 'supplier' ? 'Régler' : 'Encaisser',
+            Icons.payments_outlined, _openPayment),
+        RowAction('Relevé (factures ouvertes)', Icons.receipt_long_outlined,
+            _openStatement),
+        if (p.kind != 'supplier')
+          RowAction('Échéancier', Icons.event_repeat_rounded, _openInstallments),
+        if (p.kind != 'supplier')
+          RowAction('Nouvelle facture', Icons.note_add_outlined,
+              (p) => _newDoc(p, saleInvoiceConfig)),
+        if (p.kind != 'customer')
+          RowAction('Nouvelle réception', Icons.move_to_inbox_outlined,
+              (p) => _newDoc(p, purchaseReceiptConfig)),
+      ];
+
+  String _kindLabel(String k) => switch (k) {
+        'customer' => 'client',
+        'supplier' => 'fournisseur',
+        _ => 'mixte',
+      };
 
   @override
   Widget build(BuildContext context) {
+    final searching = _searchCtrl.text.trim().isNotEmpty;
     return Padding(
       padding: const EdgeInsets.all(24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [
-            const Expanded(child: Text('Partenaires', style: T.h1)),
-            SizedBox(
-              width: 190,
-              child: PrimaryButton(
-                label: 'Nouveau partenaire',
-                onPressed: () => _openForm(),
-              ),
-            ),
-          ]),
+          PageHeader(
+            title: 'Partenaires',
+            primaryLabel: 'Nouveau partenaire',
+            primaryIcon: Icons.person_add_alt_1_outlined,
+            onPrimary: () => _openForm(),
+          ),
           const SizedBox(height: 16),
-          Row(children: [
-            for (final (label, value) in [
-              ('Tous', null),
-              ('Clients', 'customer'),
-              ('Fournisseurs', 'supplier')
-            ])
-              Padding(
-                padding: const EdgeInsetsDirectional.only(end: 6),
-                child: InkWell(
-                  onTap: () {
-                    setState(() => _kind = value);
-                    _load();
-                  },
-                  borderRadius: BorderRadius.circular(999),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 13, vertical: 7),
-                    decoration: BoxDecoration(
-                      color: _kind == value ? T.ink : T.surface,
-                      borderRadius: BorderRadius.circular(999),
-                      border:
-                          Border.all(color: _kind == value ? T.ink : T.border),
-                    ),
-                    child: Text(label,
-                        style: TextStyle(
-                          fontFamily: T.sans,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: _kind == value ? Colors.white : T.muted,
-                        )),
-                  ),
-                ),
-              ),
-            Padding(
-              padding: const EdgeInsetsDirectional.only(end: 6),
-              child: InkWell(
-                onTap: () => setState(() => _onlyDebtors = !_onlyDebtors),
-                borderRadius: BorderRadius.circular(999),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 13, vertical: 7),
-                  decoration: BoxDecoration(
-                    color: _onlyDebtors ? T.warnTint : T.surface,
-                    borderRadius: BorderRadius.circular(999),
-                    border: Border.all(
-                        color: _onlyDebtors ? T.warn : T.border),
-                  ),
-                  child: Text('Avec solde',
-                      style: TextStyle(
-                        fontFamily: T.sans,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: _onlyDebtors ? T.warnDark : T.muted,
-                      )),
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: SearchField(
-                controller: _searchCtrl,
-                hint: 'Rechercher par nom ou téléphone…',
-                onChanged: (_) {
-                  _debounce?.cancel();
-                  _debounce = Timer(const Duration(milliseconds: 250), _load);
-                },
-              ),
-            ),
-          ]),
+          ListToolbar(
+            search: _searchCtrl,
+            searchHint: 'Rechercher par nom ou téléphone…',
+            onSearchChanged: (_) {
+              _debounce?.cancel();
+              _debounce = Timer(const Duration(milliseconds: 250), _load);
+            },
+            quickFilters: [
+              FilterPill(
+                  label: 'Tous',
+                  active: _kind == null && !_onlyDebtors,
+                  onTap: () => _setKind(null)),
+              FilterPill(
+                  label: 'Clients',
+                  active: _kind == 'customer',
+                  onTap: () => _setKind('customer', debtors: _onlyDebtors)),
+              FilterPill(
+                  label: 'Fournisseurs',
+                  active: _kind == 'supplier',
+                  onTap: () => _setKind('supplier', debtors: _onlyDebtors)),
+              FilterPill(
+                  label: 'Avec solde',
+                  icon: Icons.account_balance_wallet_outlined,
+                  active: _onlyDebtors,
+                  onTap: () => _setKind(_kind, debtors: !_onlyDebtors)),
+            ],
+          ),
           const SizedBox(height: 14),
           Expanded(
             child: DataListView<Partner>(
               items: _visible,
+              prefsKey: _prefs,
+              loading: _loading,
+              error: _error,
+              onRetry: _load,
+              rowId: (p) => p.id,
+              rowMenu: _rowMenu,
               onTap: (p) => _openForm(existing: p),
-              onExport: _export,
+              exportTitle: 'Partenaires',
+              exportBaseName: 'partenaires',
               empty: EmptyState(
-                  icon: Icons.people_alt_outlined,
-                  text: _loading ? 'Chargement…' : 'Aucun partenaire'),
+                icon: Icons.people_alt_outlined,
+                text: searching || _kind != null || _onlyDebtors
+                    ? 'Aucun partenaire ne correspond.'
+                    : 'Aucun partenaire pour l’instant.',
+                actions: [
+                  if (searching || _kind != null || _onlyDebtors)
+                    ('Effacer les filtres', () {
+                      _searchCtrl.clear();
+                      _setKind(null);
+                    }),
+                  ('Nouveau partenaire', () => _openForm()),
+                ],
+              ),
               aggregates: (rows) {
                 final owedToUs = rows
                     .where((p) => p.balance > 0)
@@ -232,31 +230,69 @@ class _PartnersScreenState extends State<PartnersScreen> {
               },
               columns: [
                 ColumnSpec(
+                  id: 'name',
                   label: 'Nom',
                   flex: 4,
+                  hideable: false,
                   sortKey: (p) => p.name.toLowerCase(),
+                  exportValue: (p) => p.name,
                   cell: (context, p) => Text(p.name,
                       style: T.body,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis),
                 ),
                 ColumnSpec(
+                  id: 'phone',
                   label: 'Téléphone',
                   flex: 2,
+                  sortKey: (p) => p.phone ?? '',
+                  exportValue: (p) => p.phone ?? '',
                   cell: (context, p) =>
                       Text(p.phone ?? '—', style: T.monoSmall),
                 ),
                 ColumnSpec(
+                  id: 'kind',
                   label: 'Type',
                   width: 110,
                   sortKey: (p) => p.kind,
+                  exportValue: (p) => _kindLabel(p.kind),
                   cell: (context, p) => _KindChip(kind: p.kind),
                 ),
                 ColumnSpec(
+                  id: 'address',
+                  label: 'Adresse',
+                  flex: 3,
+                  visibleByDefault: false,
+                  sortKey: (p) => (p.address ?? '').toLowerCase(),
+                  exportValue: (p) => p.address ?? '',
+                  cell: (context, p) => Text(p.address ?? '—',
+                      style: T.small,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis),
+                ),
+                ColumnSpec(
+                  id: 'nif',
+                  label: 'NIF',
+                  width: 150,
+                  visibleByDefault: false,
+                  exportValue: (p) => p.nif ?? '',
+                  cell: (context, p) => Text(p.nif ?? '—', style: T.monoSmall),
+                ),
+                ColumnSpec(
+                  id: 'rc',
+                  label: 'RC',
+                  width: 120,
+                  visibleByDefault: false,
+                  exportValue: (p) => p.rc ?? '',
+                  cell: (context, p) => Text(p.rc ?? '—', style: T.monoSmall),
+                ),
+                ColumnSpec(
+                  id: 'balance',
                   label: 'Solde',
                   width: 125,
                   numeric: true,
                   sortKey: (p) => p.balance,
+                  exportValue: (p) => p.balance / 100,
                   cell: (context, p) => Text(fmtDA(p.balance),
                       style: T.monoBody.copyWith(
                         color: p.balance > 0
@@ -266,37 +302,6 @@ class _PartnersScreenState extends State<PartnersScreen> {
                                 : T.faint,
                         fontWeight: FontWeight.w600,
                       )),
-                ),
-                ColumnSpec(
-                  label: '',
-                  width: 150,
-                  numeric: true,
-                  cell: (context, p) => Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      if (p.kind != 'supplier')
-                        Tooltip(
-                          message: 'Facilité de paiement (échéances)',
-                          child: InkWell(
-                            onTap: () => _openInstallments(p),
-                            borderRadius: BorderRadius.circular(6),
-                            child: const Padding(
-                              padding: EdgeInsets.all(4),
-                              child: Icon(Icons.event_repeat_rounded,
-                                  size: 15, color: T.muted),
-                            ),
-                          ),
-                        ),
-                      TextButton(
-                        onPressed: () => _openPayment(p),
-                        child: Text(
-                            p.kind == 'supplier' ? 'Régler' : 'Encaisser',
-                            style: T.small.copyWith(
-                                color: T.mintDark,
-                                fontWeight: FontWeight.w700)),
-                      ),
-                    ],
-                  ),
                 ),
               ],
             ),
@@ -331,6 +336,189 @@ class _KindChip extends StatelessWidget {
   }
 }
 
+// ---------------- Relevé (factures ouvertes, FIFO) ----------------
+
+class _StatementDialog extends StatefulWidget {
+  const _StatementDialog({required this.api, required this.partner});
+  final ApiClient api;
+  final Partner partner;
+
+  @override
+  State<_StatementDialog> createState() => _StatementDialogState();
+}
+
+class _StatementDialogState extends State<_StatementDialog> {
+  PartnerOpenItems? _data;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final d = await widget.api.partnerOpenItems(widget.partner.id);
+      if (mounted) setState(() => _data = d);
+    } catch (e) {
+      if (mounted) setState(() => _error = '$e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final d = _data;
+    return Dialog(
+      backgroundColor: T.surface,
+      shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(T.rCard)),
+      child: SizedBox(
+        width: 640,
+        height: 520,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(children: [
+                Expanded(
+                  child: Text('Relevé — ${widget.partner.name}',
+                      style: T.h2, overflow: TextOverflow.ellipsis),
+                ),
+                IconButton(
+                  tooltip: 'Fermer',
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.close, size: 18, color: T.muted),
+                ),
+              ]),
+              Text(
+                  'Factures encore ouvertes : règlements et avoirs imputés aux '
+                  'plus anciennes d’abord.',
+                  style: T.small),
+              const SizedBox(height: 12),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 8),
+                child: Row(children: [
+                  Expanded(flex: 3, child: MicroLabel('Document')),
+                  SizedBox(width: 90, child: MicroLabel('Date')),
+                  SizedBox(width: 90, child: MicroLabel('Échéance')),
+                  SizedBox(
+                      width: 110,
+                      child: Align(
+                          alignment: AlignmentDirectional.centerEnd,
+                          child: MicroLabel('Total'))),
+                  SizedBox(
+                      width: 110,
+                      child: Align(
+                          alignment: AlignmentDirectional.centerEnd,
+                          child: MicroLabel('Reste'))),
+                  SizedBox(
+                      width: 60,
+                      child: Align(
+                          alignment: AlignmentDirectional.centerEnd,
+                          child: MicroLabel('Âge'))),
+                ]),
+              ),
+              const Divider(),
+              Expanded(
+                child: d == null
+                    ? Center(
+                        child: _error != null
+                            ? Text(_error!, style: T.bodyMuted)
+                            : const CircularProgressIndicator(color: T.mint))
+                    : d.items.isEmpty
+                        ? const EmptyState(
+                            icon: Icons.check_circle_outline_rounded,
+                            text: 'Aucune facture ouverte : compte à jour.')
+                        : ListView.separated(
+                            itemCount: d.items.length,
+                            separatorBuilder: (_, _) => const Divider(),
+                            itemBuilder: (context, i) {
+                              final it = d.items[i];
+                              final c = it.overdue ? T.warnDark : T.ink;
+                              return InkWell(
+                                onTap: it.documentId.isEmpty
+                                    ? null
+                                    : () async {
+                                        final changed =
+                                            await showDocDetailDialog(context,
+                                                widget.api, it.documentId);
+                                        if (changed == true) _load();
+                                      },
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 9),
+                                  child: Row(children: [
+                                    Expanded(
+                                        flex: 3,
+                                        child: Text(
+                                            it.number.isEmpty ? '—' : it.number,
+                                            style: T.monoBody
+                                                .copyWith(fontSize: 12))),
+                                    SizedBox(
+                                        width: 90,
+                                        child:
+                                            Text(it.docDate, style: T.monoSmall)),
+                                    SizedBox(
+                                        width: 90,
+                                        child: Text(
+                                            it.dueDate.isEmpty ? '—' : it.dueDate,
+                                            style: T.monoSmall.copyWith(
+                                                color: it.overdue
+                                                    ? T.warnDark
+                                                    : T.muted,
+                                                fontWeight: it.overdue
+                                                    ? FontWeight.w800
+                                                    : FontWeight.w500))),
+                                    SizedBox(
+                                        width: 110,
+                                        child: Text(fmtDA(it.total),
+                                            textAlign: TextAlign.end,
+                                            style: T.monoSmall)),
+                                    SizedBox(
+                                        width: 110,
+                                        child: Text(fmtDA(it.outstanding),
+                                            textAlign: TextAlign.end,
+                                            style: T.monoBody.copyWith(
+                                                color: c,
+                                                fontWeight: FontWeight.w700))),
+                                    SizedBox(
+                                        width: 60,
+                                        child: Text('${it.ageDays} j',
+                                            textAlign: TextAlign.end,
+                                            style: T.monoSmall
+                                                .copyWith(color: c))),
+                                  ]),
+                                ),
+                              );
+                            },
+                          ),
+              ),
+              if (d != null) ...[
+                const Divider(),
+                const SizedBox(height: 8),
+                Row(children: [
+                  if (d.unallocatedCredit > 0)
+                    MintChip('Avoir non affecté ${fmtDA(d.unallocatedCredit)}',
+                        color: T.mintTint, fg: T.mintDark),
+                  const Spacer(),
+                  const MicroLabel('Total ouvert'),
+                  const SizedBox(width: 10),
+                  Text(fmtDA(d.totalOpen),
+                      style: T.monoBig.copyWith(
+                          fontSize: 18,
+                          color: d.totalOpen > 0 ? T.warnDark : T.ink)),
+                ]),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 // ---------------- Partner form ----------------
 
 class _PartnerFormDialog extends StatefulWidget {
@@ -355,7 +543,7 @@ class _PartnerFormDialogState extends State<_PartnerFormDialog> {
   late String _kind = widget.existing?.kind ?? 'customer';
   late String _priceLevel = widget.existing?.priceLevel ?? 'retail';
   bool _busy = false;
-  String? _error;
+  Map<String, String> _err = const {};
 
   @override
   void dispose() {
@@ -366,14 +554,15 @@ class _PartnerFormDialogState extends State<_PartnerFormDialog> {
   }
 
   Future<void> _save() async {
-    if (_name.text.trim().isEmpty) {
-      setState(() => _error = 'Le nom est obligatoire.');
-      return;
+    final e = partnerFieldErrors(
+        name: _name.text, phone: _phone.text, nif: _nif.text);
+    final nis = _nis.text.replaceAll(' ', '');
+    if (nis.isNotEmpty && !RegExp(r'^\d{12,20}$').hasMatch(nis)) {
+      e['nis'] = 'Le NIS ne contient que des chiffres (12 à 20).';
     }
-    setState(() {
-      _busy = true;
-      _error = null;
-    });
+    setState(() => _err = e);
+    if (e.isNotEmpty) return;
+    setState(() => _busy = true);
     String? v(TextEditingController c) =>
         c.text.trim().isEmpty ? null : c.text.trim();
     try {
@@ -389,9 +578,19 @@ class _PartnerFormDialogState extends State<_PartnerFormDialog> {
         'notes': v(_notes),
         'price_level': _priceLevel,
       }, id: widget.existing?.id);
-      if (mounted) Navigator.of(context).pop(true);
-    } on ApiException catch (e) {
-      setState(() => _error = e.message);
+      if (!mounted) return;
+      showToast(context,
+          widget.existing == null ? 'Partenaire créé' : 'Partenaire enregistré');
+      Navigator.of(context).pop(true);
+    } on ApiException catch (ex) {
+      final m = ex.message.toLowerCase();
+      setState(() => _err = {
+            m.contains('name')
+                ? 'name'
+                : m.contains('nif')
+                    ? 'nif'
+                    : 'form': ex.message
+          });
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -443,18 +642,31 @@ class _PartnerFormDialogState extends State<_PartnerFormDialog> {
                   ),
               ]),
               const SizedBox(height: 12),
-              _FormField(label: 'Nom / Raison sociale', controller: _name),
-              Row(children: [
+              _FormField(
+                  label: 'Nom / Raison sociale *',
+                  controller: _name,
+                  error: _err['name'],
+                  autofocus: widget.existing == null,
+                  onSubmitted: _save),
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Expanded(
-                    child: _FormField(label: 'Téléphone', controller: _phone)),
+                    child: _FormField(
+                        label: 'Téléphone',
+                        controller: _phone,
+                        error: _err['phone'],
+                        onSubmitted: _save)),
                 const SizedBox(width: 10),
                 Expanded(
                     child: _FormField(label: 'Adresse', controller: _address)),
               ]),
-              Row(children: [
-                Expanded(child: _FormField(label: 'NIF', controller: _nif)),
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(
+                    child: _FormField(
+                        label: 'NIF', controller: _nif, error: _err['nif'])),
                 const SizedBox(width: 10),
-                Expanded(child: _FormField(label: 'NIS', controller: _nis)),
+                Expanded(
+                    child: _FormField(
+                        label: 'NIS', controller: _nis, error: _err['nis'])),
               ]),
               Row(children: [
                 Expanded(child: _FormField(label: 'RC', controller: _rc)),
@@ -498,10 +710,7 @@ class _PartnerFormDialogState extends State<_PartnerFormDialog> {
                 ]),
                 const SizedBox(height: 6),
               ],
-              if (_error != null) ...[
-                const SizedBox(height: 6),
-                Text(_error!, style: T.small.copyWith(color: T.dangerDark)),
-              ],
+              if (_err['form'] != null) FieldError(_err['form']),
               const SizedBox(height: 16),
               Row(children: [
                 const Spacer(),
@@ -528,9 +737,18 @@ class _PartnerFormDialogState extends State<_PartnerFormDialog> {
 }
 
 class _FormField extends StatelessWidget {
-  const _FormField({required this.label, required this.controller});
+  const _FormField({
+    required this.label,
+    required this.controller,
+    this.error,
+    this.autofocus = false,
+    this.onSubmitted,
+  });
   final String label;
   final TextEditingController controller;
+  final String? error;
+  final bool autofocus;
+  final VoidCallback? onSubmitted;
 
   @override
   Widget build(BuildContext context) {
@@ -546,11 +764,15 @@ class _FormField extends StatelessWidget {
             decoration: BoxDecoration(
               color: T.bg,
               borderRadius: BorderRadius.circular(T.rInner),
-              border: Border.all(color: T.border),
+              border: Border.all(
+                  color: error != null ? T.danger : T.border,
+                  width: error != null ? 1.4 : 1),
             ),
             child: TextField(
               controller: controller,
+              autofocus: autofocus,
               style: T.body,
+              onSubmitted: onSubmitted == null ? null : (_) => onSubmitted!(),
               decoration: const InputDecoration(
                 isDense: true,
                 border: InputBorder.none,
@@ -559,6 +781,7 @@ class _FormField extends StatelessWidget {
               ),
             ),
           ),
+          FieldError(error),
         ],
       ),
     );

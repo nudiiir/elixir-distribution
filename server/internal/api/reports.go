@@ -136,12 +136,43 @@ func (s *Server) reportBreakdown(w http.ResponseWriter, r *http.Request) {
 
 	items := []breakdownRow{}
 	switch by {
-	case "day", "hour", "user", "payment":
+	case "payment":
+		// A mixed payment counts each document_payments row under its method:
+		// HT pro rata of the row in the document total, timbre taken off the
+		// cash row only (the timbre is not revenue).
+		rows, err := s.db.Query(`SELECT k, SUM(cnt), SUM(ht), SUM(ttc) FROM (
+				SELECT COALESCE(d.payment_method, 'autre') AS k,
+					CASE WHEN d.doc_type='SALE_CREDIT_NOTE' THEN 0 ELSE 1 END AS cnt,
+					`+sgn+` * d.total_ht AS ht,
+					`+sgn+` * (d.total_ttc - d.timbre) AS ttc
+				FROM documents d WHERE `+salesWhere+`
+				  AND NOT EXISTS (SELECT 1 FROM document_payments p WHERE p.document_id = d.id)
+				UNION ALL
+				SELECT p.method,
+					CASE WHEN d.doc_type='SALE_CREDIT_NOTE' THEN 0 ELSE 1 END,
+					`+sgn+` * (CASE WHEN d.total_ttc = 0 THEN 0
+						ELSE d.total_ht * p.amount / d.total_ttc END),
+					`+sgn+` * (p.amount - CASE WHEN p.method = 'cash' THEN d.timbre ELSE 0 END)
+				FROM document_payments p JOIN documents d ON d.id = p.document_id
+				WHERE `+salesWhere+`
+			) GROUP BY k ORDER BY k`, from, to, from, to)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var x breakdownRow
+			if rows.Scan(&x.Key, &x.Count, &x.TotalHT, &x.TotalTTC) == nil {
+				x.Label = x.Key
+				items = append(items, x)
+			}
+		}
+	case "day", "hour", "user":
 		key := map[string]string{
 			"day":     "d.doc_date",
 			"hour":    "strftime('%H', datetime(d.posted_at, 'localtime'))",
 			"user":    "COALESCE(u.full_name, u.username, '—')",
-			"payment": "COALESCE(d.payment_method, 'autre')",
 		}[by]
 		join := ""
 		if by == "user" {

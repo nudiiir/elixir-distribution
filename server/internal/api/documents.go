@@ -39,41 +39,48 @@ type DocumentLine struct {
 }
 
 type Document struct {
-	ID              string         `json:"id"`
-	DocType         string         `json:"doc_type"`
-	Number          *string        `json:"number"`
-	Status          string         `json:"status"`
-	DocDate         string         `json:"doc_date"`
-	PartnerID       *string        `json:"partner_id"`
-	WarehouseID     *string        `json:"warehouse_id"`
-	DestWarehouseID *string        `json:"dest_warehouse_id"`
-	RefDocumentID   *string        `json:"ref_document_id"`
-	TotalHT         int64          `json:"total_ht"`
-	TotalVAT        int64          `json:"total_vat"`
-	TotalDiscount   int64          `json:"total_discount"`
-	Timbre          int64          `json:"timbre"`
-	TotalTTC        int64          `json:"total_ttc"`
-	Amount          int64          `json:"amount"`
-	PaymentMethod   *string        `json:"payment_method"`
-	CaisseSessionID *string        `json:"caisse_session_id"`
-	Notes           *string        `json:"notes"`
-	PostedAt        *string        `json:"posted_at"`
-	CreatedAt       string         `json:"created_at"`
-	UpdatedAt       string         `json:"updated_at"`
-	SupplierRef     *string        `json:"supplier_ref"`
-	DueDate         *string        `json:"due_date"`
-	FreightCost     int64          `json:"freight_cost"`
-	Reason          *string        `json:"reason"`
-	OrderStatus     *string        `json:"order_status"`
-	AcceptShort     bool           `json:"accept_short_dated"`
-	AcceptOver      bool           `json:"accept_over_receipt"`
-	Lines           []DocumentLine `json:"lines,omitempty"`
+	ID              string  `json:"id"`
+	DocType         string  `json:"doc_type"`
+	Number          *string `json:"number"`
+	Status          string  `json:"status"`
+	DocDate         string  `json:"doc_date"`
+	PartnerID       *string `json:"partner_id"`
+	WarehouseID     *string `json:"warehouse_id"`
+	DestWarehouseID *string `json:"dest_warehouse_id"`
+	RefDocumentID   *string `json:"ref_document_id"`
+	TotalHT         int64   `json:"total_ht"`
+	TotalVAT        int64   `json:"total_vat"`
+	TotalDiscount   int64   `json:"total_discount"`
+	Timbre          int64   `json:"timbre"`
+	TotalTTC        int64   `json:"total_ttc"`
+	Amount          int64   `json:"amount"`
+	PaymentMethod   *string `json:"payment_method"`
+	CaisseSessionID *string `json:"caisse_session_id"`
+	Notes           *string `json:"notes"`
+	PostedAt        *string `json:"posted_at"`
+	CreatedAt       string  `json:"created_at"`
+	UpdatedAt       string  `json:"updated_at"`
+	SupplierRef     *string `json:"supplier_ref"`
+	DueDate         *string `json:"due_date"`
+	FreightCost     int64   `json:"freight_cost"`
+	Reason          *string `json:"reason"`
+	OrderStatus     *string `json:"order_status"`
+	AcceptShort     bool    `json:"accept_short_dated"`
+	AcceptOver      bool    `json:"accept_over_receipt"`
+	InternalNotes   *string `json:"internal_notes"`
+	// Règlement dérivé (FIFO sur le compte partenaire) : '' quand le document
+	// ne crée ni créance ni dette.
+	Paid          int64          `json:"paid"`
+	Remaining     int64          `json:"remaining"`
+	PaymentStatus string         `json:"payment_status"`
+	Lines         []DocumentLine `json:"lines,omitempty"`
 }
 
 const docCols = `id, doc_type, number, status, doc_date, partner_id, warehouse_id,
 	dest_warehouse_id, ref_document_id, total_ht, total_vat, total_discount, timbre,
 	total_ttc, amount, payment_method, caisse_session_id, notes, posted_at, created_at, updated_at,
-	supplier_ref, due_date, freight_cost, reason, order_status, accept_short_dated, accept_over_receipt`
+	supplier_ref, due_date, freight_cost, reason, order_status, accept_short_dated, accept_over_receipt,
+	internal_notes`
 
 func scanDocument(row interface{ Scan(...any) error }) (Document, error) {
 	var d Document
@@ -82,7 +89,8 @@ func scanDocument(row interface{ Scan(...any) error }) (Document, error) {
 		&d.WarehouseID, &d.DestWarehouseID, &d.RefDocumentID, &d.TotalHT, &d.TotalVAT,
 		&d.TotalDiscount, &d.Timbre, &d.TotalTTC, &d.Amount, &d.PaymentMethod,
 		&d.CaisseSessionID, &d.Notes, &d.PostedAt, &d.CreatedAt, &d.UpdatedAt,
-		&d.SupplierRef, &d.DueDate, &d.FreightCost, &d.Reason, &d.OrderStatus, &short, &over)
+		&d.SupplierRef, &d.DueDate, &d.FreightCost, &d.Reason, &d.OrderStatus, &short, &over,
+		&d.InternalNotes)
 	d.AcceptShort, d.AcceptOver = short == 1, over == 1
 	return d, err
 }
@@ -104,6 +112,7 @@ type documentInput struct {
 	Reason          *string        `json:"reason"`
 	AcceptShort     bool           `json:"accept_short_dated"`
 	AcceptOver      bool           `json:"accept_over_receipt"`
+	InternalNotes   *string        `json:"internal_notes"`
 	Lines           []DocumentLine `json:"lines"`
 }
 
@@ -129,6 +138,10 @@ func (s *Server) createDocument(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, msg)
 		return
 	}
+	if msg := in.validateTransfer(in.DocType); msg != "" {
+		writeErr(w, http.StatusBadRequest, msg)
+		return
+	}
 	id, now := domain.NewID(), domain.NowISO()
 
 	tx, err := s.db.Begin()
@@ -141,17 +154,21 @@ func (s *Server) createDocument(w http.ResponseWriter, r *http.Request) {
 	if _, err := tx.Exec(`INSERT INTO documents (id, doc_type, status, doc_date, partner_id,
 			warehouse_id, dest_warehouse_id, ref_document_id, amount, payment_method,
 			caisse_session_id, notes, supplier_ref, due_date, freight_cost, reason,
-			accept_short_dated, accept_over_receipt, created_at, updated_at)
-		VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			accept_short_dated, accept_over_receipt, internal_notes, created_at, updated_at)
+		VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, in.DocType, in.DocDate, in.PartnerID, in.WarehouseID, in.DestWarehouseID,
 		in.RefDocumentID, in.Amount, in.PaymentMethod, in.CaisseSessionID, in.Notes,
 		in.SupplierRef, in.DueDate, in.FreightCost, in.Reason,
-		b2i(in.AcceptShort), b2i(in.AcceptOver), now, now); err != nil {
+		b2i(in.AcceptShort), b2i(in.AcceptOver), in.InternalNotes, now, now); err != nil {
 		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}
 	if err := insertLines(tx, id, in.Lines, now); err != nil {
 		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err := draftTotals(tx, id, in.DocType, in.PaymentMethod, in.Lines); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if err := tx.Commit(); err != nil {
@@ -200,17 +217,21 @@ func (s *Server) updateDocument(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, msg)
 		return
 	}
+	if msg := in.validateTransfer(docType); msg != "" {
+		writeErr(w, http.StatusBadRequest, msg)
+		return
+	}
 
 	now := domain.NowISO()
 	if _, err := tx.Exec(`UPDATE documents SET doc_date=?, partner_id=?, warehouse_id=?,
 			dest_warehouse_id=?, ref_document_id=?, amount=?, payment_method=?,
 			caisse_session_id=?, notes=?, supplier_ref=?, due_date=?, freight_cost=?,
-			reason=?, accept_short_dated=?, accept_over_receipt=?, updated_at=?
+			reason=?, accept_short_dated=?, accept_over_receipt=?, internal_notes=?, updated_at=?
 		WHERE id=?`,
 		in.DocDate, in.PartnerID, in.WarehouseID, in.DestWarehouseID, in.RefDocumentID,
 		in.Amount, in.PaymentMethod, in.CaisseSessionID, in.Notes,
 		in.SupplierRef, in.DueDate, in.FreightCost, in.Reason,
-		b2i(in.AcceptShort), b2i(in.AcceptOver), now, id); err != nil {
+		b2i(in.AcceptShort), b2i(in.AcceptOver), in.InternalNotes, now, id); err != nil {
 		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}
@@ -222,11 +243,56 @@ func (s *Server) updateDocument(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}
+	if err := draftTotals(tx, id, docType, in.PaymentMethod, in.Lines); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if err := tx.Commit(); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	s.respondDocument(w, id, http.StatusOK)
+}
+
+// validateTransfer: a transfer moves stock between two DIFFERENT depots and
+// has no partner. The destination itself is enforced at posting.
+func (in *documentInput) validateTransfer(docType string) string {
+	if docType != domain.StockTransfer {
+		return ""
+	}
+	if in.PartnerID != nil && *in.PartnerID != "" {
+		return "un transfert n'a pas de partenaire"
+	}
+	if in.WarehouseID != nil && in.DestWarehouseID != nil && *in.WarehouseID == *in.DestWarehouseID {
+		return "le dépôt de destination doit être différent du dépôt source"
+	}
+	return ""
+}
+
+// draftTotals stores the provisional totals of a draft so lists show its
+// amount before validation. Posting recomputes them authoritatively.
+func draftTotals(tx *sql.Tx, id, docType string, method *string, lines []DocumentLine) error {
+	if docType == domain.PaymentIn || docType == domain.PaymentOut {
+		return nil
+	}
+	var ht, vat, ttc, disc int64
+	for _, l := range lines {
+		h, v, t := domain.LineTotals(l.UnitPrice, l.QtyMilli, l.DiscountPct, l.VatRate)
+		ht, vat, ttc = ht+h, vat+v, ttc+t
+		disc += domain.LineDiscount(l.UnitPrice, l.QtyMilli, l.DiscountPct)
+	}
+	var timbre int64
+	m := ""
+	if method != nil {
+		m = *method
+	}
+	if len(lines) > 0 && domain.TimbreApplies(docType, m) {
+		timbre = domain.Timbre(ttc)
+		ttc += timbre
+	}
+	_, err := tx.Exec(`UPDATE documents SET total_ht=?, total_vat=?, total_discount=?, timbre=?,
+		total_ttc=? WHERE id=?`, ht, vat, disc, timbre, ttc, id)
+	return err
 }
 
 // checkDiscounts refuses sale-side discounts from users without the right.
@@ -276,7 +342,26 @@ func (s *Server) listDocuments(w http.ResponseWriter, r *http.Request) {
 
 	where := "WHERE 1=1"
 	args := []any{}
-	if t := r.URL.Query().Get("type"); t != "" {
+	qp := r.URL.Query()
+	if ts := qp.Get("types"); ts != "" && qp.Get("type") == "" {
+		// Several types in ONE query (a whole Ventes or Achats list).
+		ph := []string{}
+		for _, t := range strings.Split(ts, ",") {
+			t = strings.TrimSpace(t)
+			if t == "" {
+				continue
+			}
+			if !docPermOK(authFrom(r), t) {
+				forbid(w)
+				return
+			}
+			ph = append(ph, "?")
+			args = append(args, t)
+		}
+		if len(ph) > 0 {
+			where += " AND doc_type IN (" + strings.Join(ph, ",") + ")"
+		}
+	} else if t := qp.Get("type"); t != "" {
 		if !docPermOK(authFrom(r), t) {
 			forbid(w)
 			return
@@ -303,6 +388,22 @@ func (s *Server) listDocuments(w http.ResponseWriter, r *http.Request) {
 		where += " AND doc_date <= ?"
 		args = append(args, to)
 	}
+	if pm := qp.Get("payment_method"); pm != "" {
+		where += " AND payment_method = ?"
+		args = append(args, pm)
+	}
+	if q := strings.TrimSpace(qp.Get("q")); q != "" {
+		like := "%" + q + "%"
+		cond := `COALESCE(number,'') LIKE ? OR COALESCE(supplier_ref,'') LIKE ?
+			OR COALESCE(notes,'') LIKE ?
+			OR partner_id IN (SELECT id FROM partners WHERE name LIKE ? OR COALESCE(phone,'') LIKE ?)`
+		args = append(args, like, like, like, like, like)
+		if amt, ok := parseAmountDA(q); ok {
+			cond += ` OR total_ttc = ? OR amount = ?`
+			args = append(args, amt, amt)
+		}
+		where += " AND (" + cond + ")"
+	}
 	args = append(args, limit, offset)
 
 	rows, err := s.db.Query(`SELECT `+docCols+` FROM documents `+where+
@@ -321,7 +422,36 @@ func (s *Server) listDocuments(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, d)
 	}
+	if err := rows.Err(); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	rows.Close()
+	if err := settleDocuments(s.db, items); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// parseAmountDA reads a search term as an amount in DA ("1500", "1 500,50",
+// "1500.5") and returns it in centimes.
+func parseAmountDA(q string) (int64, bool) {
+	t := strings.NewReplacer(" ", "", " ", "", " ", "", "DA", "", "da", "").Replace(q)
+	t = strings.ReplaceAll(t, ",", ".")
+	if t == "" || strings.Count(t, ".") > 1 {
+		return 0, false
+	}
+	for _, c := range t {
+		if (c < '0' || c > '9') && c != '.' {
+			return 0, false
+		}
+	}
+	f, err := strconv.ParseFloat(t, 64)
+	if err != nil {
+		return 0, false
+	}
+	return int64(f*100 + 0.5), true
 }
 
 func (s *Server) getDocument(w http.ResponseWriter, r *http.Request) {
@@ -337,6 +467,10 @@ func (s *Server) respondDocument(w http.ResponseWriter, id string, status int) {
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	one := []Document{d}
+	if err := settleDocuments(s.db, one); err == nil {
+		d = one[0]
 	}
 	rows, err := s.db.Query(`SELECT id, position, product_id, lot_id, description, qty_milli,
 			unit_price, discount_pct, vat_rate, line_ht, line_vat, line_ttc, unit_cost,
@@ -367,10 +501,15 @@ func (s *Server) respondDocument(w http.ResponseWriter, id string, status int) {
 func (s *Server) postDocument(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var docType string
-	if err := s.db.QueryRow(`SELECT doc_type FROM documents WHERE id = ?`, id).
-		Scan(&docType); err == nil {
+	var src, dest sql.NullString
+	if err := s.db.QueryRow(`SELECT doc_type, warehouse_id, dest_warehouse_id FROM documents WHERE id = ?`, id).
+		Scan(&docType, &src, &dest); err == nil {
 		if !docPermOK(authFrom(r), docType) {
 			forbid(w)
+			return
+		}
+		if docType == domain.StockTransfer && src.Valid && dest.Valid && src.String == dest.String {
+			writeErr(w, http.StatusConflict, "le dépôt de destination doit être différent du dépôt source")
 			return
 		}
 	}

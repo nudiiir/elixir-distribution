@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
-import '../theme/tokens.dart';
 import '../widgets/doc_editor.dart';
 import '../widgets/doc_list.dart';
-import '../widgets/ui.dart';
+import '../widgets/list_toolbar.dart';
 import 'sales_screen.dart' show saleEditorFor;
 
 const _purchaseTypes = [
@@ -53,7 +52,10 @@ class _PurchasesScreenState extends State<PurchasesScreen> {
     final changed = await Navigator.of(context).push<bool>(MaterialPageRoute(
       builder: (_) => DocEditorScreen(api: widget.api, config: cfg),
     ));
-    if (changed == true) _listKey.currentState?.refresh();
+    if (changed == true) {
+      _loadPartners();
+      _listKey.currentState?.refresh();
+    }
   }
 
   @override
@@ -63,54 +65,20 @@ class _PurchasesScreenState extends State<PurchasesScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [
-            const Expanded(child: Text('Achats', style: T.h1)),
-            PopupMenuButton<DocEditorConfig>(
-              tooltip: 'Autres documents',
-              color: T.surface,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(T.rInner)),
-              onSelected: _newDoc,
-              itemBuilder: (context) => [
-                PopupMenuItem(
-                    value: purchaseOrderConfig,
-                    child: Text('Bon de commande', style: T.body)),
-                PopupMenuItem(
-                    value: purchaseInvoiceConfig,
-                    child: Text('Facture fournisseur', style: T.body)),
-                PopupMenuItem(
-                    value: purchaseCreditNoteConfig,
-                    child: Text('Avoir fournisseur', style: T.body)),
-              ],
-              child: Container(
-                height: 40,
-                padding: const EdgeInsets.symmetric(horizontal: 14),
-                decoration: BoxDecoration(
-                  color: T.surface,
-                  borderRadius: BorderRadius.circular(T.rInner),
-                  border: Border.all(color: T.border3),
-                ),
-                child: const Row(children: [
-                  Text('Autres',
-                      style: TextStyle(
-                          fontFamily: T.sans,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: T.muted)),
-                  SizedBox(width: 6),
-                  Icon(Icons.expand_more, size: 16, color: T.faint),
-                ]),
-              ),
-            ),
-            const SizedBox(width: 8),
-            SizedBox(
-              width: 190,
-              child: PrimaryButton(
-                label: 'Nouvelle réception',
-                onPressed: () => _newDoc(purchaseReceiptConfig),
-              ),
-            ),
-          ]),
+          PageHeader(
+            title: 'Achats',
+            primaryLabel: 'Nouvelle réception',
+            primaryIcon: Icons.move_to_inbox_outlined,
+            onPrimary: () => _newDoc(purchaseReceiptConfig),
+            more: [
+              MenuEntry('Bon de commande', Icons.shopping_cart_outlined,
+                  () => _newDoc(purchaseOrderConfig)),
+              MenuEntry('Facture fournisseur', Icons.receipt_outlined,
+                  () => _newDoc(purchaseInvoiceConfig)),
+              MenuEntry('Avoir fournisseur', Icons.assignment_return_outlined,
+                  () => _newDoc(purchaseCreditNoteConfig)),
+            ],
+          ),
           const SizedBox(height: 16),
           Expanded(
             child: DocListPane(
@@ -118,8 +86,15 @@ class _PurchasesScreenState extends State<PurchasesScreen> {
               api: widget.api,
               allTypes: _purchaseTypes,
               partnerNames: _partnerNames,
+              partnerKind: 'supplier',
               editorFor: purchaseEditorFor,
               exportName: 'achats',
+              exportTitle: 'Achats',
+              prefsKey: 'purchases',
+              emptyActions: [
+                ('Bon de commande', () => _newDoc(purchaseOrderConfig)),
+                ('Nouvelle réception', () => _newDoc(purchaseReceiptConfig)),
+              ],
             ),
           ),
         ],

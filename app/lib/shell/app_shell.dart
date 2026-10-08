@@ -25,39 +25,56 @@ import '../theme/tokens.dart';
 import '../util/config.dart';
 import '../util/features.dart';
 import '../util/prefs.dart';
+import '../util/feedback.dart';
+import '../util/shortcuts.dart';
 import '../util/updater.dart';
+import '../widgets/doc_editor.dart';
+import '../widgets/doc_list.dart' show showDocDetailDialog;
+import '../widgets/fiche_produit.dart' show showFicheProduit;
+import '../screens/product_page.dart' show openProductPage;
+import '../screens/stock/inventory_page.dart' show openInventoryPage;
+import 'alerts_bell.dart';
+import 'global_search.dart';
 import '../widgets/ui.dart';
 
 class _Module {
-  const _Module(this.key, this.icon, this.title, {this.enabled = true, String? perm})
+  const _Module(this.key, this.icon, this.title, this.group,
+      {String? perm, this.feature})
       : perm = perm ?? key;
   final String key; // which screen to build
   final String perm; // permission that reveals it (defaults to key)
   final IconData icon;
   final String title;
-  final bool enabled;
+  final String group; // sidebar section
+  final String? feature; // Profil du magasin switch that hides it
 }
 
+/// Sidebar order, in six groups. Modules not ready yet (Livraison) are not
+/// listed at all rather than shown greyed out.
 const _allModules = [
-  _Module('dashboard', Icons.grid_view_rounded, 'Tableau de bord'),
-  _Module('explorer', Icons.insights_rounded, 'Explorateur', perm: 'reports'),
-  _Module('pos', Icons.point_of_sale_rounded, 'Caisse'),
-  _Module('sales', Icons.receipt_long_outlined, 'Ventes'),
-  _Module('purchases', Icons.local_shipping_outlined, 'Achats'),
+  _Module('dashboard', Icons.grid_view_rounded, 'Tableau de bord', 'Accueil'),
+  _Module('explorer', Icons.insights_rounded, 'Explorateur', 'Accueil',
+      perm: 'reports'),
+  _Module('assistant', Icons.auto_awesome_outlined, 'Assistant', 'Accueil'),
+  _Module('pos', Icons.point_of_sale_rounded, 'Caisse', 'Vente'),
+  _Module('sales', Icons.receipt_long_outlined, 'Ventes', 'Vente'),
+  _Module('webstore', Icons.storefront_outlined, 'Boutique en ligne', 'Vente',
+      feature: 'feature_webstore'),
+  _Module('purchases', Icons.local_shipping_outlined, 'Achats', 'Achat'),
   _Module('inbox', Icons.document_scanner_outlined, 'Factures scannées',
-      perm: 'purchases'),
-  _Module('stock', Icons.inventory_2_outlined, 'Stock'),
-  _Module('products', Icons.category_outlined, 'Produits'),
-  _Module('partners', Icons.people_alt_outlined, 'Partenaires'),
-  _Module('sav', Icons.build_outlined, 'Réparations'),
-  _Module('webstore', Icons.storefront_outlined, 'Boutique en ligne'),
-  _Module('reports', Icons.query_stats_rounded, 'Rapports'),
-  _Module('assistant', Icons.auto_awesome_outlined, 'Assistant'),
-  _Module('delivery', Icons.rocket_launch_outlined, 'Livraison', enabled: false),
-  _Module('designer', Icons.design_services_outlined, 'Modèles',
+      'Achat', perm: 'purchases'),
+  _Module('products', Icons.category_outlined, 'Produits', 'Stock'),
+  _Module('stock', Icons.inventory_2_outlined, 'Stock', 'Stock'),
+  _Module('partners', Icons.people_alt_outlined, 'Clients et fournisseurs', 'Tiers'),
+  _Module('sav', Icons.build_outlined, 'Réparations', 'Tiers',
+      feature: 'feature_repairs'),
+  _Module('reports', Icons.query_stats_rounded, 'Rapports', 'Pilotage'),
+  _Module('designer', Icons.design_services_outlined, 'Modèles', 'Pilotage',
       perm: 'settings'),
-  _Module('settings', Icons.settings_outlined, 'Paramètres'),
+  _Module('settings', Icons.settings_outlined, 'Paramètres', 'Pilotage'),
 ];
+
+const _groupOrder = ['Accueil', 'Vente', 'Achat', 'Stock', 'Tiers', 'Pilotage'];
 
 class AppShell extends StatefulWidget {
   const AppShell({
@@ -87,10 +104,34 @@ class _AppShellState extends State<AppShell> {
 
   User get user => widget.session.user;
 
+  /// Modules this user may open (stable: the IndexedStack is built on it).
   late final List<_Module> _visible = [
     for (final m in _allModules)
-      if (m.key == 'delivery' || user.can(m.perm)) m,
+      if (user.can(m.perm)) m,
   ];
+
+  /// …and of those, the ones the shop profile does not hide.
+  bool _shown(_Module m) =>
+      m.feature == null || Features.instance.flag(m.feature!);
+
+  final _searchFocus = FocusNode(debugLabel: 'global-search');
+  final _newMenuKey = GlobalKey<PopupMenuButtonState<String>>();
+  List<AlertItem> _alerts = const [];
+  Timer? _alertsTimer;
+
+  Future<void> _loadAlerts() async {
+    try {
+      final a = await widget.api.alerts();
+      if (mounted) setState(() => _alerts = a);
+    } catch (_) {}
+  }
+
+  void _onFeatures() {
+    if (!mounted) return;
+    setState(() {
+      if (_index < _visible.length && !_shown(_visible[_index])) _index = 0;
+    });
+  }
 
   Timer? _presenceTimer;
 
@@ -101,7 +142,11 @@ class _AppShellState extends State<AppShell> {
   void initState() {
     super.initState();
     UiPrefs.instance.user = user.id;
+    Features.instance.addListener(_onFeatures);
     Features.instance.load(widget.api);
+    _loadAlerts();
+    _alertsTimer =
+        Timer.periodic(const Duration(minutes: 2), (_) => _loadAlerts());
     _checkHealth();
     _loadCompany();
     _healthTimer =
@@ -220,6 +265,9 @@ class _AppShellState extends State<AppShell> {
     _healthTimer?.cancel();
     _presenceTimer?.cancel();
     _webstoreTimer?.cancel();
+    _alertsTimer?.cancel();
+    Features.instance.removeListener(_onFeatures);
+    _searchFocus.dispose();
     _globalSearch.dispose();
     _productsQuery.dispose();
     _explorerRequest.dispose();
@@ -254,11 +302,14 @@ class _AppShellState extends State<AppShell> {
 
   void goTo(String key) {
     final i = _visible.indexWhere((m) => m.key == key);
-    if (i >= 0 && _visible[i].enabled) {
+    if (i >= 0 && _shown(_visible[i])) {
       setState(() => _index = i);
       _beat();
     }
   }
+
+  bool _canOpen(String key) =>
+      _visible.any((m) => m.key == key && _shown(m));
 
   void _onGlobalSearch(String q) {
     if (q.trim().isEmpty) return;
@@ -266,6 +317,104 @@ class _AppShellState extends State<AppShell> {
     _productsQuery.value = q.trim();
     _globalSearch.clear();
   }
+
+  void _openHit(SearchHit h) {
+    switch (h.kind) {
+      case 'product':
+        showFicheProduit(context, widget.api, h.product!.id,
+            canCost: user.can('view_cost'));
+      case 'partner':
+        goTo('partners');
+      default:
+        showDocDetailDialog(context, widget.api, h.doc!.id);
+    }
+  }
+
+  Future<void> _openEditor(DocEditorConfig config) async {
+    await Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => DocEditorScreen(api: widget.api, config: config)));
+  }
+
+  /// « + Nouveau » : the documents people create most, from any screen.
+  List<(String, IconData, String, VoidCallback)> get _newEntries => [
+        if (_canOpen('pos'))
+          ('Vente au comptoir', Icons.point_of_sale_rounded, 'F2', () => goTo('pos')),
+        if (_canOpen('sales')) ...[
+          ('Facture de vente', Icons.receipt_long_outlined, '',
+              () => _openEditor(saleInvoiceConfig)),
+          ('Devis', Icons.request_quote_outlined, '', () => _openEditor(quoteConfig)),
+          ('Bon de livraison', Icons.local_shipping_outlined, '',
+              () => _openEditor(deliveryNoteConfig)),
+        ],
+        if (_canOpen('purchases')) ...[
+          ('Réception fournisseur', Icons.move_to_inbox_outlined, '',
+              () => _openEditor(purchaseReceiptConfig)),
+          ('Bon de commande', Icons.shopping_cart_checkout_outlined, '',
+              () => _openEditor(purchaseOrderConfig)),
+        ],
+        if (_canOpen('stock')) ...[
+          ('Transfert de stock', Icons.swap_horiz_rounded, '',
+              () => _openEditor(stockTransferConfig)),
+          ('Inventaire', Icons.fact_check_outlined, '', _newInventory),
+        ],
+        if (_canOpen('products'))
+          ('Produit', Icons.category_outlined, '',
+              () => openProductPage(context,
+                  api: widget.api, showCost: user.can('view_cost'))),
+        if (_canOpen('partners')) ...[
+          ('Client', Icons.person_add_alt_outlined, '',
+              () => _newPartner('customer')),
+          ('Fournisseur', Icons.store_mall_directory_outlined, '',
+              () => _newPartner('supplier')),
+        ],
+      ];
+
+  Future<void> _newInventory() async {
+    try {
+      final whs = await widget.api.warehouses();
+      if (!mounted) return;
+      await openInventoryPage(context,
+          api: widget.api, warehouses: whs, viewCost: user.can('view_cost'));
+    } on ApiException catch (e) {
+      if (mounted) showToast(context, e.message, kind: ToastKind.error);
+    }
+  }
+
+  Future<void> _newPartner(String kind) async {
+    final p = await showDialog<Partner>(
+      context: context,
+      builder: (_) => PartnerQuickCreateDialog(api: widget.api, kind: kind),
+    );
+    if (p != null && mounted) {
+      showToast(context, '${p.name} ajouté.',
+          actionLabel: 'Ouvrir', onAction: () => goTo('partners'));
+    }
+  }
+
+  Future<void> _logout() async {
+    CaisseSession? open;
+    try {
+      open = await widget.api.caisseCurrent();
+    } catch (_) {}
+    if (!mounted) return;
+    if (open != null) {
+      final ok = await confirmAction(context,
+          title: 'La caisse est encore ouverte',
+          message: 'Ouverte depuis ${open.openedAt.length >= 16 ? open.openedAt.substring(11, 16) : open.openedAt}'
+              ' par ${open.userName}. Vous pouvez vous déconnecter : la caisse '
+              'reste ouverte pour le prochain caissier. Pensez au rapport Z en fin de journée.',
+          confirmLabel: 'Se déconnecter');
+      if (!ok) return;
+    }
+    widget.onLogout();
+  }
+
+  Map<ShortcutActivator, VoidCallback> get _bindings => bindingsFor({
+        AppShortcuts.search: () => _searchFocus.requestFocus(),
+        AppShortcuts.newDoc: () => _newMenuKey.currentState?.showButtonMenu(),
+        AppShortcuts.pos: () => goTo('pos'),
+        AppShortcuts.help: () => showShortcutsSheet(context),
+      });
 
   Widget _screenFor(_Module m) => switch (m.key) {
         'dashboard' => AnalyticsDashboardScreen(
@@ -313,19 +462,93 @@ class _AppShellState extends State<AppShell> {
 
   @override
   Widget build(BuildContext context) {
+    return CallbackShortcuts(
+      bindings: _bindings,
+      child: Focus(
+        autofocus: true,
+        child: _buildScaffold(context),
+      ),
+    );
+  }
+
+  Widget _buildScaffold(BuildContext context) {
+    final entries = _newEntries;
     return Scaffold(
       body: Column(
         children: [
           _TopBar(
-            online: _online,
             companyName: _companyName,
             user: user,
             collapsed: _collapsed,
-            showSearch: user.can('products'),
-            searchCtrl: _globalSearch,
-            onSearch: _onGlobalSearch,
+            search: (user.can('products') || user.can('partners') ||
+                    user.can('sales') || user.can('purchases'))
+                ? GlobalSearch(
+                    api: widget.api,
+                    focusNode: _searchFocus,
+                    onOpen: _openHit,
+                    onSubmitProducts: _onGlobalSearch,
+                    searchProducts: user.can('products'),
+                    searchPartners: user.can('partners'),
+                    searchDocuments: user.can('sales') || user.can('purchases'),
+                    documentSearch: (q) => widget.api.documents(q: q, limit: 5),
+                  )
+                : null,
+            newMenu: entries.isEmpty
+                ? null
+                : PopupMenuButton<int>(
+                    key: _newMenuKey,
+                    tooltip: 'Nouveau (Ctrl+N)',
+                    color: T.surface,
+                    position: PopupMenuPosition.under,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(T.rInner),
+                        side: const BorderSide(color: T.border)),
+                    onSelected: (i) => entries[i].$4(),
+                    itemBuilder: (_) => [
+                      for (var i = 0; i < entries.length; i++)
+                        PopupMenuItem<int>(
+                          value: i,
+                          height: 38,
+                          child: Row(children: [
+                            Icon(entries[i].$2, size: 17, color: T.muted),
+                            const SizedBox(width: 10),
+                            Expanded(
+                                child: Text(entries[i].$1,
+                                    style: T.body.copyWith(fontSize: 13))),
+                            if (entries[i].$3.isNotEmpty)
+                              Text(entries[i].$3,
+                                  style: T.label.copyWith(fontSize: 9.5)),
+                          ]),
+                        ),
+                    ],
+                    child: Container(
+                      height: 38,
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      decoration: BoxDecoration(
+                        color: T.ink,
+                        borderRadius: BorderRadius.circular(T.rInner),
+                      ),
+                      child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(Icons.add_rounded, size: 18, color: Colors.white),
+                        SizedBox(width: 4),
+                        Text('Nouveau',
+                            style: TextStyle(
+                                fontFamily: T.sans,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white)),
+                      ]),
+                    ),
+                  ),
+            bell: AlertsBell(
+              items: _alerts,
+              online: _online,
+              onRefresh: _loadAlerts,
+              onOpenTarget: goTo,
+            ),
+            onHelp: () => showShortcutsSheet(context),
             onBurger: () => setState(() => _collapsed = !_collapsed),
-            onLogout: widget.onLogout,
+            onLogout: _logout,
           ),
           const Divider(),
           // Loud offline strip — every caisse depends on the server PC.
@@ -356,6 +579,7 @@ class _AppShellState extends State<AppShell> {
               children: [
                 _Sidebar(
                   modules: _visible,
+                  shown: _shown,
                   index: _index,
                   collapsed: _collapsed,
                   showHelp: user.can('assistant'),
@@ -403,24 +627,24 @@ class _AppShellState extends State<AppShell> {
 
 class _TopBar extends StatelessWidget {
   const _TopBar({
-    required this.online,
     required this.companyName,
     required this.user,
     required this.collapsed,
-    required this.showSearch,
-    required this.searchCtrl,
-    required this.onSearch,
+    required this.search,
+    required this.newMenu,
+    required this.bell,
+    required this.onHelp,
     required this.onBurger,
     required this.onLogout,
   });
 
-  final bool online;
   final String companyName;
   final User user;
   final bool collapsed;
-  final bool showSearch;
-  final TextEditingController searchCtrl;
-  final ValueChanged<String> onSearch;
+  final Widget? search;
+  final Widget? newMenu;
+  final Widget bell;
+  final VoidCallback onHelp;
   final VoidCallback onBurger;
   final VoidCallback onLogout;
 
@@ -455,57 +679,23 @@ class _TopBar extends StatelessWidget {
             icon: const Icon(Icons.menu, size: 19, color: T.muted),
           ),
           const SizedBox(width: 10),
-          if (showSearch)
+          if (search != null)
             ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 420),
-              child: Container(
-                height: 40,
-                decoration: BoxDecoration(
-                  color: T.bg,
-                  borderRadius: BorderRadius.circular(T.rInner),
-                  border: Border.all(color: T.border),
-                ),
-                child: TextField(
-                  controller: searchCtrl,
-                  onSubmitted: onSearch,
-                  style: T.body,
-                  decoration: InputDecoration(
-                    isDense: true,
-                    border: InputBorder.none,
-                    hintText: 'Rechercher un produit, code-barres…',
-                    hintStyle: T.bodyMuted.copyWith(color: T.ghost),
-                    prefixIcon:
-                        const Icon(Icons.search, size: 17, color: T.faint),
-                    contentPadding: const EdgeInsets.symmetric(vertical: 11),
-                  ),
-                ),
-              ),
+              constraints: const BoxConstraints(maxWidth: 460),
+              child: search,
             ),
+          if (newMenu != null) ...[
+            const SizedBox(width: 10),
+            newMenu!,
+          ],
           // The empty middle drags the window too.
           const Expanded(child: DragToMoveArea(child: SizedBox.expand())),
-          Tooltip(
-            message: online ? 'Serveur connecté' : 'Serveur hors ligne',
-            child: Stack(children: [
-              const Padding(
-                padding: EdgeInsets.all(8),
-                child: Icon(Icons.notifications_none_rounded,
-                    size: 20, color: T.muted),
-              ),
-              PositionedDirectional(
-                end: 7,
-                top: 7,
-                child: Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: online ? T.mint : T.danger,
-                    shape: BoxShape.circle,
-                    border: Border.all(color: T.surface, width: 1.5),
-                  ),
-                ),
-              ),
-            ]),
+          IconButton(
+            tooltip: 'Raccourcis clavier (F1)',
+            onPressed: onHelp,
+            icon: const Icon(Icons.keyboard_outlined, size: 19, color: T.muted),
           ),
+          bell,
           const SizedBox(width: 12),
           PopupMenuButton<String>(
             tooltip: 'Compte',
@@ -635,9 +825,13 @@ class _WinBtnState extends State<_WinBtn> {
   }
 }
 
-class _Sidebar extends StatelessWidget {
+/// Sidebar in six folding groups (Accueil, Vente, Achat, Stock, Tiers,
+/// Pilotage). The group holding the current screen is always open; the
+/// folded state is remembered per user. Collapsed = icons only.
+class _Sidebar extends StatefulWidget {
   const _Sidebar({
     required this.modules,
+    required this.shown,
     required this.index,
     required this.collapsed,
     required this.showHelp,
@@ -645,6 +839,7 @@ class _Sidebar extends StatelessWidget {
     required this.onAssistant,
   });
   final List<_Module> modules;
+  final bool Function(_Module) shown;
   final int index;
   final bool collapsed;
   final bool showHelp;
@@ -652,140 +847,135 @@ class _Sidebar extends StatelessWidget {
   final VoidCallback onAssistant;
 
   @override
+  State<_Sidebar> createState() => _SidebarState();
+}
+
+class _SidebarState extends State<_Sidebar> {
+  late final Set<String> _folded =
+      (UiPrefs.instance.getList('shell', 'folded_groups') ?? const []).toSet();
+
+  void _toggle(String g) {
+    setState(() => _folded.contains(g) ? _folded.remove(g) : _folded.add(g));
+    UiPrefs.instance.set('shell', 'folded_groups', _folded.toList());
+  }
+
+  Widget _item(int i) {
+    final item = widget.modules[i];
+    final selected = i == widget.index;
+    final color = selected ? T.mintDeep : T.muted;
+    return InkWell(
+      onTap: () => widget.onSelect(i),
+      child: Container(
+        height: 40,
+        color: selected ? T.mintTint : Colors.transparent,
+        child: Row(children: [
+          Container(width: 3, color: selected ? T.mint : Colors.transparent),
+          SizedBox(width: widget.collapsed ? 0 : 15),
+          Expanded(
+            child: widget.collapsed
+                ? Tooltip(
+                    message: item.title,
+                    child: Icon(item.icon, size: 18, color: color),
+                  )
+                : Row(children: [
+                    Icon(item.icon, size: 17, color: color),
+                    const SizedBox(width: 11),
+                    Expanded(
+                      child: Text(
+                        item.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontFamily: T.sans,
+                          fontSize: 13,
+                          fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
+                          color: color,
+                        ),
+                      ),
+                    ),
+                  ]),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final current = widget.index < widget.modules.length
+        ? widget.modules[widget.index].group
+        : '';
+    final children = <Widget>[];
+    for (final g in _groupOrder) {
+      final idx = [
+        for (var i = 0; i < widget.modules.length; i++)
+          if (widget.modules[i].group == g && widget.shown(widget.modules[i])) i,
+      ];
+      if (idx.isEmpty) continue;
+      final open = !_folded.contains(g) || g == current;
+      if (widget.collapsed) {
+        if (children.isNotEmpty) {
+          children.add(const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            child: Divider(),
+          ));
+        }
+        children.addAll(idx.map(_item));
+        continue;
+      }
+      children.add(InkWell(
+        onTap: g == current ? null : () => _toggle(g),
+        child: Padding(
+          padding: const EdgeInsetsDirectional.fromSTEB(18, 12, 12, 4),
+          child: Row(children: [
+            Expanded(child: MicroLabel(g)),
+            if (g != current)
+              Icon(open ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+                  size: 15, color: T.ghost),
+          ]),
+        ),
+      ));
+      if (open) children.addAll(idx.map(_item));
+    }
+
     return AnimatedContainer(
       duration: const Duration(milliseconds: 180),
       curve: Curves.easeOut,
-      width: collapsed ? 62 : 230,
+      width: widget.collapsed ? 62 : 230,
       decoration: const BoxDecoration(
         color: T.surface,
         border: BorderDirectional(end: BorderSide(color: T.border)),
       ),
       child: Column(
         children: [
-          const SizedBox(height: 10),
+          const SizedBox(height: 4),
           Expanded(
-            child: ListView.builder(
-              padding: EdgeInsets.zero,
-              itemCount: modules.length,
-              itemBuilder: (context, i) {
-                final item = modules[i];
-                final selected = i == index;
-                return InkWell(
-                  onTap: item.enabled ? () => onSelect(i) : null,
-                  child: Container(
-                    height: 44,
-                    color: selected ? T.mintTint : Colors.transparent,
-                    child: Row(children: [
-                      Container(
-                        width: 3,
-                        color: selected ? T.mint : Colors.transparent,
-                      ),
-                      SizedBox(width: collapsed ? 0 : 15),
-                      Expanded(
-                        child: collapsed
-                            ? Tooltip(
-                                message: item.title,
-                                child: Icon(item.icon,
-                                    size: 18,
-                                    color: !item.enabled
-                                        ? T.ghost
-                                        : selected
-                                            ? T.mintDeep
-                                            : T.muted),
-                              )
-                            : Row(children: [
-                                Icon(item.icon,
-                                    size: 17,
-                                    color: !item.enabled
-                                        ? T.ghost
-                                        : selected
-                                            ? T.mintDeep
-                                            : T.muted),
-                                const SizedBox(width: 11),
-                                Expanded(
-                                  child: Text(
-                                    item.title,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.clip,
-                                    style: TextStyle(
-                                      fontFamily: T.sans,
-                                      fontSize: 13,
-                                      fontWeight: selected
-                                          ? FontWeight.w700
-                                          : FontWeight.w600,
-                                      color: !item.enabled
-                                          ? T.ghost
-                                          : selected
-                                              ? T.mintDeep
-                                              : T.muted,
-                                    ),
-                                  ),
-                                ),
-                                if (!item.enabled)
-                                  Padding(
-                                    padding: const EdgeInsetsDirectional.only(
-                                        end: 10),
-                                    child: MintChip('bientôt',
-                                        color: T.cream, fg: T.faint),
-                                  ),
-                              ]),
-                      ),
-                    ]),
-                  ),
-                );
-              },
-            ),
+            child: ListView(padding: EdgeInsets.zero, children: children),
           ),
-          if (!collapsed && showHelp)
+          if (!widget.collapsed && widget.showHelp)
             Container(
               margin: const EdgeInsets.all(12),
-              padding: const EdgeInsets.all(14),
+              padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
                 color: T.mintTint,
                 borderRadius: BorderRadius.circular(T.rCard),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text("Besoin d'aide ?",
+              child: Row(children: [
+                const Icon(Icons.auto_awesome_outlined, size: 18, color: T.mintDark),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text("Besoin d'aide ?",
                       style: TextStyle(
                           fontFamily: T.sans,
-                          fontSize: 13,
+                          fontSize: 12.5,
                           fontWeight: FontWeight.w800,
                           color: T.ink)),
-                  const SizedBox(height: 4),
-                  Text("Consultez notre guide ou contactez l'assistant.",
-                      style: T.small.copyWith(fontSize: 11.5, height: 1.35)),
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 34,
-                    child: FilledButton(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: T.surface,
-                        foregroundColor: T.ink,
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(T.rInner)),
-                      ),
-                      onPressed: onAssistant,
-                      child: const Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text("Ouvrir l'assistant",
-                              style: TextStyle(
-                                  fontFamily: T.sans,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w700)),
-                          SizedBox(width: 6),
-                          Icon(Icons.arrow_forward_rounded, size: 13),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+                ),
+                TextButton(
+                  onPressed: widget.onAssistant,
+                  child: const Text('Assistant', style: TextStyle(fontSize: 12)),
+                ),
+              ]),
             ),
         ],
       ),

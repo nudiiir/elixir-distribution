@@ -64,6 +64,7 @@ class Product {
   final List<Packaging> packagings; // conditionnements (carton = 24)
   final int imageRev; // 0 = pas de photo ; change à chaque nouvelle photo
   final String kind; // 'standard' | 'service' (un service ne bouge pas le stock)
+  final int imageCount; // nombre de photos (galerie)
 
   bool get hasImage => imageRev > 0;
   bool get isService => kind == 'service';
@@ -71,6 +72,8 @@ class Product {
   Product.fromJson(Map<String, dynamic> j)
       : id = j['id'] as String,
         imageRev = (j['image_rev'] as num?)?.toInt() ?? 0,
+        imageCount = (j['image_count'] as num?)?.toInt() ??
+            (((j['image_rev'] as num?)?.toInt() ?? 0) > 0 ? 1 : 0),
         kind = (j['kind'] as String?) ?? 'standard',
         barcode = j['barcode'] as String?,
         name = j['name'] as String,
@@ -152,16 +155,49 @@ class StockLevel {
   final String warehouseId;
   final int qtyMilli;
   final int avgCost; // centimes
+  // Contexte produit (écran Stock) — absent des anciens serveurs.
+  final int? value; // valeur au coût calculée par le serveur (centimes)
+  final String warehouseName;
+  final String? categoryId;
+  final String? categoryName;
+  final String brand;
+  final int priceRetail; // TTC
+  final int minStockMilli;
+  final String unit;
+  final String? defaultSupplierId;
+  final String? defaultSupplierName;
+  final int imageRev;
+  final String kind;
 
   StockLevel.fromJson(Map<String, dynamic> j)
       : productId = j['product_id'] as String,
         productName = j['product_name'] as String,
         barcode = j['barcode'] as String?,
-        warehouseId = j['warehouse_id'] as String,
+        warehouseId = (j['warehouse_id'] as String?) ?? '',
         qtyMilli = (j['qty_milli'] as num?)?.toInt() ?? 0,
-        avgCost = (j['avg_cost'] as num?)?.toInt() ?? 0;
+        avgCost = (j['avg_cost'] as num?)?.toInt() ?? 0,
+        value = (j['value'] as num?)?.toInt(),
+        warehouseName = (j['warehouse_name'] as String?) ?? '',
+        categoryId = j['category_id'] as String?,
+        categoryName = j['category_name'] as String?,
+        brand = (j['brand'] as String?) ?? '',
+        priceRetail = (j['price_retail'] as num?)?.toInt() ?? 0,
+        minStockMilli = (j['min_stock_milli'] as num?)?.toInt() ?? 0,
+        unit = (j['unit'] as String?) ?? 'piece',
+        defaultSupplierId = j['default_supplier_id'] as String?,
+        defaultSupplierName = j['default_supplier_name'] as String?,
+        imageRev = (j['image_rev'] as num?)?.toInt() ?? 0,
+        kind = (j['kind'] as String?) ?? 'standard',
+        vatRate = (j['vat_rate'] as num?)?.toInt() ?? 0;
 
-  int get valuation => (qtyMilli * avgCost) ~/ 1000;
+  final int vatRate; // ×100
+
+  int get valuation => value ?? (qtyMilli * avgCost) ~/ 1000;
+
+  /// LA règle « stock faible » de toute l'application.
+  bool get isRupture => qtyMilli <= 0;
+  bool get isUnderMin => !isRupture && minStockMilli > 0 && qtyMilli < minStockMilli;
+  bool get isLow => isRupture || isUnderMin;
 }
 
 class Warehouse {
@@ -277,6 +313,11 @@ class DocDetail {
   final int freightCost;
   final String? reason;
   final String? orderStatus;
+  final String? destWarehouseId;
+  final String? internalNotes; // jamais imprimée
+  final int paid;
+  final int remaining;
+  final String paymentStatus; // paid | partial | due | ''
   final List<DocLine> lines;
 
   DocDetail.fromJson(Map<String, dynamic> j)
@@ -301,6 +342,11 @@ class DocDetail {
         freightCost = (j['freight_cost'] as num?)?.toInt() ?? 0,
         reason = j['reason'] as String?,
         orderStatus = j['order_status'] as String?,
+        destWarehouseId = j['dest_warehouse_id'] as String?,
+        internalNotes = j['internal_notes'] as String?,
+        paid = (j['paid'] as num?)?.toInt() ?? 0,
+        remaining = (j['remaining'] as num?)?.toInt() ?? 0,
+        paymentStatus = (j['payment_status'] as String?) ?? '',
         lines = [
           for (final e in (j['lines'] as List? ?? const []))
             DocLine.fromJson(e)
@@ -321,6 +367,10 @@ class DocSummary {
   final String? orderStatus;
   final String? dueDate;
   final String? supplierRef;
+  final String? notes;
+  final int paid;
+  final int remaining;
+  final String paymentStatus; // paid | partial | due | ''
 
   DocSummary.fromJson(Map<String, dynamic> j)
       : id = j['id'] as String,
@@ -335,7 +385,65 @@ class DocSummary {
         createdAt = (j['created_at'] as String?) ?? '',
         orderStatus = j['order_status'] as String?,
         dueDate = j['due_date'] as String?,
-        supplierRef = j['supplier_ref'] as String?;
+        supplierRef = j['supplier_ref'] as String?,
+        notes = j['notes'] as String?,
+        paid = (j['paid'] as num?)?.toInt() ?? 0,
+        remaining = (j['remaining'] as num?)?.toInt() ?? 0,
+        paymentStatus = (j['payment_status'] as String?) ?? '';
+}
+
+/// Pièce jointe d'un document (les octets se téléchargent à part).
+class DocAttachment {
+  final String id;
+  final String documentId;
+  final String name;
+  final String mime;
+  final int size;
+  final String createdAt;
+
+  DocAttachment.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as String,
+        documentId = (j['document_id'] as String?) ?? '',
+        name = (j['name'] as String?) ?? '',
+        mime = (j['mime'] as String?) ?? '',
+        size = (j['size'] as num?)?.toInt() ?? 0,
+        createdAt = (j['created_at'] as String?) ?? '';
+}
+
+/// Une facture encore ouverte (FIFO sur le compte partenaire).
+class OpenItem {
+  final String documentId;
+  final String number;
+  final String docDate;
+  final String dueDate;
+  final int total;
+  final int outstanding;
+  final int ageDays;
+  final bool overdue;
+
+  OpenItem.fromJson(Map<String, dynamic> j)
+      : documentId = (j['document_id'] as String?) ?? '',
+        number = (j['number'] as String?) ?? '',
+        docDate = (j['doc_date'] as String?) ?? '',
+        dueDate = (j['due_date'] as String?) ?? '',
+        total = (j['total'] as num?)?.toInt() ?? 0,
+        outstanding = (j['outstanding'] as num?)?.toInt() ?? 0,
+        ageDays = (j['age_days'] as num?)?.toInt() ?? 0,
+        overdue = j['overdue'] == true;
+}
+
+class PartnerOpenItems {
+  final List<OpenItem> items;
+  final int totalOpen;
+  final int unallocatedCredit;
+
+  PartnerOpenItems.fromJson(Map<String, dynamic> j)
+      : items = [
+          for (final e in (j['open_items'] as List? ?? const []))
+            OpenItem.fromJson(e as Map<String, dynamic>)
+        ],
+        totalOpen = (j['total_open'] as num?)?.toInt() ?? 0,
+        unallocatedCredit = (j['unallocated_credit'] as num?)?.toInt() ?? 0;
 }
 
 class CaisseSession {
@@ -370,6 +478,7 @@ class CaisseReport {
   final int cashSales;
   final int cardSales;
   final int creditSales;
+  final int otherSales; // chèque, virement, carte cadeau
   final int cashIn;
   final int cashOut;
   final int cashRefunds;
@@ -382,6 +491,7 @@ class CaisseReport {
         cashSales = (j['cash_sales'] as num?)?.toInt() ?? 0,
         cardSales = (j['card_sales'] as num?)?.toInt() ?? 0,
         creditSales = (j['credit_sales'] as num?)?.toInt() ?? 0,
+        otherSales = (j['other_sales'] as num?)?.toInt() ?? 0,
         cashIn = (j['cash_in'] as num?)?.toInt() ?? 0,
         cashOut = (j['cash_out'] as num?)?.toInt() ?? 0,
         cashRefunds = (j['cash_refunds'] as num?)?.toInt() ?? 0,
@@ -721,7 +831,10 @@ class FicheMove {
         docId = (j['doc_id'] as String?) ?? '',
         warehouse = (j['warehouse'] as String?) ?? '',
         qtyMilli = (j['qty_milli'] as num?)?.toInt() ?? 0,
-        unitCost = (j['unit_cost'] as num?)?.toInt() ?? 0;
+        unitCost = (j['unit_cost'] as num?)?.toInt() ?? 0,
+        warehouseId = (j['warehouse_id'] as String?) ?? '',
+        balanceAfter = (j['balance_after'] as num?)?.toInt(),
+        reason = j['reason'] as String?;
   final String date;
   final String docType;
   final String? docNumber;
@@ -729,6 +842,20 @@ class FicheMove {
   final String warehouse;
   final int qtyMilli;
   final int unitCost;
+  final String warehouseId;
+
+  /// Stock du dépôt juste après ce mouvement (solde courant).
+  final int? balanceAfter;
+  final String? reason; // motif d'un ajustement
+}
+
+/// Un jour du graphe « Ventes 30 jours ».
+class SalesDay {
+  SalesDay.fromJson(Map<String, dynamic> j)
+      : date = (j['date'] as String?) ?? '',
+        qtyMilli = (j['qty_milli'] as num?)?.toInt() ?? 0;
+  final String date;
+  final int qtyMilli;
 }
 
 class FicheSupplier {
@@ -774,7 +901,14 @@ class FicheData {
         variants = [
           for (final e in (j['variants'] as List? ?? const []))
             FicheVariant.fromJson(e as Map<String, dynamic>)
-        ];
+        ],
+        sales30d = [
+          for (final e in (j['sales_30d'] as List? ?? const []))
+            SalesDay.fromJson(e as Map<String, dynamic>)
+        ],
+        avgDailySalesMilli =
+            (j['avg_daily_sales_milli'] as num?)?.toInt() ?? 0,
+        coverageDays = (j['coverage_days'] as num?)?.toInt();
 
   final Product product;
   final List<FicheLevel> levels;
@@ -782,6 +916,11 @@ class FicheData {
   final List<FicheMove> moves;
   final List<FicheSupplier> suppliers;
   final List<FicheVariant> variants;
+  final List<SalesDay> sales30d;
+  final int avgDailySalesMilli;
+
+  /// Stock ÷ ventes moyennes par jour ; null sans ventes.
+  final int? coverageDays;
 
   int get stockTotal => levels.fold(0, (s, l) => s + l.qtyMilli);
   int get valeurStock =>
@@ -806,4 +945,44 @@ class MatchExceptionRow {
   final int thisValue;
   final int refValue;
   final String detail;
+}
+
+/// One row of a mixed payment at the till (POS « Paiement mixte »).
+class PosPayment {
+  const PosPayment(this.method, this.amount);
+  final String method; // cash | cib | edahabia | cheque | transfer | credit | gift
+  final int amount; // centimes
+
+  PosPayment.fromJson(Map<String, dynamic> j)
+      : method = j['method'] as String,
+        amount = (j['amount'] as num?)?.toInt() ?? 0;
+
+  Map<String, dynamic> toJson() => {'method': method, 'amount': amount};
+}
+
+/// A ticket of the open caisse session (POS « Derniers tickets »).
+class PosRecentTicket {
+  final String id;
+  final String? number;
+  final String? postedAt;
+  final int totalTTC;
+  final String? paymentMethod;
+  final String? partnerId;
+  final String? partnerName;
+  final String status;
+  final List<PosPayment> payments;
+
+  PosRecentTicket.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as String,
+        number = j['number'] as String?,
+        postedAt = j['posted_at'] as String?,
+        totalTTC = (j['total_ttc'] as num?)?.toInt() ?? 0,
+        paymentMethod = j['payment_method'] as String?,
+        partnerId = j['partner_id'] as String?,
+        partnerName = j['partner_name'] as String?,
+        status = (j['status'] as String?) ?? 'posted',
+        payments = [
+          for (final e in (j['payments'] as List? ?? const []))
+            PosPayment.fromJson(e as Map<String, dynamic>)
+        ];
 }

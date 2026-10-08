@@ -54,7 +54,18 @@ Future<Uint8List> renderTemplateBytes(
   required String lang,
   required Map<String, String> data,
   List<List<String>> tableRows = const [],
+}) =>
+    renderTemplatePages(tpl, lang: lang, pages: [data], tableRows: tableRows);
+
+/// Same as [renderTemplateBytes], one page per data map (e.g. a sheet of
+/// shelf labels for several products) in a single PDF.
+Future<Uint8List> renderTemplatePages(
+  TplDoc tpl, {
+  required String lang,
+  required List<Map<String, String>> pages,
+  List<List<String>> tableRows = const [],
 }) async {
+  var data = pages.isEmpty ? const <String, String>{} : pages.first;
   final f = await _fonts();
   const mm = PdfPageFormat.mm;
 
@@ -140,10 +151,8 @@ Future<Uint8List> renderTemplateBytes(
     );
   }
 
-  final page = pw.Page(
-    pageFormat: PdfPageFormat(tpl.widthMm * mm, tpl.heightMm * mm),
-    margin: pw.EdgeInsets.zero,
-    build: (context) => pw.Stack(children: [
+  // Widgets are built eagerly per page so each page keeps its own data.
+  pw.Widget pageContent() => pw.Stack(children: [
       for (final e in tpl.elements)
         pw.Positioned(
           left: e.x * mm,
@@ -170,11 +179,18 @@ Future<Uint8List> renderTemplateBytes(
             },
           ),
         ),
-    ]),
-  );
+    ]);
 
   final pdf = pw.Document();
-  pdf.addPage(page);
+  for (final d in pages.isEmpty ? [data] : pages) {
+    data = d;
+    final content = pageContent();
+    pdf.addPage(pw.Page(
+      pageFormat: PdfPageFormat(tpl.widthMm * mm, tpl.heightMm * mm),
+      margin: pw.EdgeInsets.zero,
+      build: (context) => content,
+    ));
+  }
   return pdf.save();
 }
 

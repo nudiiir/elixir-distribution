@@ -161,6 +161,7 @@ func New(db *sql.DB, dbPath string, eng *analytics.Engine) http.Handler {
 		s.routesDocumentsUX(r)
 		s.routesStockUX(r)
 		s.routesPosUX(r)
+		s.routesShellUX(r)
 
 		r.Get("/cloud/status", s.cloudStatus)
 		r.Post("/cloud/connect", s.cloudConnect)

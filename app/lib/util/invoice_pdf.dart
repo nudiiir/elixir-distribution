@@ -242,6 +242,34 @@ Future<String> openDocumentPdf({
           ),
         ],
       ),
+      // ---- Note imprimée (la note interne ne sort jamais) ----
+      if ((doc.notes ?? '').trim().isNotEmpty) ...[
+        pw.SizedBox(height: 12),
+        pw.Container(
+          width: double.infinity,
+          padding: const pw.EdgeInsets.all(8),
+          decoration: pw.BoxDecoration(
+            border: pw.Border.all(color: border),
+            borderRadius: pw.BorderRadius.circular(6),
+          ),
+          child: pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Text('NOTE',
+                  style:
+                      pw.TextStyle(font: sansBold, fontSize: 7.5, color: muted)),
+              pw.SizedBox(height: 2),
+              pw.Text(doc.notes!.trim(), style: body),
+            ],
+          ),
+        ),
+      ],
+      if (doc.dueDate != null &&
+          (doc.docType == 'SALE_INVOICE' || doc.docType == 'PURCHASE_INVOICE'))
+        pw.Padding(
+          padding: const pw.EdgeInsets.only(top: 8),
+          child: pw.Text('Échéance de paiement : ${doc.dueDate}', style: small),
+        ),
       pw.SizedBox(height: 20),
       pw.Text(
           'Document généré par Elixir Gestion Commerciale',
@@ -338,6 +366,10 @@ pw.Document _buildTicketPdf({
         pw.SizedBox(height: 2),
         row('TOTAL', fmtDA(doc.totalTTC), bold: true, size: 11),
         divider(),
+        if ((doc.notes ?? '').trim().isNotEmpty) ...[
+          pw.Text(doc.notes!.trim(), style: tiny),
+          divider(),
+        ],
         pw.Center(
             child: pw.Text('Merci de votre visite !',
                 style: pw.TextStyle(font: sans, fontSize: 8, color: ink))),

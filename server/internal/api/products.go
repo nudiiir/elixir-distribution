@@ -44,8 +44,14 @@ type Product struct {
 	Barcodes        []string `json:"barcodes"`
 	BarcodesEx      []BarcodeEntry `json:"barcodes_ex"`
 	Packagings      []Packaging    `json:"packagings"`
-	CreatedAt       string   `json:"created_at"`
-	UpdatedAt       string   `json:"updated_at"`
+	// Kind: 'standard' | 'service' (un service ne bouge jamais le stock).
+	Kind string `json:"kind"`
+	// ImageRev change à chaque ajout/suppression de photo (0 = aucune) ;
+	// le client s'en sert comme clé de cache (?v=rev).
+	ImageRev   int64  `json:"image_rev"`
+	ImageCount int64  `json:"image_count"`
+	CreatedAt  string `json:"created_at"`
+	UpdatedAt  string `json:"updated_at"`
 }
 
 // BarcodeEntry is one additional barcode with its optional descriptive label
@@ -68,6 +74,8 @@ const productCols = `id, barcode, sku, name, name_ar, category_id, unit, is_weig
 	vat_rate, purchase_price, price_retail, price_wholesale, min_stock_milli, track_lots,
 	active, promo_price, promo_start, promo_end, parent_product_id, variant_label,
 	warranty_months, track_serials, description, brand, track_expiry, default_supplier_id,
+	kind, image_rev,
+	(SELECT COUNT(*) FROM product_images pi WHERE pi.product_id = products.id),
 	created_at, updated_at`
 
 func scanProduct(row interface{ Scan(...any) error }) (Product, error) {
@@ -78,9 +86,18 @@ func scanProduct(row interface{ Scan(...any) error }) (Product, error) {
 		&p.MinStockMilli, &trackLots, &active,
 		&p.PromoPrice, &p.PromoStart, &p.PromoEnd, &p.ParentProductID, &p.VariantLabel,
 		&p.WarrantyMonths, &trackSerials, &p.Description, &p.Brand, &trackExpiry,
-		&p.DefaultSupplier, &p.CreatedAt, &p.UpdatedAt)
+		&p.DefaultSupplier, &p.Kind, &p.ImageRev, &p.ImageCount, &p.CreatedAt, &p.UpdatedAt)
 	p.IsWeighable, p.TrackLots, p.Active = weighable == 1, trackLots == 1, active == 1
 	p.TrackSerials, p.TrackExpiry = trackSerials == 1, trackExpiry == 1
+	// La colonne image_rev ne fait que croître (une photo supprimée puis une
+	// autre ajoutée ne réutilise jamais une clé de cache) ; le JSON dit 0
+	// quand il n'y a plus de photo.
+	if p.ImageCount == 0 {
+		p.ImageRev = 0
+	}
+	if p.Kind == "" {
+		p.Kind = "standard"
+	}
 	p.Barcodes = []string{}
 	p.BarcodesEx = []BarcodeEntry{}
 	p.Packagings = []Packaging{}
@@ -270,6 +287,8 @@ type productInput struct {
 	Barcodes        []string `json:"barcodes"`
 	BarcodesEx      []BarcodeEntry `json:"barcodes_ex"`
 	Packagings      []Packaging    `json:"packagings"`
+	// Kind: 'standard' (défaut) | 'service'. Absent à la mise à jour = inchangé.
+	Kind *string `json:"kind"`
 	// Stock initial : crée et valide un document « Stock initial » à la création.
 	InitialQtyMilli    int64   `json:"initial_qty_milli"`
 	InitialWarehouseID *string `json:"initial_warehouse_id"`
@@ -320,6 +339,15 @@ func (in *productInput) normalize() {
 	if in.Barcode != nil && strings.TrimSpace(*in.Barcode) == "" {
 		in.Barcode = nil
 	}
+	if in.Kind != nil {
+		k := strings.TrimSpace(*in.Kind)
+		in.Kind = &k
+	}
+}
+
+// validKind accepts the two product types; nil means « not sent ».
+func validKind(k *string) bool {
+	return k == nil || *k == "standard" || *k == "service"
 }
 
 func (s *Server) createProduct(w http.ResponseWriter, r *http.Request) {
@@ -337,6 +365,18 @@ func (s *Server) createProduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.normalize()
+	if !validKind(in.Kind) {
+		writeErr(w, http.StatusBadRequest, "type de produit invalide (standard ou service)")
+		return
+	}
+	kind := "standard"
+	if in.Kind != nil {
+		kind = *in.Kind
+	}
+	if kind == "service" {
+		// Un service n'a pas de stock : pas de stock initial.
+		in.InitialQtyMilli = 0
+	}
 	// Le prix d'achat est obligatoire dès qu'une quantité initiale est saisie —
 	// un stock qui entre sans coût fausserait le CMUP dès le premier jour.
 	if in.InitialQtyMilli > 0 && in.PurchasePrice <= 0 {
@@ -357,14 +397,14 @@ func (s *Server) createProduct(w http.ResponseWriter, r *http.Request) {
 			is_weighable, vat_rate, purchase_price, price_retail, price_wholesale, min_stock_milli,
 			track_lots, active, promo_price, promo_start, promo_end,
 			parent_product_id, variant_label, warranty_months, track_serials, description,
-			brand, track_expiry, default_supplier_id, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			brand, track_expiry, default_supplier_id, kind, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, in.Barcode, in.SKU, in.Name, in.NameAr, in.CategoryID, in.Unit,
 		b2i(in.IsWeighable), in.VatRate, in.PurchasePrice, in.PriceRetail, in.PriceWholesale,
 		in.MinStockMilli, b2i(in.TrackLots), b2i(active),
 		in.PromoPrice, in.PromoStart, in.PromoEnd, in.ParentProductID, in.VariantLabel,
 		in.WarrantyMonths, b2i(in.TrackSerials), in.Description,
-		strings.TrimSpace(in.Brand), b2i(in.TrackExpiry), in.DefaultSupplier, now, now)
+		strings.TrimSpace(in.Brand), b2i(in.TrackExpiry), in.DefaultSupplier, kind, now, now)
 	if err != nil {
 		writeErr(w, http.StatusConflict, err.Error())
 		return
@@ -471,6 +511,20 @@ func (s *Server) updateProduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.normalize()
+	if !validKind(in.Kind) {
+		writeErr(w, http.StatusBadRequest, "type de produit invalide (standard ou service)")
+		return
+	}
+	if in.Kind == nil {
+		// Ancien client : le type stocké reste.
+		var k string
+		if s.db.QueryRow(`SELECT kind FROM products WHERE id = ?`, id).Scan(&k) == nil {
+			in.Kind = &k
+		} else {
+			std := "standard"
+			in.Kind = &std
+		}
+	}
 	if msg := s.checkBarcodes(&in, id); msg != "" {
 		writeErr(w, http.StatusConflict, msg)
 		return
@@ -498,14 +552,14 @@ func (s *Server) updateProduct(w http.ResponseWriter, r *http.Request) {
 			min_stock_milli=?, track_lots=?, active=?,
 			promo_price=?, promo_start=?, promo_end=?, parent_product_id=?, variant_label=?,
 			warranty_months=?, description=?, brand=?, track_expiry=?, default_supplier_id=?,
-			updated_at=?
+			track_serials=?, kind=?, updated_at=?
 		WHERE id=?`,
 		in.Barcode, in.SKU, in.Name, in.NameAr, in.CategoryID, in.Unit,
 		b2i(in.IsWeighable), in.VatRate, in.PurchasePrice, in.PriceRetail, in.PriceWholesale,
 		in.MinStockMilli, b2i(in.TrackLots), b2i(active),
 		in.PromoPrice, in.PromoStart, in.PromoEnd, in.ParentProductID, in.VariantLabel,
 		in.WarrantyMonths, in.Description, strings.TrimSpace(in.Brand), b2i(in.TrackExpiry),
-		in.DefaultSupplier, domain.NowISO(), id)
+		in.DefaultSupplier, b2i(in.TrackSerials), *in.Kind, domain.NowISO(), id)
 	if err != nil {
 		writeErr(w, http.StatusConflict, err.Error())
 		return

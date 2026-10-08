@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import '../api/client.dart';
 import '../api/models.dart';
 import '../theme/tokens.dart';
-import '../util/export.dart';
+import '../util/prefs.dart';
+import '../widgets/data_table.dart';
+import '../widgets/list_toolbar.dart';
 import '../widgets/ui.dart';
 
 const _tabs = [
@@ -39,18 +41,29 @@ class _ReportsScreenState extends State<ReportsScreen> {
   late DateTime _from;
   late DateTime _to;
   String _by = 'day';
+  String _period = 'month'; // today | 7d | month | year | custom
   Map<String, dynamic> _summary = const {};
   List<BreakdownRow> _rows = const [];
   bool _loading = true;
+  String? _error;
 
   bool get _viewCost => widget.session.user.can('view_cost');
 
   @override
   void initState() {
     super.initState();
-    final now = DateTime.now();
-    _from = DateTime(now.year, now.month, 1);
-    _to = DateTime(now.year, now.month, now.day);
+    _by = UiPrefs.instance.get<String>('reports', 'by') ?? 'day';
+    if (!_tabs.any((t) => t.$1 == _by)) _by = 'day';
+    _period = UiPrefs.instance.get<String>('reports', 'period') ?? 'month';
+    _applyPeriod(_period);
+    if (_period == 'custom') {
+      final f = DateTime.tryParse(UiPrefs.instance.get<String>('reports', 'from') ?? '');
+      final t = DateTime.tryParse(UiPrefs.instance.get<String>('reports', 'to') ?? '');
+      if (f != null && t != null) {
+        _from = f;
+        _to = t;
+      }
+    }
     _load();
   }
 
@@ -58,7 +71,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
       '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final results = await Future.wait([
         widget.api.reportSummary(from: _iso(_from), to: _iso(_to)),
@@ -71,27 +87,45 @@ class _ReportsScreenState extends State<ReportsScreen> {
           _loading = false;
         });
       }
-    } catch (_) {
-      if (mounted) setState(() => _loading = false);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = 'Rapport indisponible : $e';
+        });
+      }
     }
   }
 
   int _num(String k) => (_summary[k] as num?)?.toInt() ?? 0;
 
-  Future<void> _preset(int daysBack, {bool month = false, bool year = false}) async {
+  void _applyPeriod(String p) {
     final now = DateTime.now();
-    setState(() {
-      _to = DateTime(now.year, now.month, now.day);
-      if (year) {
+    _to = DateTime(now.year, now.month, now.day);
+    switch (p) {
+      case 'today':
+        _from = _to;
+      case '7d':
+        _from = _to.subtract(const Duration(days: 6));
+      case 'year':
         _from = DateTime(now.year, 1, 1);
-      } else if (month) {
+      default:
         _from = DateTime(now.year, now.month, 1);
-      } else {
-        _from = _to.subtract(Duration(days: daysBack));
-      }
+    }
+  }
+
+  Future<void> _preset(String p) async {
+    setState(() {
+      _period = p;
+      _applyPeriod(p);
     });
+    UiPrefs.instance.set('reports', 'period', p);
     _load();
   }
+
+  /// Sort key keeping hours and dates in their natural order.
+  Comparable _sortLabel(BreakdownRow r) =>
+      _by == 'hour' ? (int.tryParse(r.label) ?? 0) : _labelFor(r).toLowerCase();
 
   Future<void> _pickDate(bool isFrom) async {
     final d = await showDatePicker(
@@ -102,6 +136,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     );
     if (d != null) {
       setState(() {
+        _period = 'custom';
         if (isFrom) {
           _from = DateTime(d.year, d.month, d.day);
           if (_to.isBefore(_from)) _to = _from;
@@ -110,6 +145,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
           if (_from.isAfter(_to)) _from = _to;
         }
       });
+      UiPrefs.instance.set('reports', 'period', 'custom');
+      UiPrefs.instance.set('reports', 'from', _iso(_from));
+      UiPrefs.instance.set('reports', 'to', _iso(_to));
       _load();
     }
   }
@@ -118,41 +156,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
     if (_by == 'hour') return '${r.label}h';
     if (_by == 'payment') return _paymentNames[r.label] ?? r.label;
     return r.label;
-  }
-
-  Future<void> _export() async {
-    final path = await exportCsv(
-      baseName: 'rapport-$_by',
-      headers: [
-        'Libellé',
-        'Documents',
-        if (_by == 'category' || _by == 'product') 'Quantité',
-        'Total HT (DA)',
-        'Total TTC (DA)',
-        if (_viewCost && (_by == 'category' || _by == 'product')) 'Marge (DA)',
-      ],
-      rows: [
-        for (final r in _rows)
-          [
-            _labelFor(r),
-            '${r.count}',
-            if (_by == 'category' || _by == 'product') fmtQty(r.qtyMilli),
-            editDA(r.totalHT),
-            editDA(r.totalTTC),
-            if (_viewCost && (_by == 'category' || _by == 'product'))
-              editDA(r.margin ?? 0),
-          ]
-      ],
-    );
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        backgroundColor: T.ink,
-        behavior: SnackBarBehavior.floating,
-        content: Text('Exporté : $path',
-            style: const TextStyle(
-                fontFamily: T.mono, fontSize: 12, color: Colors.white)),
-      ));
-    }
   }
 
   @override
@@ -166,15 +169,18 @@ class _ReportsScreenState extends State<ReportsScreen> {
         Row(children: [
           const Text('Rapports', style: T.h1),
           const Spacer(),
-          for (final (label, action) in [
-            ("Aujourd'hui", () => _preset(0)),
-            ('7 jours', () => _preset(6)),
-            ('Ce mois', () => _preset(0, month: true)),
-            ('Cette année', () => _preset(0, year: true)),
+          for (final (key, label) in const [
+            ('today', "Aujourd'hui"),
+            ('7d', '7 jours'),
+            ('month', 'Ce mois'),
+            ('year', 'Cette année'),
           ])
             Padding(
               padding: const EdgeInsetsDirectional.only(start: 6),
-              child: _Pill(label: label, onTap: action),
+              child: _Pill(
+                  label: label,
+                  selected: _period == key,
+                  onTap: () => _preset(key)),
             ),
           const SizedBox(width: 10),
           _DateChip(label: _iso(_from), onTap: () => _pickDate(true)),
@@ -217,114 +223,103 @@ class _ReportsScreenState extends State<ReportsScreen> {
         // ---- Breakdown ----
         Row(children: [
           for (final (key, label) in _tabs)
-            Padding(
-              padding: const EdgeInsetsDirectional.only(end: 6),
-              child: _Pill(
-                label: label,
-                selected: _by == key,
-                onTap: () {
-                  setState(() => _by = key);
-                  _load();
-                },
-              ),
+            FilterPill(
+              label: label,
+              active: _by == key,
+              onTap: () {
+                setState(() => _by = key);
+                UiPrefs.instance.set('reports', 'by', key);
+                _load();
+              },
             ),
-          const Spacer(),
-          TextButton.icon(
-            onPressed: _rows.isEmpty ? null : _export,
-            icon: const Icon(Icons.download_outlined, size: 14, color: T.muted),
-            label: Text('Exporter CSV',
-                style: T.small.copyWith(color: T.muted)),
-          ),
         ]),
         const SizedBox(height: 10),
         Expanded(
-          child: Card14(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-            child: _rows.isEmpty
-                ? EmptyState(
-                    icon: Icons.query_stats_rounded,
-                    text: _loading
-                        ? 'Chargement…'
-                        : 'Aucune vente sur la période')
-                : Column(children: [
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 6),
-                      child: Row(children: [
-                        const Expanded(flex: 3, child: MicroLabel('Libellé')),
-                        const SizedBox(
-                            width: 70,
-                            child: MicroLabel('Docs')),
-                        if (_by == 'category' || _by == 'product')
-                          const SizedBox(width: 80, child: MicroLabel('Qté')),
-                        const SizedBox(
-                            width: 120, child: MicroLabel('Total HT')),
-                        const SizedBox(
-                            width: 130, child: MicroLabel('Total TTC')),
-                        if (showMargin)
-                          const SizedBox(
-                              width: 110, child: MicroLabel('Marge')),
-                        const Expanded(flex: 2, child: SizedBox()),
-                      ]),
-                    ),
-                    const Divider(),
-                    Expanded(
-                      child: ListView.separated(
-                        itemCount: _rows.length,
-                        separatorBuilder: (_, _) => const Divider(),
-                        itemBuilder: (context, i) {
-                          final r = _rows[i];
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 7),
-                            child: Row(children: [
-                              Expanded(
-                                  flex: 3,
-                                  child: Text(_labelFor(r),
-                                      style: T.body.copyWith(fontSize: 12.5),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis)),
-                              SizedBox(
-                                  width: 70,
-                                  child: Text('${r.count}',
-                                      style: T.monoSmall)),
-                              if (_by == 'category' || _by == 'product')
-                                SizedBox(
-                                    width: 80,
-                                    child: Text(fmtQty(r.qtyMilli),
-                                        style: T.monoSmall)),
-                              SizedBox(
-                                  width: 120,
-                                  child: Text(fmtDA(r.totalHT),
-                                      style: T.monoSmall)),
-                              SizedBox(
-                                  width: 130,
-                                  child: Text(fmtDA(r.totalTTC),
-                                      style: T.monoBody
-                                          .copyWith(fontSize: 12))),
-                              if (showMargin)
-                                SizedBox(
-                                    width: 110,
-                                    child: Text(fmtDA(r.margin ?? 0),
-                                        style: T.monoSmall.copyWith(
-                                            color: (r.margin ?? 0) < 0
-                                                ? T.dangerDark
-                                                : T.mintDark))),
-                              Expanded(
-                                flex: 2,
-                                child: Padding(
-                                  padding: const EdgeInsetsDirectional.only(
-                                      start: 10),
-                                  child: _MiniBar(
-                                      ratio: maxTTC == 0
-                                          ? 0
-                                          : r.totalTTC / maxTTC),
-                                ),
-                              ),
-                            ]),
-                          );
-                        },
-                      ),
-                    ),
-                  ]),
+          child: DataListView<BreakdownRow>(
+            key: ValueKey('reports-$_by'),
+            items: _rows,
+            loading: _loading,
+            error: _error,
+            onRetry: _load,
+            prefsKey: 'reports_$_by',
+            exportTitle: 'Rapport ${_tabs.firstWhere((t) => t.$1 == _by).$2.toLowerCase()} '
+                '· ${_iso(_from)} → ${_iso(_to)}',
+            exportBaseName: 'rapport-$_by',
+            empty: const EmptyState(
+                icon: Icons.query_stats_rounded,
+                text: 'Aucune vente sur la période'),
+            aggregates: (rows) => [
+              ('Total HT', fmtDA(rows.fold<int>(0, (s, r) => s + r.totalHT))),
+              ('Total TTC', fmtDA(rows.fold<int>(0, (s, r) => s + r.totalTTC))),
+              if (showMargin)
+                ('Marge', fmtDA(rows.fold<int>(0, (s, r) => s + (r.margin ?? 0)))),
+            ],
+            columns: [
+              ColumnSpec<BreakdownRow>(
+                label: 'Libellé',
+                flex: 3,
+                hideable: false,
+                sortKey: (r) => _sortLabel(r),
+                exportValue: _labelFor,
+                cell: (_, r) => Text(_labelFor(r),
+                    style: T.body.copyWith(fontSize: 12.5),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis),
+              ),
+              ColumnSpec<BreakdownRow>(
+                label: 'Docs',
+                width: 70,
+                numeric: true,
+                sortKey: (r) => r.count,
+                exportValue: (r) => r.count,
+                cell: (_, r) => Text('${r.count}', style: T.monoSmall),
+              ),
+              if (_by == 'category' || _by == 'product')
+                ColumnSpec<BreakdownRow>(
+                  label: 'Qté',
+                  width: 90,
+                  numeric: true,
+                  sortKey: (r) => r.qtyMilli,
+                  exportValue: (r) => r.qtyMilli / 1000,
+                  cell: (_, r) => Text(fmtQty(r.qtyMilli), style: T.monoSmall),
+                ),
+              ColumnSpec<BreakdownRow>(
+                label: 'Total HT',
+                width: 120,
+                numeric: true,
+                sortKey: (r) => r.totalHT,
+                exportValue: (r) => r.totalHT / 100,
+                cell: (_, r) => Text(fmtDA(r.totalHT), style: T.monoSmall),
+              ),
+              ColumnSpec<BreakdownRow>(
+                label: 'Total TTC',
+                width: 130,
+                numeric: true,
+                sortKey: (r) => r.totalTTC,
+                exportValue: (r) => r.totalTTC / 100,
+                cell: (_, r) => Text(fmtDA(r.totalTTC),
+                    style: T.monoBody.copyWith(fontSize: 12)),
+              ),
+              if (showMargin)
+                ColumnSpec<BreakdownRow>(
+                  label: 'Marge',
+                  width: 110,
+                  numeric: true,
+                  sortKey: (r) => r.margin ?? 0,
+                  exportValue: (r) => (r.margin ?? 0) / 100,
+                  cell: (_, r) => Text(fmtDA(r.margin ?? 0),
+                      style: T.monoSmall.copyWith(
+                          color: (r.margin ?? 0) < 0 ? T.dangerDark : T.mintDark)),
+                ),
+              ColumnSpec<BreakdownRow>(
+                label: 'Part',
+                flex: 2,
+                cell: (_, r) => Padding(
+                  padding: const EdgeInsetsDirectional.only(start: 10),
+                  child: _MiniBar(ratio: maxTTC == 0 ? 0 : r.totalTTC / maxTTC),
+                ),
+              ),
+            ],
           ),
         ),
       ]),

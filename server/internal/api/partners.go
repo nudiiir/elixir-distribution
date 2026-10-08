@@ -13,25 +13,25 @@ import (
 )
 
 type Partner struct {
-	ID          string  `json:"id"`
-	Kind        string  `json:"kind"`
-	Name        string  `json:"name"`
-	Phone       *string `json:"phone"`
-	Email       *string `json:"email"`
-	Address     *string `json:"address"`
-	NIF         *string `json:"nif"`
-	NIS         *string `json:"nis"`
-	RC          *string `json:"rc"`
-	AI          *string `json:"ai"`
-	CreditLimit *int64  `json:"credit_limit"`
-	Notes       *string `json:"notes"`
-	PriceLevel  string  `json:"price_level"` // retail | wholesale
-	MinShelfDays   int64 `json:"min_shelf_days"`   // durée de vie restante minimale (jours)
-	OverReceiptPct int64 `json:"over_receipt_pct"` // tolérance de sur-réception, pct x100
-	Active      bool    `json:"active"`
-	Balance     int64   `json:"balance"` // positive = the partner owes us
-	CreatedAt   string  `json:"created_at"`
-	UpdatedAt   string  `json:"updated_at"`
+	ID             string  `json:"id"`
+	Kind           string  `json:"kind"`
+	Name           string  `json:"name"`
+	Phone          *string `json:"phone"`
+	Email          *string `json:"email"`
+	Address        *string `json:"address"`
+	NIF            *string `json:"nif"`
+	NIS            *string `json:"nis"`
+	RC             *string `json:"rc"`
+	AI             *string `json:"ai"`
+	CreditLimit    *int64  `json:"credit_limit"`
+	Notes          *string `json:"notes"`
+	PriceLevel     string  `json:"price_level"`      // retail | wholesale
+	MinShelfDays   int64   `json:"min_shelf_days"`   // durée de vie restante minimale (jours)
+	OverReceiptPct int64   `json:"over_receipt_pct"` // tolérance de sur-réception, pct x100
+	Active         bool    `json:"active"`
+	Balance        int64   `json:"balance"` // positive = the partner owes us
+	CreatedAt      string  `json:"created_at"`
+	UpdatedAt      string  `json:"updated_at"`
 }
 
 const partnerCols = `p.id, p.kind, p.name, p.phone, p.email, p.address, p.nif, p.nis, p.rc, p.ai,
@@ -92,21 +92,21 @@ func (s *Server) listPartners(w http.ResponseWriter, r *http.Request) {
 }
 
 type partnerInput struct {
-	Kind        string  `json:"kind"`
-	Name        string  `json:"name"`
-	Phone       *string `json:"phone"`
-	Email       *string `json:"email"`
-	Address     *string `json:"address"`
-	NIF         *string `json:"nif"`
-	NIS         *string `json:"nis"`
-	RC          *string `json:"rc"`
-	AI          *string `json:"ai"`
-	CreditLimit *int64  `json:"credit_limit"`
-	Notes       *string `json:"notes"`
-	PriceLevel  string  `json:"price_level"`
-	MinShelfDays   *int64 `json:"min_shelf_days"`
-	OverReceiptPct *int64 `json:"over_receipt_pct"`
-	Active      *bool   `json:"active"`
+	Kind           string  `json:"kind"`
+	Name           string  `json:"name"`
+	Phone          *string `json:"phone"`
+	Email          *string `json:"email"`
+	Address        *string `json:"address"`
+	NIF            *string `json:"nif"`
+	NIS            *string `json:"nis"`
+	RC             *string `json:"rc"`
+	AI             *string `json:"ai"`
+	CreditLimit    *int64  `json:"credit_limit"`
+	Notes          *string `json:"notes"`
+	PriceLevel     string  `json:"price_level"`
+	MinShelfDays   *int64  `json:"min_shelf_days"`
+	OverReceiptPct *int64  `json:"over_receipt_pct"`
+	Active         *bool   `json:"active"`
 }
 
 func orInt(v *int64, def int64) int64 {
@@ -236,55 +236,61 @@ func (s *Server) partnerBalance(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"partner_id": id, "balance": balance.Int64})
 }
 
-// partnerOpenItems matches payments and credit notes to the oldest invoices
-// first (FIFO) and returns what is still open per invoice, with its age. The
-// ledger itself stays a plain running balance; this is the derived aging view.
-// Cancelled documents (and their void rows) are ignored entirely.
-func (s *Server) partnerOpenItems(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	var kind string
-	if err := s.db.QueryRow(`SELECT kind FROM partners WHERE id = ?`, id).Scan(&kind); err != nil {
-		writeErr(w, http.StatusNotFound, "partner not found")
-		return
-	}
-	sgn := int64(1) // positive = the partner owes us
+// openItem is one invoice-like ledger entry with what is still open on it.
+type openItem struct {
+	DocumentID  string `json:"document_id"`
+	Number      string `json:"number"`
+	DocDate     string `json:"doc_date"`
+	DueDate     string `json:"due_date"`
+	Total       int64  `json:"total"`
+	Outstanding int64  `json:"outstanding"`
+	AgeDays     int    `json:"age_days"`
+	Overdue     bool   `json:"overdue"`
+}
+
+// partnerSign: +1 reads the ledger as a receivable (customer), -1 as a
+// payable (supplier).
+func partnerSign(kind string) int64 {
 	if kind == "supplier" {
-		sgn = -1
+		return -1
 	}
-	rows, err := s.db.Query(`SELECT pl.amount, pl.document_id, COALESCE(d.number,''),
+	return 1
+}
+
+// ledgerFIFO matches payments and credit notes to the oldest invoices first
+// (FIFO) and returns EVERY invoice entry with what is still open on it, plus
+// the credit left unallocated. A settlement recorded before any open invoice
+// (prepayment) is carried and consumed by the next invoices. Cancelled
+// documents (and their void rows) are ignored entirely. The ledger itself
+// stays a plain running balance; this is the derived aging view.
+func ledgerFIFO(db *sql.DB, partnerID string, sgn int64) ([]*openItem, int64, error) {
+	rows, err := db.Query(`SELECT pl.amount, COALESCE(pl.document_id,''), COALESCE(d.number,''),
 			COALESCE(d.doc_date,''), COALESCE(d.due_date,'')
 		FROM partner_ledger pl LEFT JOIN documents d ON d.id = pl.document_id
 		WHERE pl.partner_id = ? AND COALESCE(d.status,'posted') <> 'cancelled'
-		ORDER BY pl.created_at, pl.id`, id)
+		ORDER BY pl.created_at, pl.id`, partnerID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
+		return nil, 0, err
 	}
 	defer rows.Close()
-
-	type item struct {
-		DocumentID  string `json:"document_id"`
-		Number      string `json:"number"`
-		DocDate     string `json:"doc_date"`
-		DueDate     string `json:"due_date"`
-		Total       int64  `json:"total"`
-		Outstanding int64  `json:"outstanding"`
-		AgeDays     int    `json:"age_days"`
-		Overdue     bool   `json:"overdue"`
-	}
-	var items []*item
-	var credit int64 // settlements beyond every open invoice
+	var items []*openItem
+	var credit int64 // settlements not (yet) allocated to an invoice
 	for rows.Next() {
 		var amt int64
 		var doc, num, date, due string
 		if err := rows.Scan(&amt, &doc, &num, &date, &due); err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
-			return
+			return nil, 0, err
 		}
 		amt *= sgn
 		if amt > 0 {
-			items = append(items, &item{DocumentID: doc, Number: num, DocDate: date,
-				DueDate: due, Total: amt, Outstanding: amt})
+			it := &openItem{DocumentID: doc, Number: num, DocDate: date,
+				DueDate: due, Total: amt, Outstanding: amt}
+			if credit > 0 {
+				take := min(credit, amt)
+				it.Outstanding -= take
+				credit -= take
+			}
+			items = append(items, it)
 			continue
 		}
 		settle := -amt
@@ -292,27 +298,116 @@ func (s *Server) partnerOpenItems(w http.ResponseWriter, r *http.Request) {
 			if settle == 0 {
 				break
 			}
-			take := it.Outstanding
-			if take > settle {
-				take = settle
-			}
+			take := min(it.Outstanding, settle)
 			it.Outstanding -= take
 			settle -= take
 		}
 		credit += settle
 	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
 	today := time.Now()
-	open := []*item{}
+	for _, it := range items {
+		if t, err := time.Parse("2006-01-02", it.DocDate); err == nil {
+			it.AgeDays = int(today.Sub(t).Hours() / 24)
+		}
+		if t, err := time.Parse("2006-01-02", it.DueDate); err == nil &&
+			it.Outstanding > 0 && today.After(t.AddDate(0, 0, 1)) {
+			it.Overdue = true
+		}
+	}
+	return items, credit, nil
+}
+
+// settleDocuments fills paid / remaining / payment_status on posted
+// receivable/payable documents: cash and card sales are paid at once; credit
+// sales and supplier invoices are settled FIFO from the partner ledger,
+// computed once per partner for the whole page.
+func settleDocuments(db *sql.DB, docs []Document) error {
+	type key struct {
+		partner string
+		sgn     int64
+	}
+	cache := map[key]map[string]*openItem{}
+	for i := range docs {
+		d := &docs[i]
+		d.Paid, d.Remaining, d.PaymentStatus = 0, 0, ""
+		if d.Status != "posted" {
+			continue
+		}
+		var sgn int64
+		switch d.DocType {
+		case domain.SaleTicket, domain.SaleInvoice:
+			if d.PaymentMethod == nil || *d.PaymentMethod != "credit" {
+				d.Paid, d.PaymentStatus = d.TotalTTC, "paid"
+				continue
+			}
+			sgn = 1
+		case domain.PurchaseInvoice:
+			sgn = -1
+		default:
+			continue
+		}
+		if d.PartnerID == nil || d.TotalTTC <= 0 {
+			continue
+		}
+		k := key{*d.PartnerID, sgn}
+		byDoc, ok := cache[k]
+		if !ok {
+			items, _, err := ledgerFIFO(db, *d.PartnerID, sgn)
+			if err != nil {
+				return err
+			}
+			byDoc = map[string]*openItem{}
+			for _, it := range items {
+				if prev := byDoc[it.DocumentID]; prev != nil {
+					prev.Total += it.Total
+					prev.Outstanding += it.Outstanding
+				} else {
+					c := *it
+					byDoc[it.DocumentID] = &c
+				}
+			}
+			cache[k] = byDoc
+		}
+		rem := int64(0)
+		if it := byDoc[d.ID]; it != nil {
+			rem = it.Outstanding
+		}
+		rem = max(0, min(rem, d.TotalTTC))
+		d.Remaining = rem
+		d.Paid = d.TotalTTC - rem
+		switch {
+		case rem == 0:
+			d.PaymentStatus = "paid"
+		case rem < d.TotalTTC:
+			d.PaymentStatus = "partial"
+		default:
+			d.PaymentStatus = "due"
+		}
+	}
+	return nil
+}
+
+// partnerOpenItems returns what is still open per invoice, with its age.
+func (s *Server) partnerOpenItems(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var kind string
+	if err := s.db.QueryRow(`SELECT kind FROM partners WHERE id = ?`, id).Scan(&kind); err != nil {
+		writeErr(w, http.StatusNotFound, "partner not found")
+		return
+	}
+	items, credit, err := ledgerFIFO(s.db, id, partnerSign(kind))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	open := []*openItem{}
 	var totalOpen int64
 	for _, it := range items {
 		if it.Outstanding <= 0 {
 			continue
-		}
-		if t, err := time.Parse("2006-01-02", it.DocDate); err == nil {
-			it.AgeDays = int(today.Sub(t).Hours() / 24)
-		}
-		if t, err := time.Parse("2006-01-02", it.DueDate); err == nil && today.After(t.AddDate(0, 0, 1)) {
-			it.Overdue = true
 		}
 		totalOpen += it.Outstanding
 		open = append(open, it)

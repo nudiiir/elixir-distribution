@@ -205,7 +205,23 @@ func Post(db *sql.DB, docID, userID string) (string, error) {
 	}
 
 	var timbre int64
-	if TimbreApplies(d.docType, d.paymentMethod.String) {
+	// Paiement mixte : des lignes document_payments remplacent le mode unique.
+	var split *splitPayment
+	if d.docType == SaleTicket || d.docType == SaleInvoice {
+		sp, err := loadSplitPayment(tx, docID)
+		if err != nil {
+			return "", err
+		}
+		split = sp
+	}
+	if split != nil {
+		t, err := split.settle(totalTTC, d.partnerID.Valid)
+		if err != nil {
+			return "", err
+		}
+		timbre = t
+		totalTTC += timbre
+	} else if TimbreApplies(d.docType, d.paymentMethod.String) {
 		timbre = Timbre(totalTTC)
 		totalTTC += timbre
 	}
@@ -511,7 +527,12 @@ func Post(db *sql.DB, docID, userID string) (string, error) {
 	var ledgerKind string
 	switch d.docType {
 	case SaleTicket, SaleInvoice:
-		if d.paymentMethod.String == "credit" {
+		if split != nil {
+			// Seule la part « crédit » d'un paiement mixte va au compte client.
+			if split.credit > 0 {
+				ledgerAmount, ledgerKind = split.credit, "invoice"
+			}
+		} else if d.paymentMethod.String == "credit" {
 			if !d.partnerID.Valid {
 				return "", ErrNoPartner
 			}
@@ -528,6 +549,16 @@ func Post(db *sql.DB, docID, userID string) (string, error) {
 			var refMethod sql.NullString
 			tx.QueryRow(`SELECT payment_method FROM documents WHERE id = ?`, d.refDocID.String).
 				Scan(&refMethod)
+			if refMethod.String == "" {
+				// Vente d'origine en paiement mixte avec une part à crédit :
+				// le retour vient en déduction de la dette.
+				var n int
+				tx.QueryRow(`SELECT COUNT(*) FROM document_payments WHERE document_id = ? AND method = 'credit'`,
+					d.refDocID.String).Scan(&n)
+				if n > 0 {
+					refMethod = sql.NullString{String: "credit", Valid: true}
+				}
+			}
 			if refMethod.String == "credit" && paidOut {
 				paidOut = false
 				if _, err := tx.Exec(`UPDATE documents SET payment_method='credit' WHERE id=?`, docID); err != nil {
@@ -846,11 +877,10 @@ func Void(db *sql.DB, docID, userID, reason string) error {
 	}
 	prows.Close()
 	for _, p := range pls {
-		if p.kind == "void" {
-			continue
-		}
+		// partner_ledger.kind is CHECK-constrained (no 'void'): the reversal is
+		// an 'adjustment' on the same document, which is now cancelled.
 		if _, err := tx.Exec(`INSERT INTO partner_ledger (id, partner_id, amount, kind, document_id, created_at)
-			VALUES (?, ?, ?, 'void', ?, ?)`, NewID(), p.partnerID, -p.amount, docID, now); err != nil {
+			VALUES (?, ?, ?, 'adjustment', ?, ?)`, NewID(), p.partnerID, -p.amount, docID, now); err != nil {
 			return err
 		}
 	}
@@ -1100,6 +1130,97 @@ func applyMove(tx *sql.Tx, productID, warehouseID string, lotID sql.NullString,
 			VALUES (?, ?, ?, ?, ?)`, productID, warehouseID, newQty, newAvg, now)
 	}
 	return err
+}
+
+// PaymentMethods lists the methods a document_payments row may carry.
+var PaymentMethods = map[string]string{
+	"cash":     "Espèces",
+	"cib":      "CIB",
+	"edahabia": "Edahabia",
+	"cheque":   "Chèque",
+	"transfer": "Virement",
+	"credit":   "Crédit",
+	"gift":     "Carte cadeau",
+}
+
+// splitPayment is the sum of a document's document_payments rows by method.
+type splitPayment struct {
+	cash, credit, other int64
+}
+
+func loadSplitPayment(tx *sql.Tx, docID string) (*splitPayment, error) {
+	rows, err := tx.Query(`SELECT method, amount FROM document_payments WHERE document_id = ?`, docID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var sp splitPayment
+	n := 0
+	for rows.Next() {
+		var method string
+		var amount int64
+		if err := rows.Scan(&method, &amount); err != nil {
+			return nil, err
+		}
+		n++
+		switch method {
+		case "cash":
+			sp.cash += amount
+		case "credit":
+			sp.credit += amount
+		default:
+			sp.other += amount
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, nil
+	}
+	return &sp, nil
+}
+
+// SplitTimbre returns the stamp duty due on a mixed payment: the cash part of
+// the goods is what the non-cash methods leave of the total, and only that part
+// bears the timbre. The cash row(s) must then equal that part + the timbre.
+func SplitTimbre(totalTTC, nonCash int64) (cashGoods, timbre int64) {
+	cashGoods = totalTTC - nonCash
+	if cashGoods > 0 {
+		timbre = Timbre(cashGoods)
+	}
+	return
+}
+
+// settle checks that the rows cover the ticket exactly and returns the timbre.
+func (sp *splitPayment) settle(totalTTC int64, hasPartner bool) (int64, error) {
+	if sp.credit > 0 && !hasPartner {
+		return 0, &PostError{"un paiement à crédit exige un client"}
+	}
+	nonCash := sp.credit + sp.other
+	cashGoods, timbre := SplitTimbre(totalTTC, nonCash)
+	if cashGoods < 0 {
+		return 0, &PostError{fmt.Sprintf(
+			"les paiements hors espèces (%s DA) dépassent le total du ticket (%s DA)",
+			fmtDA(nonCash), fmtDA(totalTTC))}
+	}
+	if sp.cash == 0 && cashGoods > 0 {
+		timbre = 0
+	}
+	if sp.cash != cashGoods+timbre {
+		return 0, &PostError{fmt.Sprintf(
+			"la somme des paiements (%s DA) ne correspond pas au total à payer (%s DA)",
+			fmtDA(sp.cash+nonCash), fmtDA(totalTTC+timbre))}
+	}
+	return timbre, nil
+}
+
+func fmtDA(c int64) string {
+	sign := ""
+	if c < 0 {
+		sign, c = "-", -c
+	}
+	return fmt.Sprintf("%s%d,%02d", sign, c/100, c%100)
 }
 
 func nullIfEmpty(s string) any {

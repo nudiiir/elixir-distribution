@@ -82,28 +82,42 @@ func (s *Server) ficheProduct(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Derniers mouvements (5), avec le document derrière chacun.
+	// balance_after = stock du dépôt juste après ce mouvement (somme courante
+	// du journal par dépôt) : la colonne « Solde » de la fiche.
 	type mv struct {
-		Date      string  `json:"date"`
-		DocType   string  `json:"doc_type"`
-		DocNumber *string `json:"doc_number"`
-		DocID     string  `json:"doc_id"`
-		Warehouse string  `json:"warehouse"`
-		QtyMilli  int64   `json:"qty_milli"`
-		UnitCost  int64   `json:"unit_cost"`
+		Date         string  `json:"date"`
+		DocType      string  `json:"doc_type"`
+		DocNumber    *string `json:"doc_number"`
+		DocID        string  `json:"doc_id"`
+		DocumentID   string  `json:"document_id"`
+		WarehouseID  string  `json:"warehouse_id"`
+		Warehouse    string  `json:"warehouse"`
+		QtyMilli     int64   `json:"qty_milli"`
+		UnitCost     int64   `json:"unit_cost"`
+		BalanceAfter int64   `json:"balance_after"`
+		Reason       *string `json:"reason"`
 	}
 	moves := []mv{}
-	rows, err = s.db.Query(`SELECT sl.created_at, d.doc_type, d.number, d.id, w.name,
-			sl.qty_delta_milli, sl.unit_cost
-		FROM stock_ledger sl
-		JOIN documents d ON d.id = sl.document_id
-		JOIN warehouses w ON w.id = sl.warehouse_id
-		WHERE sl.product_id = ? AND sl.qty_delta_milli <> 0
-		ORDER BY sl.created_at DESC, sl.id DESC LIMIT ?`, id, ficheMoveLimit(r))
+	rows, err = s.db.Query(`SELECT created_at, doc_type, number, document_id, warehouse_id, wname,
+			qty_delta_milli, unit_cost, balance, reason
+		FROM (
+			SELECT sl.id, sl.created_at, d.doc_type, d.number, sl.document_id, sl.warehouse_id,
+				w.name AS wname, sl.qty_delta_milli, sl.unit_cost, d.reason,
+				SUM(sl.qty_delta_milli) OVER (PARTITION BY sl.warehouse_id
+					ORDER BY sl.created_at, sl.id ROWS UNBOUNDED PRECEDING) AS balance
+			FROM stock_ledger sl
+			JOIN documents d ON d.id = sl.document_id
+			JOIN warehouses w ON w.id = sl.warehouse_id
+			WHERE sl.product_id = ?
+		)
+		WHERE qty_delta_milli <> 0
+		ORDER BY created_at DESC, id DESC LIMIT ?`, id, ficheMoveLimit(r))
 	if err == nil {
 		for rows.Next() {
 			var m mv
-			if rows.Scan(&m.Date, &m.DocType, &m.DocNumber, &m.DocID, &m.Warehouse,
-				&m.QtyMilli, &m.UnitCost) == nil {
+			if rows.Scan(&m.Date, &m.DocType, &m.DocNumber, &m.DocID, &m.WarehouseID,
+				&m.Warehouse, &m.QtyMilli, &m.UnitCost, &m.BalanceAfter, &m.Reason) == nil {
+				m.DocumentID = m.DocID
 				if !canCost {
 					m.UnitCost = 0
 				}
@@ -111,7 +125,17 @@ func (s *Server) ficheProduct(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		rows.Close()
+	} else {
+		log.Printf("fiche moves: %v", err)
 	}
+
+	// Ventes des 30 derniers jours (quantité nette vendue par jour, avoirs
+	// déduits) + couverture du stock.
+	var stockTotal int64
+	for _, l := range levels {
+		stockTotal += l.QtyMilli
+	}
+	sales30, avgDaily, coverage := s.salesCoverage(id, stockTotal, time.Now())
 
 	// Dernier prix payé à chaque fournisseur.
 	type sup struct {
@@ -170,7 +194,68 @@ func (s *Server) ficheProduct(w http.ResponseWriter, r *http.Request) {
 		"moves":     moves,
 		"suppliers": suppliers,
 		"variants":  variants,
+		// Ventes 30 jours + couverture (null sans ventes).
+		"sales_30d":             sales30,
+		"avg_daily_sales_milli": avgDaily,
+		"coverage_days":         coverage,
 	})
+}
+
+// SalesDay is one day of the « Ventes 30 jours » chart.
+type SalesDay struct {
+	Date     string `json:"date"`
+	QtyMilli int64  `json:"qty_milli"`
+}
+
+// salesTypes are the documents whose stock movements are sales (signed:
+// a sale takes stock out, a customer credit note brings it back).
+var salesTypes = []string{domain.SaleTicket, domain.SaleInvoice, domain.DeliveryNote, domain.SaleCreditNote}
+
+// salesCoverage returns the net sold quantity per day for the 30 days ending
+// `now` (oldest first, zero days included), the average per day over those
+// 30 days and the stock coverage in days (nil when nothing sold).
+func (s *Server) salesCoverage(productID string, stockMilli int64, now time.Time) ([]SalesDay, int64, *int64) {
+	start := now.AddDate(0, 0, -29)
+	days := make([]SalesDay, 30)
+	idx := map[string]int{}
+	for i := 0; i < 30; i++ {
+		d := start.AddDate(0, 0, i).Format("2006-01-02")
+		days[i] = SalesDay{Date: d}
+		idx[d] = i
+	}
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(salesTypes)), ",")
+	args := []any{productID, start.Format("2006-01-02"), now.Format("2006-01-02")}
+	for _, t := range salesTypes {
+		args = append(args, t)
+	}
+	rows, err := s.db.Query(`SELECT substr(d.doc_date, 1, 10), -SUM(sl.qty_delta_milli)
+		FROM stock_ledger sl JOIN documents d ON d.id = sl.document_id
+		WHERE sl.product_id = ? AND substr(d.doc_date, 1, 10) BETWEEN ? AND ?
+		  AND d.doc_type IN (`+ph+`)
+		GROUP BY substr(d.doc_date, 1, 10)`, args...)
+	var total int64
+	if err == nil {
+		for rows.Next() {
+			var d string
+			var q int64
+			if rows.Scan(&d, &q) == nil {
+				if i, ok := idx[d]; ok {
+					days[i].QtyMilli = q
+					total += q
+				}
+			}
+		}
+		rows.Close()
+	}
+	avg := total / 30
+	if avg <= 0 {
+		return days, 0, nil // pas de ventes : pas de couverture
+	}
+	cov := int64(0)
+	if stockMilli > 0 {
+		cov = stockMilli / avg
+	}
+	return days, avg, &cov
 }
 
 func ficheMoveLimit(r *http.Request) int {
