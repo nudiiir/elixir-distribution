@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api/client.dart';
 import '../api/models.dart';
 import '../theme/tokens.dart';
+import '../util/analysis_links.dart';
 import '../util/commands.dart';
 import '../util/features.dart';
 import '../util/feedback.dart';
@@ -419,6 +420,9 @@ class _StockScreenState extends State<StockScreen> {
             if (primaryLabel != 'Nouveau transfert' && multi)
               MenuEntry('Nouveau transfert', Icons.compare_arrows_rounded, _newTransfer),
             MenuEntry('Exporter le stock…', Icons.download_rounded, _export),
+            if (AnalysisLinks.available)
+              MenuEntry('Analyser le stock', Icons.insights_rounded,
+                  () => AnalysisLinks.launch(AnalysisLinks.stock())),
           ],
         ),
         const SizedBox(height: 16),

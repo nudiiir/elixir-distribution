@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import '../api/client.dart';
 import '../api/models.dart';
 import '../theme/tokens.dart';
+import '../util/analysis_links.dart';
 import '../util/prefs.dart';
+import '../widgets/analyze_button.dart';
 import '../widgets/data_table.dart';
 import '../widgets/list_toolbar.dart';
 import '../widgets/ui.dart';
@@ -168,6 +170,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           const Text('Rapports', style: T.h1),
+          AnalyzeButton(label: 'Explorer plus loin', seeds: [
+            AnalysisLinks.sales(),
+            AnalysisLinks.purchases(),
+            AnalysisLinks.receivables(),
+            AnalysisLinks.stock(),
+          ]),
           const Spacer(),
           for (final (key, label) in const [
             ('today', "Aujourd'hui"),

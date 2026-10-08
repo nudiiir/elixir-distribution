@@ -38,12 +38,18 @@ var gallery = []GalleryItem{
 		Spec: Request{Spec: Spec{Source: "sale_lines", Dimensions: []string{"category_name"}, Measures: []Measure{{Name: "ca_ttc"}}, Range: Range{Type: "this_month"}}}},
 	{Theme: "Ventes", Title: "Ventes par vendeur", Keywords: []string{"vendeur", "vendeurs", "caissier", "employe", "equipe", "personnel"}, ChartType: "bar",
 		Spec: Request{Spec: Spec{Source: "sale_lines", Dimensions: []string{"cashier_name"}, Measures: []Measure{{Name: "ca_ttc"}, {Name: "sales_count"}}, Range: Range{Type: "this_month"}, Sort: []Sort{{Field: "m0", Dir: "desc"}}}}},
+	{Theme: "Ventes", Title: "Marge par catégorie", Keywords: []string{"marge", "marges", "categorie", "categories", "rayon", "rentabilite", "benefice"}, ChartType: "bar",
+		Spec: Request{Spec: Spec{Source: "sale_lines", Dimensions: []string{"category_name"}, Measures: []Measure{{Name: "margin"}, {Name: "margin_pct"}, {Name: "ca_ht"}}, Range: Range{Type: "last_n_months", N: 3}, Sort: []Sort{{Field: "m0", Dir: "desc"}}}}},
+	{Theme: "Ventes", Title: "Produits les plus rentables", Keywords: []string{"rentable", "rentables", "marge", "benefice", "gagne", "produit", "produits"}, ChartType: "table",
+		Spec: Request{Spec: Spec{Source: "sale_lines", Dimensions: []string{"product_name"}, Measures: []Measure{{Name: "margin"}, {Name: "margin_pct"}, {Name: "qty"}}, Range: Range{Type: "last_n_months", N: 3}, Sort: []Sort{{Field: "m0", Dir: "desc"}}, Limit: 20}}},
+	{Theme: "Ventes", Title: "Meilleurs clients", Keywords: []string{"client", "clients", "meilleur", "meilleurs", "fidele", "fideles", "achete", "achetent"}, ChartType: "table",
+		Spec: Request{Spec: Spec{Source: "sale_lines", Dimensions: []string{"partner_name"}, Measures: []Measure{{Name: "ca_ttc"}, {Name: "sales_count"}}, Filters: []Filter{{Field: "partner_name", Op: "is_not_null"}}, Range: Range{Type: "last_n_months", N: 6}, Sort: []Sort{{Field: "m0", Dir: "desc"}}, Limit: 20}}},
+	{Theme: "Ventes", Title: "Ventes par mode de paiement", Keywords: []string{"paiement", "espece", "especes", "carte", "cib", "edahabia", "cheque", "credit", "mode"}, ChartType: "donut",
+		Spec: Request{Spec: Spec{Source: "sale_lines", Dimensions: []string{"payment_method"}, Measures: []Measure{{Name: "ca_ttc"}}, Range: Range{Type: "this_month"}}}},
 	{Theme: "Ventes", Title: "Marge par marque", Keywords: []string{"marge", "marque", "marques", "rentable"}, ChartType: "bar",
 		Spec: Request{Spec: Spec{Source: "sale_lines", Dimensions: []string{"brand"}, Measures: []Measure{{Name: "margin"}, {Name: "margin_pct"}}, Filters: []Filter{{Field: "brand", Op: "is_not_null"}}, Range: Range{Type: "this_quarter"}, Sort: []Sort{{Field: "m0", Dir: "desc"}}, Limit: 15}}},
 	{Theme: "Ventes", Title: "Retours et avoirs", Keywords: []string{"retour", "retours", "avoir", "avoirs", "rembourse"}, ChartType: "table",
 		Spec: Request{Spec: Spec{Source: "sale_lines", Dimensions: []string{"doc_date:day", "product_name"}, Measures: []Measure{{Name: "qty"}, {Name: "ca_ttc"}}, Filters: []Filter{{Field: "doc_kind", Op: "eq", Value: "return"}}, Range: Range{Type: "last_n_days", N: 30}, Sort: []Sort{{Field: "d0", Dir: "desc"}}, ZeroFill: boolPtr(false)}}},
-	{Theme: "Ventes", Title: "Produits réglementés vendus (registre)", Keywords: []string{"reglemente", "reglementes", "registre", "controle", "tableau"}, ChartType: "table",
-		Spec: Request{Spec: Spec{Source: "sale_lines", Dimensions: []string{"doc_date:day", "product_name", "document_number"}, Measures: []Measure{{Name: "qty"}}, Filters: []Filter{{Field: "regulated", Op: "eq", Value: true}}, Range: Range{Type: "this_month"}, Sort: []Sort{{Field: "d0", Dir: "desc"}}, ZeroFill: boolPtr(false)}}},
 	// ---------------------------------------------------------------- Stock
 	{Theme: "Stock", Title: "Produits périmant sous 90 jours", Keywords: []string{"perime", "peremption", "expire", "expiration", "dlc", "90", "jours"}, ChartType: "table",
 		Spec: Request{Spec: Spec{Source: "stock_snapshot", Dimensions: []string{"product_name", "nearest_expiry"}, Measures: []Measure{{Field: "qty_expiring", Agg: "sum"}, {Name: "value_expiring"}}, Filters: []Filter{{Field: "is_expiring", Op: "eq", Value: true}}, Range: Range{Type: "all"}, Sort: []Sort{{Field: "d1", Dir: "asc"}}, Limit: 200, Params: map[string]int{"expiry_days": 90}}}},
@@ -75,9 +81,9 @@ var gallery = []GalleryItem{
 	{Theme: "Achats", Title: "Gratuités reçues par fournisseur", Keywords: []string{"gratuit", "gratuites", "ug", "bonus", "fournisseur"}, ChartType: "bar",
 		Spec: Request{Spec: Spec{Source: "purchase_lines", Dimensions: []string{"supplier_name"}, Measures: []Measure{{Name: "free_qty"}, {Name: "qty"}}, Range: Range{Type: "last_n_months", N: 6}, Sort: []Sort{{Field: "m0", Dir: "desc"}}}}},
 	// ---------------------------------------------------------------- Créances
-	{Theme: "Créances", Title: "Crédits clients en cours", Keywords: []string{"credit", "credits", "clients", "doit", "dette", "impaye", "creance"}, ChartType: "table",
+	{Theme: "Créances", Title: "Crédits clients en cours", Keywords: []string{"credit", "credits", "clients", "doit", "doivent", "debiteur", "debiteurs", "dette", "impaye", "impayes", "creance", "creances", "solde"}, ChartType: "table",
 		Spec: Request{Spec: Spec{Source: "partner_ledger", Dimensions: []string{"partner_name"}, Measures: []Measure{{Name: "balance"}}, Filters: []Filter{{Field: "partner_kind", Op: "in", Value: []any{"customer", "both"}}}, Having: []Having{{Measure: "m0", Op: "gt", Value: 0}}, Range: Range{Type: "all"}, Sort: []Sort{{Field: "m0", Dir: "desc"}}, Limit: 30}}},
-	{Theme: "Créances", Title: "Dettes fournisseurs", Keywords: []string{"dette", "dettes", "fournisseur", "fournisseurs", "devons", "reglement"}, ChartType: "table",
+	{Theme: "Créances", Title: "Dettes fournisseurs", Keywords: []string{"dette", "dettes", "fournisseur", "fournisseurs", "devons", "dois", "doit", "payer", "reste", "reglement"}, ChartType: "table",
 		Spec: Request{Spec: Spec{Source: "partner_ledger", Dimensions: []string{"partner_name"}, Measures: []Measure{{Name: "balance"}}, Filters: []Filter{{Field: "partner_kind", Op: "in", Value: []any{"supplier", "both"}}}, Having: []Having{{Measure: "m0", Op: "lt", Value: 0}}, Range: Range{Type: "all"}, Sort: []Sort{{Field: "m0", Dir: "asc"}}, Limit: 30}}},
 }
 
@@ -90,7 +96,8 @@ func Gallery() []GalleryItem {
 
 var stopwords = map[string]bool{"le": true, "la": true, "les": true, "de": true, "des": true, "du": true, "un": true, "une": true, "et": true, "en": true, "par": true,
 	"pour": true, "sur": true, "ce": true, "cette": true, "mes": true, "mon": true, "ma": true, "quel": true, "quels": true, "quelle": true, "quelles": true, "est": true,
-	"sont": true, "combien": true, "montre": true, "moi": true, "donne": true, "affiche": true, "voir": true, "je": true, "veux": true, "a": true, "au": true, "aux": true}
+	"sont": true, "combien": true, "montre": true, "moi": true, "donne": true, "affiche": true, "voir": true, "je": true, "veux": true, "a": true, "au": true, "aux": true,
+	"plus": true, "me": true, "nous": true, "qui": true, "que": true, "quoi": true, "avec": true, "dans": true, "il": true, "ils": true, "y": true, "on": true, "ai": true, "fait": true}
 
 func normalize(s string) []string {
 	s = strings.ToLower(s)

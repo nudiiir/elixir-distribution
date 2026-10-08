@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../api/client.dart';
 import '../util/commands.dart';
+import '../util/analysis_links.dart';
 import '../widgets/doc_editor.dart';
 import '../widgets/doc_list.dart';
 import '../widgets/list_toolbar.dart';
@@ -114,6 +115,9 @@ class _PurchasesScreenState extends State<PurchasesScreen> {
               MenuEntry('Nouvel avoir fournisseur',
                   Icons.assignment_return_outlined,
                   () => _newDoc(purchaseCreditNoteConfig)),
+              if (AnalysisLinks.available)
+                MenuEntry('Analyser les achats', Icons.insights_rounded,
+                    () => AnalysisLinks.launch(AnalysisLinks.purchases())),
             ],
           ),
           const SizedBox(height: 16),

@@ -4,20 +4,13 @@ import 'package:flutter/material.dart';
 
 import '../api/analytics_models.dart';
 import '../theme/tokens.dart';
+import '../util/feedback.dart';
+import '../util/list_export.dart';
 import 'charts.dart';
 import 'ui.dart';
 
 /// Palette des séries (marque en tête, puis des teintes lisibles côte à côte).
-const kSeriesColors = <Color>[
-  T.mint,
-  Color(0xFF4A63B8),
-  Color(0xFFE0A020),
-  Color(0xFFB8556B),
-  Color(0xFF7B61C9),
-  Color(0xFF2FA0B8),
-  Color(0xFFC97A1A),
-  Color(0xFF6B8E23),
-];
+const kSeriesColors = <Color>[T.mint, Color(0xFF4A63B8), Color(0xFFE0A020), Color(0xFFB8556B), Color(0xFF7B61C9), Color(0xFF2FA0B8), Color(0xFFC97A1A), Color(0xFF6B8E23)];
 
 Color seriesColor(int i) => kSeriesColors[i % kSeriesColors.length];
 
@@ -87,34 +80,58 @@ class ChartEncoding {
   bool showValues;
   bool showPrevious;
 
-  ChartEncoding({this.x, this.series, List<String>? y, this.stacked = false, this.secondary, this.showValues = false, this.showPrevious = true})
-      : y = y ?? [];
+  /// Couleurs conditionnelles des tables : clé de colonne mesure → règles.
+  Map<String, CondFormat> cond;
+
+  ChartEncoding({this.x, this.series, List<String>? y, this.stacked = false, this.secondary, this.showValues = false, this.showPrevious = true, Map<String, CondFormat>? cond})
+    : y = y ?? [],
+      cond = cond ?? {};
 
   factory ChartEncoding.fromJson(Map<String, dynamic> j) => ChartEncoding(
-        x: j['x'] as String?,
-        series: j['series'] as String?,
-        y: [for (final e in (j['y'] as List? ?? const [])) '$e'],
-        stacked: j['stacked'] == true,
-        secondary: j['secondary'] as String?,
-        showValues: j['show_values'] == true,
-        showPrevious: j['show_previous'] != false,
-      );
+    x: j['x'] as String?,
+    series: j['series'] as String?,
+    y: [for (final e in (j['y'] as List? ?? const [])) '$e'],
+    stacked: j['stacked'] == true,
+    secondary: j['secondary'] as String?,
+    showValues: j['show_values'] == true,
+    showPrevious: j['show_previous'] != false,
+    cond: {
+      for (final e in ((j['cond'] as Map?) ?? const {}).entries)
+        if (e.value is Map) '${e.key}': CondFormat.fromJson(Map<String, dynamic>.from(e.value as Map)),
+    },
+  );
 
   Map<String, dynamic> toJson() => {
-        if (x != null) 'x': x,
-        if (series != null) 'series': series,
-        'y': y,
-        'stacked': stacked,
-        if (secondary != null) 'secondary': secondary,
-        'show_values': showValues,
-        'show_previous': showPrevious,
-      };
+    if (x != null) 'x': x,
+    if (series != null) 'series': series,
+    'y': y,
+    'stacked': stacked,
+    if (secondary != null) 'secondary': secondary,
+    'show_values': showValues,
+    'show_previous': showPrevious,
+    if (cond.values.any((c) => !c.isEmpty))
+      'cond': {
+        for (final e in cond.entries)
+          if (!e.value.isEmpty) e.key: e.value.toJson(),
+      },
+  };
+
+  ChartEncoding copy() => ChartEncoding.fromJson(toJson());
 
   /// Complète l'encodage avec des valeurs par défaut cohérentes avec le résultat.
   ChartEncoding resolved(AResult r) {
     final dims = r.dimensions;
     final meas = r.measures;
-    final e = ChartEncoding(x: x, series: series, y: List.of(y), stacked: stacked, secondary: secondary, showValues: showValues, showPrevious: showPrevious);
+    final e = ChartEncoding(
+      x: x,
+      series: series,
+      y: List.of(y),
+      stacked: stacked,
+      secondary: secondary,
+      showValues: showValues,
+      showPrevious: showPrevious,
+      cond: {for (final c in cond.entries) c.key: CondFormat.fromJson(c.value.toJson())},
+    );
     if (e.x == null || r.colIndex(e.x!) < 0) {
       e.x = dims.isNotEmpty ? dims.first.key : null;
     }
@@ -122,7 +139,10 @@ class ChartEncoding {
     if (e.series == null && dims.length > 1) {
       e.series = dims.firstWhere((d) => d.key != e.x, orElse: () => dims[1]).key;
     }
-    e.y = [for (final k in e.y) if (r.colIndex(k) >= 0) k];
+    e.y = [
+      for (final k in e.y)
+        if (r.colIndex(k) >= 0) k,
+    ];
     if (e.y.isEmpty) e.y = [for (final m in meas) m.key];
     if (e.secondary != null && !e.y.contains(e.secondary)) e.secondary = null;
     return e;
@@ -130,7 +150,7 @@ class ChartEncoding {
 }
 
 const kChartTypes = ['stat', 'line', 'bar', 'donut', 'pivot', 'table'];
-const kChartLabels = {'stat': 'Chiffre', 'line': 'Ligne', 'bar': 'Barres', 'donut': 'Anneau', 'pivot': 'Tableau croisé', 'table': 'Table'};
+const kChartLabels = {'stat': 'Chiffre', 'line': 'Courbe', 'bar': 'Barres', 'donut': 'Anneau', 'pivot': 'Tableau croisé', 'table': 'Liste'};
 const kChartIcons = {
   'stat': Icons.pin_outlined,
   'line': Icons.show_chart_rounded,
@@ -183,7 +203,9 @@ String? chartTypeBlocker(String type, AResult r) {
 }
 
 /// Rend le résultat avec le type et l'encodage donnés.
-Widget buildChart(String type, AResult r, ChartEncoding enc, {bool compact = false, void Function(AColumn col, dynamic value)? onDrill}) {
+/// [title] sert de titre aux exports des tables ; [onDrill] rend les valeurs
+/// de regroupement cliquables (détail).
+Widget buildChart(String type, AResult r, ChartEncoding enc, {bool compact = false, void Function(AColumn col, dynamic value)? onDrill, String title = 'Analyse'}) {
   if (r.rows.isEmpty) {
     return const EmptyState(icon: Icons.query_stats_rounded, text: 'Aucune donnée sur cette période');
   }
@@ -198,9 +220,351 @@ Widget buildChart(String type, AResult r, ChartEncoding enc, {bool compact = fal
     case 'donut':
       return DonutChart(result: r, encoding: e, compact: compact, onDrill: onDrill);
     case 'pivot':
-      return PivotGrid(result: r, encoding: e);
+      return PivotGrid(result: r, encoding: e, compact: compact, onDrill: onDrill, title: title);
   }
-  return ResultTable(result: r, compact: compact);
+  return ResultTable(result: r, encoding: e, compact: compact, onDrill: onDrill, title: title);
+}
+
+// ---------------------------------------------------------------- valeurs affichées
+
+/// Valeur brute (centimes, millièmes, ratio) → valeur lue par l'utilisateur
+/// (DA, quantité, %). Les seuils des couleurs sont saisis dans cette unité.
+double displayNum(dynamic raw, String format) {
+  final v = _toNum(raw);
+  return switch (format) {
+    'currency' => v / 100,
+    'quantity' => v / 1000,
+    'percent' => v * 100,
+    _ => v,
+  };
+}
+
+/// Unité affichée à côté des seuils et dans les en-têtes d'export.
+String unitWord(String format) => switch (format) {
+  'currency' => 'DA',
+  'quantity' => 'quantité',
+  'percent' => '%',
+  _ => '',
+};
+
+// ---------------------------------------------------------------- couleurs conditionnelles
+
+/// Couleurs proposées pour les règles (clé enregistrée → libellé, fond, texte).
+const kCondColors = <String, (String, Color, Color)>{
+  'red': ('Rouge', Color(0x33E5484D), T.dangerDark),
+  'green': ('Vert', Color(0x3300CC99), T.mintDark),
+  'orange': ('Orange', Color(0x40E0A020), T.warnDark),
+  'blue': ('Bleu', Color(0x2E4A63B8), Color(0xFF34488F)),
+};
+
+/// Une règle « valeur op seuil → couleur ». [a]/[b] sont dans l'unité affichée.
+class CondRule {
+  String op; // lt | lte | gt | gte | eq | between
+  double a;
+  double? b;
+  String color;
+  CondRule({this.op = 'lt', this.a = 0, this.b, this.color = 'red'});
+  factory CondRule.fromJson(Map<String, dynamic> j) =>
+      CondRule(op: (j['op'] as String?) ?? 'lt', a: (j['a'] as num?)?.toDouble() ?? 0, b: (j['b'] as num?)?.toDouble(), color: (j['color'] as String?) ?? 'red');
+  Map<String, dynamic> toJson() => {'op': op, 'a': a, if (b != null) 'b': b, 'color': color};
+
+  bool matches(double v) => switch (op) {
+    'lt' => v < a,
+    'lte' => v <= a,
+    'gt' => v > a,
+    'gte' => v >= a,
+    'eq' => v == a,
+    'between' => v >= math.min(a, b ?? a) && v <= math.max(a, b ?? a),
+    _ => false,
+  };
+}
+
+const kCondOps = <String, String>{'lt': 'inférieur à', 'lte': 'inférieur ou égal à', 'gt': 'supérieur à', 'gte': 'supérieur ou égal à', 'eq': 'égal à', 'between': 'entre'};
+
+/// Mise en forme conditionnelle d'une colonne mesure.
+class CondFormat {
+  String scale; // none | up (plus haut = mieux) | down (plus bas = mieux) | neutral
+  bool bars;
+  List<CondRule> rules;
+  String top; // none | top | bottom
+  int topN;
+  CondFormat({this.scale = 'none', this.bars = false, List<CondRule>? rules, this.top = 'none', this.topN = 5}) : rules = rules ?? [];
+
+  factory CondFormat.fromJson(Map<String, dynamic> j) => CondFormat(
+    scale: (j['scale'] as String?) ?? 'none',
+    bars: j['bars'] == true,
+    rules: [
+      for (final r in (j['rules'] as List? ?? const []))
+        if (r is Map) CondRule.fromJson(Map<String, dynamic>.from(r)),
+    ],
+    top: (j['top'] as String?) ?? 'none',
+    topN: (j['top_n'] as num?)?.toInt() ?? 5,
+  );
+  Map<String, dynamic> toJson() => {
+    'scale': scale,
+    'bars': bars,
+    'rules': [for (final r in rules) r.toJson()],
+    'top': top,
+    'top_n': topN,
+  };
+
+  bool get isEmpty => scale == 'none' && !bars && rules.isEmpty && top == 'none';
+}
+
+/// Statistiques d'une colonne (valeurs affichées) pour l'échelle et le top N.
+class CondStats {
+  CondStats(List<double> values, CondFormat f)
+    : min = values.isEmpty ? 0 : values.reduce(math.min),
+      max = values.isEmpty ? 0 : values.reduce(math.max),
+      maxAbs = values.isEmpty ? 0 : values.map((v) => v.abs()).reduce(math.max),
+      cut = _cut(values, f);
+  final double min, max, maxAbs;
+  final double? cut;
+
+  static double? _cut(List<double> values, CondFormat f) {
+    if (f.top == 'none' || values.isEmpty || f.topN <= 0) return null;
+    final s = List.of(values)..sort();
+    final n = math.min(f.topN, s.length);
+    return f.top == 'top' ? s[s.length - n] : s[n - 1];
+  }
+}
+
+/// Aspect d'une cellule : fond, couleur et graisse du texte, barre (0..1, signe).
+class CellLook {
+  const CellLook({this.bg, this.fg, this.bold = false, this.bar});
+  final Color? bg, fg;
+  final bool bold;
+  final double? bar;
+}
+
+const _kScaleLow = Color(0x40E5484D);
+const _kScaleHigh = Color(0x4D00CC99);
+const _kScaleNeutral = Color(0x404A63B8);
+
+CellLook condLook(CondFormat? f, double v, CondStats? s) {
+  if (f == null || f.isEmpty || s == null) return const CellLook();
+  Color? bg;
+  Color? fg;
+  var bold = false;
+  // échelle de couleur (la plus faible priorité)
+  if (f.scale != 'none' && s.max > s.min) {
+    final t = ((v - s.min) / (s.max - s.min)).clamp(0.0, 1.0);
+    if (f.scale == 'neutral') {
+      bg = Color.lerp(Colors.transparent, _kScaleNeutral, t);
+    } else {
+      final good = f.scale == 'up' ? t : 1 - t;
+      bg = good < 0.5 ? Color.lerp(_kScaleLow, Colors.transparent, good * 2) : Color.lerp(Colors.transparent, _kScaleHigh, (good - 0.5) * 2);
+    }
+  }
+  // N premiers / derniers
+  if (s.cut != null && (f.top == 'top' ? v >= s.cut! : v <= s.cut!)) {
+    bg = f.top == 'top' ? const Color(0x3300CC99) : const Color(0x40E0A020);
+    fg = f.top == 'top' ? T.mintDark : T.warnDark;
+    bold = true;
+  }
+  // règles : la première qui correspond gagne
+  for (final r in f.rules) {
+    if (r.matches(v)) {
+      final c = kCondColors[r.color] ?? kCondColors['red']!;
+      bg = c.$2;
+      fg = c.$3;
+      bold = true;
+      break;
+    }
+  }
+  double? bar;
+  if (f.bars && s.maxAbs > 0) bar = (v / s.maxAbs).clamp(-1.0, 1.0);
+  return CellLook(bg: bg, fg: fg, bold: bold, bar: bar);
+}
+
+/// Cellule numérique avec son aspect conditionnel (fond + barre de données).
+class CondCell extends StatelessWidget {
+  const CondCell({super.key, required this.text, required this.look, required this.style, this.width, this.height, this.padding = const EdgeInsets.symmetric(horizontal: 8)});
+  final String text;
+  final CellLook look;
+  final TextStyle style;
+  final double? width, height;
+  final EdgeInsets padding;
+
+  @override
+  Widget build(BuildContext context) {
+    final bar = look.bar;
+    return Container(
+      width: width,
+      height: height,
+      color: look.bg,
+      child: Stack(
+        children: [
+          if (bar != null && bar != 0)
+            Positioned.fill(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 3),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: FractionallySizedBox(
+                    widthFactor: bar.abs(),
+                    heightFactor: 1,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(color: bar < 0 ? const Color(0x55E5484D) : const Color(0x5500CC99), borderRadius: BorderRadius.circular(3)),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          Positioned.fill(
+            child: Padding(
+              padding: padding,
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: Text(
+                  text,
+                  style: style.copyWith(color: look.fg ?? style.color, fontWeight: look.bold ? FontWeight.w700 : style.fontWeight),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------- export
+
+/// Exporte un résultat (lignes déjà filtrées/triées) en Excel, CSV ou PDF :
+/// valeurs en DA / quantité / % (des nombres dans Excel).
+Future<String> exportResult(AResult r, List<List<dynamic>> rows, String title, ExportFormat f, {List<AColumn>? columns}) {
+  final cols = columns ?? r.columns;
+  final idx = [for (final c in cols) r.colIndex(c.key)];
+  final headers = [for (final c in cols) c.isMeasure && unitWord(c.format).isNotEmpty && c.format != 'quantity' ? '${c.label} (${unitWord(c.format)})' : c.label];
+  final data = <List<Object?>>[
+    for (final row in rows)
+      [
+        for (var i = 0; i < cols.length; i++)
+          cols[i].isDimension
+              ? r.labelOf(cols[i], row[idx[i]])
+              : row[idx[i]] == null
+              ? null
+              : _round2(displayNum(row[idx[i]], cols[i].format)),
+      ],
+  ];
+  final safe = title.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-').replaceAll(RegExp(r'^-+|-+$'), '');
+  return exportTable(
+    ExportTable(
+      title: title,
+      baseName: 'analyse-${safe.isEmpty ? 'vue' : safe}',
+      headers: headers,
+      rows: data,
+      numeric: {
+        for (var i = 0; i < cols.length; i++)
+          if (cols[i].isMeasure) i,
+      },
+    ),
+    f,
+  );
+}
+
+num _round2(double v) => v == v.roundToDouble() ? v.round() : (v * 100).round() / 100;
+
+/// Bouton « Exporter ▾ » (Excel, CSV, PDF) commun aux tables.
+class ExportMenuButton extends StatelessWidget {
+  const ExportMenuButton({super.key, required this.onExport, this.label = 'Exporter'});
+  final Future<String> Function(ExportFormat f) onExport;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<ExportFormat>(
+      tooltip: 'Exporter en Excel, CSV ou PDF',
+      onSelected: (f) async {
+        try {
+          final path = await onExport(f);
+          if (context.mounted) showToast(context, 'Exporté : $path', kind: ToastKind.success);
+        } catch (e) {
+          if (context.mounted) showToast(context, "L'export a échoué : $e", kind: ToastKind.error);
+        }
+      },
+      itemBuilder: (_) => [
+        for (final f in const [ExportFormat.xlsx, ExportFormat.csv, ExportFormat.pdf])
+          PopupMenuItem(
+            value: f,
+            child: Text(f.label, style: T.body),
+          ),
+      ],
+      child: Container(
+        height: 38,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          border: Border.all(color: T.border3),
+          borderRadius: BorderRadius.circular(T.rInner),
+          color: T.surface,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.download_outlined, size: 17, color: T.ink),
+            const SizedBox(width: 6),
+            Text(label, style: T.body.copyWith(fontWeight: FontWeight.w600)),
+            const Icon(Icons.arrow_drop_down_rounded, size: 20, color: T.muted),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Petit champ de recherche des tables (filtre les lignes affichées).
+class _TableSearch extends StatelessWidget {
+  const _TableSearch({required this.controller, required this.onChanged});
+  final TextEditingController controller;
+  final ValueChanged<String> onChanged;
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 260,
+      height: 38,
+      child: TextField(
+        controller: controller,
+        onChanged: onChanged,
+        style: T.body,
+        decoration: InputDecoration(
+          isDense: true,
+          hintText: 'Rechercher dans le tableau…',
+          hintStyle: T.bodyMuted.copyWith(color: T.ghost),
+          prefixIcon: const Icon(Icons.search, size: 18, color: T.faint),
+          suffixIcon: controller.text.isEmpty
+              ? null
+              : IconButton(
+                  tooltip: 'Effacer la recherche',
+                  icon: const Icon(Icons.close, size: 16),
+                  onPressed: () {
+                    controller.clear();
+                    onChanged('');
+                  },
+                ),
+          contentPadding: const EdgeInsets.symmetric(vertical: 10),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(T.rInner),
+            borderSide: const BorderSide(color: T.border3),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(T.rInner),
+            borderSide: const BorderSide(color: T.border3),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+int _cmpCells(dynamic va, dynamic vb) {
+  if (va == null && vb == null) return 0;
+  if (va == null) return -1;
+  if (vb == null) return 1;
+  if (va is num && vb is num) return va.compareTo(vb);
+  return '$va'.toLowerCase().compareTo('$vb'.toLowerCase());
 }
 
 // ---------------------------------------------------------------- chiffres
@@ -220,59 +584,92 @@ class StatTiles extends StatelessWidget {
       final m = r.measures.first;
       final i = r.colIndex(m.key);
       final prevI = r.colIndex('${m.key}_delta_pct');
-      return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [
-        MicroLabel(title ?? m.label, color: T.mintDark),
-        const SizedBox(height: 8),
-        FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: Text(fmtValue(row[i], m.format), style: T.monoBig)),
-        if (prevI >= 0 && row[prevI] != null) ...[
-          const SizedBox(height: 4),
-          Text('${_toNum(row[prevI]) >= 0 ? '▲' : '▼'} ${fmtValue(row[prevI], 'percent')} vs période préc.',
-              style: T.small.copyWith(color: _toNum(row[prevI]) >= 0 ? T.mintDark : T.dangerDark, fontWeight: FontWeight.w600)),
-        ] else if (title != null && title != m.label) ...[
-          const SizedBox(height: 4),
-          Text(m.label, style: T.small, maxLines: 1, overflow: TextOverflow.ellipsis),
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          MicroLabel(title ?? m.label, color: T.mintDark),
+          const SizedBox(height: 8),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(fmtValue(row[i], m.format), style: T.monoBig),
+          ),
+          if (prevI >= 0 && row[prevI] != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              '${_toNum(row[prevI]) >= 0 ? '▲' : '▼'} ${fmtValue(row[prevI], 'percent')} vs période préc.',
+              style: T.small.copyWith(color: _toNum(row[prevI]) >= 0 ? T.mintDark : T.dangerDark, fontWeight: FontWeight.w600),
+            ),
+          ] else if (title != null && title != m.label) ...[
+            const SizedBox(height: 4),
+            Text(m.label, style: T.small, maxLines: 1, overflow: TextOverflow.ellipsis),
+          ],
         ],
-      ]);
+      );
     }
     if (flat) {
-      return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [
-        if (title != null) MicroLabel(title!, color: T.mintDark),
-        const SizedBox(height: 6),
-        Row(children: [
-          for (final m in r.measures) ...[
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: Text(fmtValue(row[r.colIndex(m.key)], m.format), style: T.h2.copyWith(fontSize: 20))),
-                Text(m.label, style: T.small.copyWith(fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
-              ]),
-            ),
-          ],
-        ]),
-      ]);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          if (title != null) MicroLabel(title!, color: T.mintDark),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              for (final m in r.measures) ...[
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(fmtValue(row[r.colIndex(m.key)], m.format), style: T.h2.copyWith(fontSize: 20)),
+                      ),
+                      Text(m.label, style: T.small.copyWith(fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ],
+      );
     }
     final tiles = <Widget>[];
     for (final m in r.measures) {
       final i = r.colIndex(m.key);
       final prevI = r.colIndex('${m.key}_delta_pct');
-      tiles.add(Container(
-        constraints: BoxConstraints(minWidth: compact ? 120 : 160),
-        padding: EdgeInsets.all(compact ? 10 : 14),
-        decoration: BoxDecoration(color: T.bg, borderRadius: BorderRadius.circular(T.rInner), border: Border.all(color: T.border)),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-          MicroLabel(m.label, color: T.mintDark),
-          const SizedBox(height: 6),
-          Text(fmtValue(row[i], m.format), style: compact ? T.h2 : T.monoBig),
-          if (prevI >= 0 && row[prevI] != null) ...[
-            const SizedBox(height: 4),
-            Text('${_toNum(row[prevI]) >= 0 ? '▲' : '▼'} ${fmtValue(row[prevI], 'percent')} vs période préc.',
-                style: T.small.copyWith(color: _toNum(row[prevI]) >= 0 ? T.mintDark : T.dangerDark, fontWeight: FontWeight.w600)),
-          ],
-        ]),
-      ));
+      tiles.add(
+        Container(
+          constraints: BoxConstraints(minWidth: compact ? 120 : 160),
+          padding: EdgeInsets.all(compact ? 10 : 14),
+          decoration: BoxDecoration(
+            color: T.bg,
+            borderRadius: BorderRadius.circular(T.rInner),
+            border: Border.all(color: T.border),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              MicroLabel(m.label, color: T.mintDark),
+              const SizedBox(height: 6),
+              Text(fmtValue(row[i], m.format), style: compact ? T.h2 : T.monoBig),
+              if (prevI >= 0 && row[prevI] != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  '${_toNum(row[prevI]) >= 0 ? '▲' : '▼'} ${fmtValue(row[prevI], 'percent')} vs période préc.',
+                  style: T.small.copyWith(color: _toNum(row[prevI]) >= 0 ? T.mintDark : T.dangerDark, fontWeight: FontWeight.w600),
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
     }
-    return SingleChildScrollView(
-      child: Wrap(spacing: 10, runSpacing: 10, children: tiles),
-    );
+    return SingleChildScrollView(child: Wrap(spacing: 10, runSpacing: 10, children: tiles));
   }
 }
 
@@ -366,53 +763,72 @@ class _SeriesChartState extends State<SeriesChart> {
         ci++;
       }
     }
-    final visible = [for (final s in series) if (!_hidden.contains(s.label)) s];
+    final visible = [
+      for (final s in series)
+        if (!_hidden.contains(s.label)) s,
+    ];
     final labels = [for (final v in xVals) r.labelOf(xCol, v)];
 
-    return Column(children: [
-      Expanded(
-        child: LayoutBuilder(builder: (context, c) {
-          return MouseRegion(
-            onHover: (ev) {
-              final plotLeft = 56.0, plotRight = c.maxWidth - (visible.any((s) => s.secondary) ? 56 : 12);
-              final w = plotRight - plotLeft;
-              if (xs.isEmpty || w <= 0) return;
-              final idx = ((ev.localPosition.dx - plotLeft) / w * xs.length).floor().clamp(0, xs.length - 1);
-              if (idx != _hoverX) setState(() => _hoverX = idx);
-            },
-            onExit: (_) => setState(() => _hoverX = null),
-            child: GestureDetector(
-              onTapUp: (d) {
-                if (widget.onDrill == null || _hoverX == null) return;
-                widget.onDrill!(xCol, xVals[_hoverX!]);
-              },
-              child: CustomPaint(
-                size: Size(c.maxWidth, c.maxHeight),
-                painter: _SeriesPainter(series: visible, labels: labels, line: widget.line, stacked: e.stacked && !widget.line, hover: _hoverX, showValues: e.showValues, compact: widget.compact),
-              ),
-            ),
-          );
-        }),
-      ),
-      if (series.length > 1 || _hoverX != null)
-        Padding(
-          padding: const EdgeInsets.only(top: 6),
-          child: Wrap(spacing: 12, runSpacing: 4, alignment: WrapAlignment.center, children: [
-            for (final s in series)
-              InkWell(
-                onTap: () => setState(() => _hidden.contains(s.label) ? _hidden.remove(s.label) : _hidden.add(s.label)),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Container(width: 10, height: 10, decoration: BoxDecoration(color: _hidden.contains(s.label) ? T.border : s.color, shape: BoxShape.circle)),
-                  const SizedBox(width: 5),
-                  Text(
-                    _hoverX == null || s.values[_hoverX!] == null ? s.label : '${s.label} : ${fmtValue(s.values[_hoverX!], s.format)}',
-                    style: T.small.copyWith(fontSize: 13, decoration: _hidden.contains(s.label) ? TextDecoration.lineThrough : null),
+    return Column(
+      children: [
+        Expanded(
+          child: LayoutBuilder(
+            builder: (context, c) {
+              return MouseRegion(
+                onHover: (ev) {
+                  final plotLeft = 56.0, plotRight = c.maxWidth - (visible.any((s) => s.secondary) ? 56 : 12);
+                  final w = plotRight - plotLeft;
+                  if (xs.isEmpty || w <= 0) return;
+                  final idx = ((ev.localPosition.dx - plotLeft) / w * xs.length).floor().clamp(0, xs.length - 1);
+                  if (idx != _hoverX) setState(() => _hoverX = idx);
+                },
+                onExit: (_) => setState(() => _hoverX = null),
+                child: GestureDetector(
+                  onTapUp: (d) {
+                    if (widget.onDrill == null || _hoverX == null) return;
+                    widget.onDrill!(xCol, xVals[_hoverX!]);
+                  },
+                  child: CustomPaint(
+                    size: Size(c.maxWidth, c.maxHeight),
+                    painter: _SeriesPainter(series: visible, labels: labels, line: widget.line, stacked: e.stacked && !widget.line, hover: _hoverX, showValues: e.showValues, compact: widget.compact),
                   ),
-                ]),
-              ),
-          ]),
+                ),
+              );
+            },
+          ),
         ),
-    ]);
+        if (series.length > 1 || _hoverX != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Wrap(
+              spacing: 12,
+              runSpacing: 4,
+              alignment: WrapAlignment.center,
+              children: [
+                for (final s in series)
+                  InkWell(
+                    onTap: () => setState(() => _hidden.contains(s.label) ? _hidden.remove(s.label) : _hidden.add(s.label)),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 10,
+                          height: 10,
+                          decoration: BoxDecoration(color: _hidden.contains(s.label) ? T.border : s.color, shape: BoxShape.circle),
+                        ),
+                        const SizedBox(width: 5),
+                        Text(
+                          _hoverX == null || s.values[_hoverX!] == null ? s.label : '${s.label} : ${fmtValue(s.values[_hoverX!], s.format)}',
+                          style: T.small.copyWith(fontSize: 13, decoration: _hidden.contains(s.label) ? TextDecoration.lineThrough : null),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+      ],
+    );
   }
 }
 
@@ -480,7 +896,7 @@ class _SeriesPainter extends CustomPainter {
       final v = primaryMin + range * i / 4;
       final y = yOf(v, false);
       canvas.drawLine(Offset(left, y), Offset(right, y), grid);
-      tp.text = TextSpan(text: fmtAxis(v, fmt), style: T.monoSmall.copyWith(fontSize: 12));
+      tp.text = TextSpan(text: fmtAxis(v, fmt), style: T.monoSmall.copyWith(fontSize: 13));
       tp.layout();
       tp.paint(canvas, Offset(left - tp.width - 6, y - tp.height / 2));
     }
@@ -489,7 +905,10 @@ class _SeriesPainter extends CustomPainter {
       for (var i = 0; i <= 4; i++) {
         final v = secondaryMax * i / 4;
         final y = yOf(v, true);
-        tp.text = TextSpan(text: fmtAxis(v, sf), style: T.monoSmall.copyWith(fontSize: 12, color: T.faint));
+        tp.text = TextSpan(
+          text: fmtAxis(v, sf),
+          style: T.monoSmall.copyWith(fontSize: 13, color: T.faint),
+        );
         tp.layout();
         tp.paint(canvas, Offset(right + 6, y - tp.height / 2));
       }
@@ -503,7 +922,7 @@ class _SeriesPainter extends CustomPainter {
     // libellés X (échantillonnés)
     final step = math.max(1, (n / (w / 64)).ceil());
     for (var i = 0; i < n; i += step) {
-      tp.text = TextSpan(text: labels[i].length > 12 ? '${labels[i].substring(0, 11)}…' : labels[i], style: T.monoSmall.copyWith(fontSize: 12));
+      tp.text = TextSpan(text: labels[i].length > 12 ? '${labels[i].substring(0, 11)}…' : labels[i], style: T.monoSmall.copyWith(fontSize: 13));
       tp.layout();
       tp.paint(canvas, Offset(left + i * slot + slot / 2 - tp.width / 2, bottom + 5));
     }
@@ -588,7 +1007,10 @@ class _SeriesPainter extends CustomPainter {
           final rect = RRect.fromRectAndCorners(Rect.fromLTRB(x0, y0, x1, y1), topLeft: const Radius.circular(3), topRight: const Radius.circular(3));
           canvas.drawRRect(rect, Paint()..color = hover == i ? s.color : s.color.withValues(alpha: 0.85));
           if (showValues && !stacked && n <= 24) {
-            tp.text = TextSpan(text: fmtAxis(v, s.format), style: T.monoSmall.copyWith(fontSize: 11.5, color: T.muted));
+            tp.text = TextSpan(
+              text: fmtAxis(v, s.format),
+              style: T.monoSmall.copyWith(fontSize: 12, color: T.muted),
+            );
             tp.layout();
             tp.paint(canvas, Offset((x0 + x1) / 2 - tp.width / 2, y0 - tp.height - 2));
           }
@@ -613,15 +1035,23 @@ class _SeriesPainter extends CustomPainter {
             path.lineTo(p.dx, p.dy);
           }
         }
-        _drawDashed(canvas, path, Paint()
-          ..color = s.color
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.4);
+        _drawDashed(
+          canvas,
+          path,
+          Paint()
+            ..color = s.color
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.4,
+        );
       }
     }
-    canvas.drawLine(Offset(left, zeroY), Offset(right, zeroY), Paint()
-      ..color = T.border3
-      ..strokeWidth = 1.2);
+    canvas.drawLine(
+      Offset(left, zeroY),
+      Offset(right, zeroY),
+      Paint()
+        ..color = T.border3
+        ..strokeWidth = 1.2,
+    );
   }
 
   static void _drawDashed(Canvas canvas, Path path, Paint paint) {
@@ -639,7 +1069,15 @@ class _SeriesPainter extends CustomPainter {
     if (v <= 0) return 1;
     final exp = math.pow(10, (math.log(v) / math.ln10).floor()).toDouble();
     final f = v / exp;
-    final nf = f <= 1 ? 1.0 : f <= 2 ? 2.0 : f <= 2.5 ? 2.5 : f <= 5 ? 5.0 : 10.0;
+    final nf = f <= 1
+        ? 1.0
+        : f <= 2
+        ? 2.0
+        : f <= 2.5
+        ? 2.5
+        : f <= 5
+        ? 5.0
+        : 10.0;
     return nf * exp;
   }
 
@@ -670,55 +1108,106 @@ class DonutChart extends StatelessWidget {
       slices.add((math.max(0, _toNum(rows[i][mi])), seriesColor(i)));
     }
     final size = compact ? 120.0 : 170.0;
-    return Row(children: [
-      Donut(
-        slices: slices,
-        size: size,
-        center: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text(fmtAxis(total, m.format), style: compact ? T.h2 : T.monoBig.copyWith(fontSize: 20)),
-          Text('total', style: T.small.copyWith(fontSize: 13)),
-        ]),
-      ),
-      const SizedBox(width: 16),
-      Expanded(
-        child: SingleChildScrollView(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            for (var i = 0; i < rows.length; i++)
-              InkWell(
-                onTap: onDrill == null ? null : () => onDrill!(xCol, rows[i][xi]),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 3),
-                  child: Row(children: [
-                    Container(width: 10, height: 10, decoration: BoxDecoration(color: seriesColor(i), shape: BoxShape.circle)),
-                    const SizedBox(width: 6),
-                    Expanded(child: Text(r.labelOf(xCol, rows[i][xi]), style: T.small.copyWith(color: T.ink, fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis)),
-                    const SizedBox(width: 6),
-                    Text(fmtValue(rows[i][mi], m.format), style: T.monoSmall.copyWith(color: T.ink)),
-                    const SizedBox(width: 6),
-                    SizedBox(width: 44, child: Text(total == 0 ? '' : '${(_toNum(rows[i][mi]) / total * 100).toStringAsFixed(1).replaceAll('.', ',')} %', style: T.monoSmall, textAlign: TextAlign.end)),
-                  ]),
-                ),
-              ),
-          ]),
+    return Row(
+      children: [
+        Donut(
+          slices: slices,
+          size: size,
+          center: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(fmtAxis(total, m.format), style: compact ? T.h2 : T.monoBig.copyWith(fontSize: 20)),
+              Text('total', style: T.small.copyWith(fontSize: 13)),
+            ],
+          ),
         ),
-      ),
-    ]);
+        const SizedBox(width: 16),
+        Expanded(
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (var i = 0; i < rows.length; i++)
+                  InkWell(
+                    onTap: onDrill == null ? null : () => onDrill!(xCol, rows[i][xi]),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 3),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 10,
+                            height: 10,
+                            decoration: BoxDecoration(color: seriesColor(i), shape: BoxShape.circle),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              r.labelOf(xCol, rows[i][xi]),
+                              style: T.small.copyWith(color: T.ink, fontSize: 13),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(fmtValue(rows[i][mi], m.format), style: T.monoSmall.copyWith(color: T.ink)),
+                          const SizedBox(width: 6),
+                          SizedBox(
+                            width: 60,
+                            child: Text(total == 0 ? '' : '${(_toNum(rows[i][mi]) / total * 100).toStringAsFixed(1).replaceAll('.', ',')} %', style: T.monoSmall, textAlign: TextAlign.end),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
   }
 }
 
 // ---------------------------------------------------------------- tableau croisé
 
-class PivotGrid extends StatelessWidget {
-  const PivotGrid({super.key, required this.result, required this.encoding});
+/// Tableau croisé d'investigation : tri par clic sur l'en-tête, recherche,
+/// totaux, export, couleurs conditionnelles, clic sur une ligne = détail.
+class PivotGrid extends StatefulWidget {
+  const PivotGrid({super.key, required this.result, required this.encoding, this.compact = false, this.onDrill, this.title = 'Tableau croisé'});
   final AResult result;
   final ChartEncoding encoding;
+  final bool compact;
+  final void Function(AColumn col, dynamic value)? onDrill;
+  final String title;
+
+  @override
+  State<PivotGrid> createState() => _PivotGridState();
+}
+
+class _PivotGridState extends State<PivotGrid> {
+  final _search = TextEditingController();
+  String _q = '';
+  int? _sort; // -1 = libellé de ligne, sinon index de colonne de valeurs (totaux compris)
+  bool _asc = false;
+  final _hScroll = ScrollController();
+
+  @override
+  void dispose() {
+    _search.dispose();
+    _hScroll.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final r = result;
+    final r = widget.result;
+    final encoding = widget.encoding;
     final dims = r.dimensions;
     final colDim = r.columns[r.colIndex(encoding.series ?? dims.last.key)];
-    final rowDims = [for (final d in dims) if (d.key != colDim.key) d];
+    final rowDims = [
+      for (final d in dims)
+        if (d.key != colDim.key) d,
+    ];
     final meas = [for (final k in encoding.y) r.columns[r.colIndex(k)]];
     final ci = r.colIndex(colDim.key);
     final rowIdx = [for (final d in rowDims) r.colIndex(d.key)];
@@ -745,80 +1234,240 @@ class PivotGrid extends StatelessWidget {
       }
       cells['$rk||$ck'] = [for (final i in mIdx) _toNum(row[i])];
     }
-    if (colKeys.length > 60) return const EmptyState(icon: Icons.grid_on_rounded, text: 'Trop de colonnes pour un tableau croisé (60 max) — passez en table');
+    if (colKeys.length > 60) return const EmptyState(icon: Icons.grid_on_rounded, text: 'Trop de colonnes pour un tableau croisé (60 au plus) — choisissez « Liste »');
     final nm = meas.length;
-    final colTotals = List<double>.filled(colKeys.length * nm, 0);
-    final grand = List<double>.filled(nm, 0);
-    final rowTotals = <List<double>>[];
+    final nc = colKeys.length;
+    String rowLabel(int ri) => [for (var i = 0; i < rowDims.length; i++) r.labelOf(rowDims[i], rowVals[ri][i])].join(' · ');
+
+    // valeurs par ligne : [col0 m0, col0 m1, …, total m0, total m1…]
+    final values = <List<double?>>[];
     for (var ri = 0; ri < rowKeys.length; ri++) {
+      final line = <double?>[];
       final tot = List<double>.filled(nm, 0);
-      for (var cj = 0; cj < colKeys.length; cj++) {
+      for (var cj = 0; cj < nc; cj++) {
         final v = cells['${rowKeys[ri]}||${colKeys[cj]}'];
-        if (v == null) continue;
         for (var k = 0; k < nm; k++) {
-          tot[k] += v[k];
-          colTotals[cj * nm + k] += v[k];
-          grand[k] += v[k];
+          line.add(v?[k]);
+          if (v != null) tot[k] += v[k];
         }
       }
-      rowTotals.add(tot);
+      line.addAll(tot);
+      values.add(line);
     }
-    const cw = 108.0;
-    final headerStyle = T.label.copyWith(color: T.ink, fontSize: 13);
-    Widget hcell(String t, {double w = cw, bool left = false}) => Container(
-          width: w,
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-          color: T.bg,
-          child: Text(t, style: headerStyle, textAlign: left ? TextAlign.left : TextAlign.end, maxLines: 2, overflow: TextOverflow.ellipsis),
-        );
-    Widget vcell(double v, String format, {bool bold = false, double w = cw}) => Container(
-          width: w,
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: T.border2))),
-          child: Text(fmtValue(v, format), style: (bold ? T.monoBody.copyWith(fontWeight: FontWeight.w700) : T.monoBody).copyWith(fontSize: 13), textAlign: TextAlign.end),
-        );
-    final rowW = 200.0;
-    return Scrollbar(
-      thumbVisibility: true,
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: SingleChildScrollView(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              hcell(rowDims.map((d) => d.label).join(' / '), w: rowW, left: true),
-              for (final cv in colVals) for (final m in meas) hcell(nm == 1 ? r.labelOf(colDim, cv) : '${r.labelOf(colDim, cv)}\n${m.label}'),
-              for (final m in meas) hcell(nm == 1 ? 'Total' : 'Total ${m.label}'),
-            ]),
-            for (var ri = 0; ri < rowKeys.length; ri++)
-              Row(children: [
-                Container(
-                  width: rowW,
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-                  decoration: BoxDecoration(border: Border(bottom: BorderSide(color: T.border2))),
-                  child: Text([for (var i = 0; i < rowDims.length; i++) r.labelOf(rowDims[i], rowVals[ri][i])].join(' · '), style: T.body.copyWith(fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
-                ),
-                for (var cj = 0; cj < colKeys.length; cj++)
-                  for (var k = 0; k < nm; k++) vcell(cells['${rowKeys[ri]}||${colKeys[cj]}']?[k] ?? 0, meas[k].format),
-                for (var k = 0; k < nm; k++) vcell(rowTotals[ri][k], meas[k].format, bold: true),
-              ]),
-            Row(children: [
-              Container(width: rowW, padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8), color: T.bg, child: Text('Total', style: T.body.copyWith(fontWeight: FontWeight.w700, fontSize: 13))),
-              for (var cj = 0; cj < colKeys.length; cj++) for (var k = 0; k < nm; k++) Container(color: T.bg, child: vcell(colTotals[cj * nm + k], meas[k].format, bold: true)),
-              for (var k = 0; k < nm; k++) Container(color: T.bg, child: vcell(grand[k], meas[k].format, bold: true)),
-            ]),
-          ]),
+    // recherche + tri
+    var order = [for (var i = 0; i < rowKeys.length; i++) i];
+    if (_q.isNotEmpty) {
+      final q = _q.toLowerCase();
+      order = [
+        for (final i in order)
+          if (rowLabel(i).toLowerCase().contains(q)) i,
+      ];
+    }
+    if (_sort != null) {
+      final s = _sort!;
+      order.sort((a, b) {
+        final c = s < 0 ? _cmpCells(rowLabel(a), rowLabel(b)) : _cmpCells(values[a][s], values[b][s]);
+        return _asc ? c : -c;
+      });
+    }
+    // totaux de colonnes sur les lignes affichées
+    final colTotals = List<double>.filled((nc + 1) * nm, 0);
+    for (final ri in order) {
+      for (var j = 0; j < (nc + 1) * nm; j++) {
+        colTotals[j] += values[ri][j] ?? 0;
+      }
+    }
+    // couleurs conditionnelles : statistiques par mesure sur les cellules du corps
+    final stats = <int, CondStats>{};
+    for (var k = 0; k < nm; k++) {
+      final f = encoding.cond[meas[k].key];
+      if (f == null || f.isEmpty) continue;
+      final vs = <double>[
+        for (final ri in order)
+          for (var cj = 0; cj < nc; cj++)
+            if (values[ri][cj * nm + k] != null) displayNum(values[ri][cj * nm + k], meas[k].format),
+      ];
+      stats[k] = CondStats(vs, f);
+    }
+
+    final cw = widget.compact ? 100.0 : 124.0;
+    const rowW = 220.0;
+    final rowH = widget.compact ? 30.0 : 36.0;
+    final headerStyle = T.label.copyWith(color: T.ink, fontSize: 13, fontWeight: FontWeight.w700);
+    final drillable = widget.onDrill != null && rowDims.length == 1;
+
+    Widget hcell(String t, int sortIdx, {double? w, bool left = false}) => InkWell(
+      onTap: () => setState(() {
+        if (_sort == sortIdx) {
+          _asc = !_asc;
+        } else {
+          _sort = sortIdx;
+          _asc = sortIdx < 0;
+        }
+      }),
+      child: Container(
+        width: w ?? cw,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        color: T.bg,
+        child: Row(
+          mainAxisAlignment: left ? MainAxisAlignment.start : MainAxisAlignment.end,
+          children: [
+            Flexible(
+              child: Text(t, style: headerStyle, textAlign: left ? TextAlign.left : TextAlign.end, maxLines: 2, overflow: TextOverflow.ellipsis),
+            ),
+            if (_sort == sortIdx) Icon(_asc ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded, size: 14, color: T.mintDark),
+          ],
         ),
       ),
+    );
+    Widget vcell(double? v, int k, {bool bold = false, bool total = false}) {
+      final m = meas[k];
+      final look = total || v == null ? const CellLook() : condLook(encoding.cond[m.key], displayNum(v, m.format), stats[k]);
+      return Container(
+        decoration: BoxDecoration(
+          color: total ? T.bg : null,
+          border: const Border(bottom: BorderSide(color: T.border2)),
+        ),
+        child: CondCell(
+          width: cw,
+          height: rowH,
+          text: v == null ? '—' : fmtValue(v, m.format),
+          look: look,
+          style: (bold ? T.monoBody.copyWith(fontWeight: FontWeight.w700) : T.monoBody).copyWith(fontSize: 13.5, color: v == null ? T.faint : T.ink),
+        ),
+      );
+    }
+
+    final header = Row(
+      children: [
+        hcell(rowDims.map((d) => d.label).join(' / '), -1, w: rowW, left: true),
+        for (var cj = 0; cj < nc; cj++)
+          for (var k = 0; k < nm; k++) hcell(nm == 1 ? r.labelOf(colDim, colVals[cj]) : '${r.labelOf(colDim, colVals[cj])}\n${meas[k].label}', cj * nm + k),
+        for (var k = 0; k < nm; k++) hcell(nm == 1 ? 'Total' : 'Total ${meas[k].label}', nc * nm + k),
+      ],
+    );
+    Widget bodyRow(int ri) => Row(
+      children: [
+        InkWell(
+          onTap: drillable ? () => widget.onDrill!(rowDims.first, rowVals[ri][0]) : null,
+          child: Container(
+            width: rowW,
+            height: rowH,
+            alignment: Alignment.centerLeft,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            decoration: const BoxDecoration(
+              border: Border(bottom: BorderSide(color: T.border2)),
+            ),
+            child: Text(
+              rowLabel(ri),
+              style: T.body.copyWith(fontSize: 13.5, color: drillable ? T.mintDark : T.ink, fontWeight: drillable ? FontWeight.w600 : null),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ),
+        for (var cj = 0; cj < nc; cj++)
+          for (var k = 0; k < nm; k++) vcell(values[ri][cj * nm + k], k),
+        for (var k = 0; k < nm; k++) vcell(values[ri][nc * nm + k], k, bold: true),
+      ],
+    );
+    final totalRow = Row(
+      children: [
+        Container(
+          width: rowW,
+          height: rowH,
+          alignment: Alignment.centerLeft,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          color: T.bg,
+          child: Text('Total', style: T.body.copyWith(fontWeight: FontWeight.w700, fontSize: 13.5)),
+        ),
+        for (var j = 0; j < (nc + 1) * nm; j++) vcell(meas[j % nm].isAdditive ? colTotals[j] : null, j % nm, bold: true, total: true),
+      ],
+    );
+    final width = rowW + cw * (nc + 1) * nm;
+
+    final table = Scrollbar(
+      controller: _hScroll,
+      thumbVisibility: true,
+      child: SingleChildScrollView(
+        controller: _hScroll,
+        scrollDirection: Axis.horizontal,
+        child: SizedBox(
+          width: width,
+          child: Column(
+            children: [
+              header,
+              Expanded(
+                child: order.isEmpty
+                    ? Center(child: Text('Aucune ligne ne correspond à « $_q »', style: T.bodyMuted))
+                    : ListView.builder(itemCount: order.length, itemExtent: rowH, itemBuilder: (_, i) => bodyRow(order[i])),
+              ),
+              totalRow,
+            ],
+          ),
+        ),
+      ),
+    );
+    if (widget.compact) return table;
+
+    Future<String> doExport(ExportFormat f) {
+      final headers = [
+        rowDims.map((d) => d.label).join(' / '),
+        for (var cj = 0; cj < nc; cj++)
+          for (var k = 0; k < nm; k++) nm == 1 ? r.labelOf(colDim, colVals[cj]) : '${r.labelOf(colDim, colVals[cj])} — ${meas[k].label}',
+        for (var k = 0; k < nm; k++) nm == 1 ? 'Total' : 'Total ${meas[k].label}',
+      ];
+      final rows = <List<Object?>>[
+        for (final ri in order) [rowLabel(ri), for (var j = 0; j < (nc + 1) * nm; j++) values[ri][j] == null ? null : _round2(displayNum(values[ri][j], meas[j % nm].format))],
+      ];
+      return exportTable(ExportTable(title: widget.title, baseName: 'tableau-croise', headers: headers, rows: rows, numeric: {for (var i = 1; i < headers.length; i++) i}), f);
+    }
+
+    return LayoutBuilder(
+      builder: (context, o) {
+        if (o.maxHeight < 140) return table; // trop petit pour la barre d'outils
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Wrap(
+                    spacing: 12,
+                    runSpacing: 6,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      _TableSearch(controller: _search, onChanged: (v) => setState(() => _q = v.trim())),
+                      Text(order.length == rowKeys.length ? '${rowKeys.length} ligne${rowKeys.length > 1 ? 's' : ''}' : '${order.length} sur ${rowKeys.length} lignes', style: T.bodyMuted),
+                      if (drillable && o.maxWidth >= 760) Text('Cliquez une ligne pour voir son détail', style: T.small),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ExportMenuButton(onExport: doExport),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Expanded(child: table),
+          ],
+        );
+      },
     );
   }
 }
 
-// ---------------------------------------------------------------- table
+// ---------------------------------------------------------------- liste
 
+/// Liste d'investigation : tri par clic sur l'en-tête, recherche, ligne
+/// « Total », nombre de lignes, export Excel/CSV/PDF, couleurs
+/// conditionnelles, clic sur une valeur de regroupement = détail.
 class ResultTable extends StatefulWidget {
-  const ResultTable({super.key, required this.result, this.compact = false});
+  const ResultTable({super.key, required this.result, this.encoding, this.compact = false, this.onDrill, this.title = 'Analyse'});
   final AResult result;
+  final ChartEncoding? encoding;
   final bool compact;
+  final void Function(AColumn col, dynamic value)? onDrill;
+  final String title;
 
   @override
   State<ResultTable> createState() => _ResultTableState();
@@ -827,80 +1476,226 @@ class ResultTable extends StatefulWidget {
 class _ResultTableState extends State<ResultTable> {
   int? _sortCol;
   bool _asc = true;
+  final _search = TextEditingController();
+  String _q = '';
+  final _hScroll = ScrollController();
+
+  @override
+  void dispose() {
+    _search.dispose();
+    _hScroll.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final r = widget.result;
+    final cols = r.columns;
     var rows = List.of(r.rows);
+    if (_q.isNotEmpty) {
+      final q = _q.toLowerCase();
+      rows = [
+        for (final row in rows)
+          if ([
+            for (var i = 0; i < cols.length; i++)
+              if (cols[i].isDimension) r.labelOf(cols[i], row[i]),
+          ].join(' ').toLowerCase().contains(q))
+            row,
+      ];
+    }
     if (_sortCol != null) {
       final c = _sortCol!;
       rows.sort((a, b) {
-        final va = a[c], vb = b[c];
-        int cmp;
-        if (va is num && vb is num) {
-          cmp = va.compareTo(vb);
-        } else {
-          cmp = '${va ?? ''}'.compareTo('${vb ?? ''}');
-        }
+        final cmp = cols[c].isDimension ? _cmpCells(r.labelOf(cols[c], a[c]), r.labelOf(cols[c], b[c])) : _cmpCells(a[c], b[c]);
         return _asc ? cmp : -cmp;
       });
     }
-    final widths = [for (final c in r.columns) c.isDimension ? 180.0 : 120.0];
-    return Scrollbar(
-      thumbVisibility: true,
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: SizedBox(
-          width: widths.fold<double>(0.0, (a, b) => a + b),
-          child: Column(children: [
-            Row(children: [
-              for (var i = 0; i < r.columns.length; i++)
-                InkWell(
-                  onTap: () => setState(() {
-                    if (_sortCol == i) {
-                      _asc = !_asc;
-                    } else {
-                      _sortCol = i;
-                      _asc = r.columns[i].isDimension;
-                    }
-                  }),
-                  child: Container(
-                    width: widths[i],
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                    color: T.bg,
-                    child: Row(mainAxisAlignment: r.columns[i].isDimension ? MainAxisAlignment.start : MainAxisAlignment.end, children: [
-                      Flexible(child: Text(r.columns[i].label, style: T.label.copyWith(color: T.ink, fontSize: 13), maxLines: 2, overflow: TextOverflow.ellipsis)),
-                      if (_sortCol == i) Icon(_asc ? Icons.arrow_drop_up : Icons.arrow_drop_down, size: 14, color: T.mintDark),
-                    ]),
-                  ),
-                ),
-            ]),
-            Expanded(
-              child: ListView.builder(
-                itemCount: rows.length,
-                itemExtent: widget.compact ? 28 : 32,
-                itemBuilder: (context, ri) => Container(
-                  decoration: BoxDecoration(color: ri.isOdd ? T.bg.withValues(alpha: 0.6) : Colors.white, border: Border(bottom: BorderSide(color: T.border2))),
-                  child: Row(children: [
-                    for (var i = 0; i < r.columns.length; i++)
-                      Container(
-                        width: widths[i],
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                        alignment: r.columns[i].isDimension ? Alignment.centerLeft : Alignment.centerRight,
-                        child: Text(
-                          r.columns[i].isDimension ? r.labelOf(r.columns[i], rows[ri][i]) : fmtValue(rows[ri][i], r.columns[i].format),
-                          style: (r.columns[i].isDimension ? T.body : T.monoBody).copyWith(fontSize: 13),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+    final cond = widget.encoding?.cond ?? const <String, CondFormat>{};
+    final stats = <int, CondStats>{};
+    for (var i = 0; i < cols.length; i++) {
+      final f = cond[cols[i].key];
+      if (f == null || f.isEmpty || !cols[i].isMeasure) continue;
+      stats[i] = CondStats([
+        for (final row in rows)
+          if (row[i] != null) displayNum(row[i], cols[i].format),
+      ], f);
+    }
+    final hasTotals = rows.length > 1 && cols.any((c) => c.isAdditive);
+    final totals = List<double>.filled(cols.length, 0);
+    if (hasTotals) {
+      for (final row in rows) {
+        for (var i = 0; i < cols.length; i++) {
+          if (cols[i].isAdditive) totals[i] += _toNum(row[i]);
+        }
+      }
+    }
+    final rowH = widget.compact ? 30.0 : 36.0;
+    final firstDim = cols.indexWhere((c) => c.isDimension);
+
+    final table = LayoutBuilder(
+      builder: (context, c) {
+        final base = [for (final col in cols) col.isDimension ? 200.0 : 140.0];
+        final sum = base.fold<double>(0, (a, b) => a + b);
+        final scale = c.maxWidth.isFinite && sum < c.maxWidth ? c.maxWidth / sum : 1.0;
+        final widths = [for (final w in base) w * scale];
+        final width = sum * scale;
+        return Scrollbar(
+          controller: _hScroll,
+          thumbVisibility: true,
+          child: SingleChildScrollView(
+            controller: _hScroll,
+            scrollDirection: Axis.horizontal,
+            child: SizedBox(
+              width: width,
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      for (var i = 0; i < cols.length; i++)
+                        InkWell(
+                          onTap: () => setState(() {
+                            if (_sortCol == i) {
+                              _asc = !_asc;
+                            } else {
+                              _sortCol = i;
+                              _asc = cols[i].isDimension;
+                            }
+                          }),
+                          child: Tooltip(
+                            message: 'Trier par ${cols[i].label}',
+                            waitDuration: const Duration(milliseconds: 600),
+                            child: Container(
+                              width: widths[i],
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 9),
+                              color: T.bg,
+                              child: Row(
+                                mainAxisAlignment: cols[i].isDimension ? MainAxisAlignment.start : MainAxisAlignment.end,
+                                children: [
+                                  Flexible(
+                                    child: Text(
+                                      cols[i].label,
+                                      style: T.label.copyWith(color: T.ink, fontSize: 13, fontWeight: FontWeight.w700),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  if (_sortCol == i) Icon(_asc ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded, size: 14, color: T.mintDark),
+                                ],
+                              ),
+                            ),
+                          ),
                         ),
+                    ],
+                  ),
+                  Expanded(
+                    child: rows.isEmpty
+                        ? Center(child: Text('Aucune ligne ne correspond à « $_q »', style: T.bodyMuted))
+                        : ListView.builder(
+                            itemCount: rows.length,
+                            itemExtent: rowH,
+                            itemBuilder: (context, ri) {
+                              final row = rows[ri];
+                              return Container(
+                                decoration: BoxDecoration(
+                                  color: ri.isOdd ? T.bg.withValues(alpha: 0.6) : Colors.white,
+                                  border: const Border(bottom: BorderSide(color: T.border2)),
+                                ),
+                                child: Row(
+                                  children: [
+                                    for (var i = 0; i < cols.length; i++)
+                                      if (cols[i].isDimension)
+                                        _dimCell(cols[i], row[i], widths[i], drill: widget.onDrill != null && (i == firstDim || cols.where((x) => x.isDimension).length > 1))
+                                      else
+                                        CondCell(
+                                          width: widths[i],
+                                          height: rowH,
+                                          text: fmtValue(row[i], cols[i].format),
+                                          look: row[i] == null ? const CellLook() : condLook(cond[cols[i].key], displayNum(row[i], cols[i].format), stats[i]),
+                                          style: T.monoBody.copyWith(fontSize: 13.5, color: T.ink),
+                                        ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                  if (hasTotals && !widget.compact && c.maxHeight > 160)
+                    Container(
+                      decoration: const BoxDecoration(
+                        color: T.bg,
+                        border: Border(top: BorderSide(color: T.border3)),
                       ),
-                  ]),
-                ),
+                      child: Row(
+                        children: [
+                          for (var i = 0; i < cols.length; i++)
+                            Container(
+                              width: widths[i],
+                              height: rowH,
+                              padding: const EdgeInsets.symmetric(horizontal: 8),
+                              alignment: cols[i].isDimension ? Alignment.centerLeft : Alignment.centerRight,
+                              child: Text(
+                                i == firstDim
+                                    ? 'Total'
+                                    : cols[i].isAdditive
+                                    ? fmtValue(totals[i], cols[i].format)
+                                    : '',
+                                style: (cols[i].isDimension ? T.body : T.monoBody).copyWith(fontSize: 13.5, fontWeight: FontWeight.w700),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                ],
               ),
             ),
-          ]),
-        ),
-      ),
+          ),
+        );
+      },
     );
+    if (widget.compact) return table;
+    return LayoutBuilder(
+      builder: (context, o) {
+        if (o.maxHeight < 140) return table; // trop petit pour la barre d'outils
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Wrap(
+                    spacing: 12,
+                    runSpacing: 6,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      if (firstDim >= 0) _TableSearch(controller: _search, onChanged: (v) => setState(() => _q = v.trim())),
+                      Text(rows.length == r.rows.length ? '${r.rows.length} ligne${r.rows.length > 1 ? 's' : ''}' : '${rows.length} sur ${r.rows.length} lignes', style: T.bodyMuted),
+                      if (widget.onDrill != null && firstDim >= 0 && o.maxWidth >= 760) Text('Cliquez une valeur en vert pour voir son détail', style: T.small),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ExportMenuButton(onExport: (f) => exportResult(r, rows, widget.title, f)),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Expanded(child: table),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _dimCell(AColumn col, dynamic v, double w, {required bool drill}) {
+    final text = Text(
+      widget.result.labelOf(col, v),
+      style: T.body.copyWith(fontSize: 13.5, color: drill ? T.mintDark : T.ink, fontWeight: drill ? FontWeight.w600 : null),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+    );
+    final box = Container(width: w, padding: const EdgeInsets.symmetric(horizontal: 8), alignment: Alignment.centerLeft, child: text);
+    if (!drill) return box;
+    return InkWell(onTap: () => widget.onDrill!(col, v), child: box);
   }
 }

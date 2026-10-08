@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api/client.dart';
 import '../api/models.dart';
 import '../util/commands.dart';
+import '../util/analysis_links.dart';
 import '../widgets/doc_editor.dart';
 import '../widgets/doc_list.dart';
 import '../widgets/list_toolbar.dart';
@@ -114,6 +115,9 @@ class _SalesScreenState extends State<SalesScreen> {
                   () => _newDoc(deliveryNoteConfig)),
               MenuEntry('Nouvel avoir client', Icons.assignment_return_outlined,
                   () => _newDoc(saleCreditNoteConfig)),
+              if (AnalysisLinks.available)
+                MenuEntry('Analyser les ventes', Icons.insights_rounded,
+                    () => AnalysisLinks.launch(AnalysisLinks.sales())),
             ],
           ),
           const SizedBox(height: 16),

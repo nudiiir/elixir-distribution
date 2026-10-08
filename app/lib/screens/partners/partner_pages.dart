@@ -6,6 +6,8 @@ import '../../theme/tokens.dart';
 import '../../util/features.dart';
 import '../../util/feedback.dart';
 import '../../util/list_export.dart';
+import '../../util/analysis_links.dart';
+import '../../widgets/analyze_button.dart';
 import '../../widgets/app_page.dart';
 import '../../widgets/doc_editor.dart';
 import '../../widgets/doc_list.dart';
@@ -588,6 +590,13 @@ class _PartnerDetailPageState extends State<PartnerDetailPage> {
                   label: 'Nouveau bon de réception',
                   icon: Icons.move_to_inbox_outlined,
                   onPressed: () => _newDoc(purchaseReceiptConfig)),
+            AnalyzeButton(seeds: [
+              if (_isCustomer) ...[
+                AnalysisLinks.customer(_p.id, _p.name),
+                AnalysisLinks.customerProducts(_p.id, _p.name),
+              ],
+              if (_isSupplier) AnalysisLinks.supplier(_p.id, _p.name),
+            ]),
             PageAction(
                 label: 'Relevé (PDF)',
                 icon: Icons.picture_as_pdf_outlined,

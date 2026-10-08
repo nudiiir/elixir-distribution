@@ -9,6 +9,8 @@ import '../../theme/tokens.dart';
 import '../../util/features.dart';
 import '../../util/feedback.dart';
 import '../../util/prefs.dart';
+import '../../util/analysis_links.dart';
+import '../../widgets/analyze_button.dart';
 import '../../widgets/app_page.dart';
 import '../../widgets/charts.dart';
 import '../../widgets/doc_list.dart' show showDocDetailDialog;
@@ -417,6 +419,11 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
                 label: 'Dupliquer',
                 icon: Icons.copy_all_rounded,
                 onPressed: () => _duplicate(p)),
+          AnalyzeButton(seeds: [
+            AnalysisLinks.product(p.id, p.name, canCost: widget.canCost),
+            AnalysisLinks.productCustomers(p.id, p.name),
+            if (!p.isService) AnalysisLinks.productMovements(p.id, p.name),
+          ]),
           PageAction(
               label: 'Étiquettes',
               icon: Icons.qr_code_2_rounded,

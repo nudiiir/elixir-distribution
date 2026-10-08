@@ -22,6 +22,7 @@ import '../screens/settings_screen.dart';
 import '../screens/stock_screen.dart';
 import '../screens/webstore_screen.dart';
 import '../theme/tokens.dart';
+import '../util/analysis_links.dart';
 import '../util/commands.dart';
 import '../util/config.dart';
 import '../util/features.dart';
@@ -186,6 +187,13 @@ class _AppShellState extends State<AppShell> {
   void initState() {
     super.initState();
     UiPrefs.instance.user = user.id;
+    // « Analyser » buttons of the modules open the Explorateur on a seed.
+    if (_visible.any((m) => m.key == 'explorer')) {
+      AnalysisLinks.open = (spec, {title, origin}) {
+        _explorerRequest.value = ExplorerRequest(seed: spec, title: title, origin: origin);
+        goTo('explorer');
+      };
+    }
     Features.instance.addListener(_onFeatures);
     Features.instance.load(widget.api);
     _loadAlerts();
@@ -310,6 +318,7 @@ class _AppShellState extends State<AppShell> {
     _presenceTimer?.cancel();
     _webstoreTimer?.cancel();
     _alertsTimer?.cancel();
+    AnalysisLinks.open = null;
     Features.instance.removeListener(_onFeatures);
     _searchFocus.dispose();
     _globalSearch.dispose();
@@ -509,6 +518,10 @@ class _AppShellState extends State<AppShell> {
             api: widget.api,
             session: widget.session,
             onOpenModule: _openFromChecklist,
+            onExplore: (req) {
+              _explorerRequest.value = req;
+              goTo('explorer');
+            },
             onEdit: (r) {
               _explorerRequest.value = ExplorerRequest(report: r);
               goTo('explorer');

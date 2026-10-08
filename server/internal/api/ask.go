@@ -134,6 +134,9 @@ func (s *Server) analyticsAsk(w http.ResponseWriter, r *http.Request) {
 				lastErr, lastSpec = "spécification illisible", resp.Spec
 				continue
 			}
+			if fixBalanceRange(&rq) {
+				out.Spec = rq
+			}
 			res, err := s.analytics.Run(r.Context(), rq, caller)
 			if err == nil {
 				out.Result = res
@@ -176,6 +179,30 @@ func (s *Server) analyticsAsk(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusUnprocessableEntity
 	}
 	writeJSON(w, status, out)
+}
+
+// fixBalanceRange: « qui me doit le plus ? » is a balance as of today, the
+// sum of every movement ever — not of this month's movements. When the model
+// asks only for balances over a period, widen the period to « all ».
+func fixBalanceRange(rq *analytics.Request) bool {
+	if rq.Combo || rq.Source != "partner_ledger" || len(rq.Measures) == 0 {
+		return false
+	}
+	for _, m := range rq.Measures {
+		if m.Name != "balance" {
+			return false
+		}
+	}
+	for _, d := range rq.Dimensions {
+		if strings.HasPrefix(d, "movement_date") {
+			return false // a balance over time is a real time series
+		}
+	}
+	if rq.Range.Type == "all" {
+		return false
+	}
+	rq.Range = analytics.Range{Type: "all"}
+	return true
 }
 
 type specServiceResponse struct {

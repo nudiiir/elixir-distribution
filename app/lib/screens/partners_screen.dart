@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../api/client.dart';
 import '../api/models.dart';
 import '../theme/tokens.dart';
+import '../util/analysis_links.dart';
 import '../util/commands.dart';
 import '../util/prefs.dart';
 import '../widgets/data_table.dart';
@@ -211,6 +212,9 @@ class _PartnersScreenState extends State<PartnersScreen> {
                 MenuEntry('Nouveau fournisseur',
                     Icons.store_mall_directory_outlined,
                     () => _create('supplier')),
+              if (AnalysisLinks.available)
+                MenuEntry('Analyser : qui vous doit', Icons.insights_rounded,
+                    () => AnalysisLinks.launch(AnalysisLinks.receivables())),
             ],
           ),
           const SizedBox(height: 16),
