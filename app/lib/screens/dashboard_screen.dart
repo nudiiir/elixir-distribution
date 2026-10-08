@@ -683,7 +683,6 @@ const _screenLabels = {
   'products': 'Produits',
   'partners': 'Partenaires',
   'assistant': 'Assistant',
-  'sav': 'Réparations',
   'reports': 'Rapports',
   'designer': 'Modèles',
   'settings': 'Paramètres',

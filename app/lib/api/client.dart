@@ -738,23 +738,6 @@ class ApiClient {
     await _put('/api/v1/units/$id', {'status': status, 'notes': notes});
   }
 
-  // ---- SAV (repairs) ----
-
-  Future<List<Repair>> repairs({String? status, String? q}) async {
-    final j = await _get('/api/v1/repairs', {
-      'status': ?status,
-      if (q != null && q.isNotEmpty) 'q': q,
-    });
-    return [for (final e in j['items'] as List) Repair.fromJson(e)];
-  }
-
-  Future<Repair> saveRepair(Map<String, dynamic> data, {String? id}) async {
-    final j = id == null
-        ? await _post('/api/v1/repairs', data)
-        : await _put('/api/v1/repairs/$id', data);
-    return Repair.fromJson(j);
-  }
-
   // ---- Installments ----
 
   Future<List<InstallmentPlan>> installmentPlans({String? partnerId}) async {

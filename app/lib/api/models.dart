@@ -535,35 +535,6 @@ class ProductUnit {
         notes = j['notes'] as String?;
 }
 
-class Repair {
-  final String id;
-  final String number;
-  final String customerName;
-  final String? customerPhone;
-  final String device;
-  final String? serial;
-  final String fault;
-  final int deposit;
-  final int? quote;
-  final String status;
-  final String? notes;
-  final String createdAt;
-
-  Repair.fromJson(Map<String, dynamic> j)
-      : id = j['id'] as String,
-        number = (j['number'] as String?) ?? '',
-        customerName = j['customer_name'] as String,
-        customerPhone = j['customer_phone'] as String?,
-        device = j['device'] as String,
-        serial = j['serial'] as String?,
-        fault = j['fault'] as String,
-        deposit = (j['deposit'] as num?)?.toInt() ?? 0,
-        quote = (j['quote'] as num?)?.toInt(),
-        status = (j['status'] as String?) ?? 'received',
-        notes = j['notes'] as String?,
-        createdAt = (j['created_at'] as String?) ?? '';
-}
-
 class InstallmentDue {
   final String id;
   final String dueDate;

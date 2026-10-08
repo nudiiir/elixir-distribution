@@ -112,9 +112,6 @@ func New(db *sql.DB, dbPath string, eng *analytics.Engine) http.Handler {
 		r.Put("/units/{id}", s.updateUnit)
 		r.Delete("/units/{id}", s.deleteUnit)
 
-		r.Get("/repairs", s.listRepairs)
-		r.Post("/repairs", s.createRepair)
-		r.Put("/repairs/{id}", s.updateRepair)
 
 		r.Get("/installment-plans", s.listInstallmentPlans)
 		r.Post("/installment-plans", s.createInstallmentPlan)

@@ -17,7 +17,6 @@ import '../screens/products_screen.dart';
 import '../screens/purchases_screen.dart';
 import '../screens/reports_screen.dart';
 import '../screens/sales_screen.dart';
-import '../screens/sav_screen.dart';
 import '../screens/settings_screen.dart';
 import '../screens/stock_screen.dart';
 import '../screens/webstore_screen.dart';
@@ -111,8 +110,6 @@ const _allModules = [
   _Module('stock', Icons.inventory_2_outlined, 'Stock', 'Stock', subs: _stockSubs),
   _Module('partners', Icons.people_alt_outlined, 'Clients et fournisseurs', 'Tiers',
       subs: _partnerSubs),
-  _Module('sav', Icons.build_outlined, 'Réparations', 'Tiers',
-      feature: 'feature_repairs'),
   _Module('reports', Icons.query_stats_rounded, 'Rapports', 'Pilotage'),
   _Module('designer', Icons.design_services_outlined, 'Modèles', 'Pilotage',
       perm: 'settings'),
@@ -553,7 +550,6 @@ class _AppShellState extends State<AppShell> {
             searchRequest: _productsQuery,
             command: _commands['products']),
         'partners' => PartnersScreen(api: widget.api, command: _commands['partners']),
-        'sav' => SavScreen(api: widget.api),
         'webstore' => WebstoreScreen(api: widget.api),
         'reports' => ReportsScreen(api: widget.api, session: widget.session),
         'assistant' => AssistantScreen(api: widget.api),

@@ -18,7 +18,6 @@ class Features extends ChangeNotifier {
   bool variants = true; // déclinaisons (taille, couleur…)
   bool packagings = true; // conditionnements (carton = 24)
   bool webstore = true; // boutique en ligne
-  bool repairs = true; // réparations / SAV
   bool wholesale = true; // tarif demi-gros
   bool services = true; // produits de type service
 
@@ -35,7 +34,6 @@ class Features extends ChangeNotifier {
     'feature_wholesale': 'Tarif demi-gros',
     'feature_services': 'Services (main-d’œuvre, livraison…)',
     'feature_webstore': 'Boutique en ligne',
-    'feature_repairs': 'Réparations / SAV',
   };
 
   bool flag(String key) => switch (key) {
@@ -47,7 +45,6 @@ class Features extends ChangeNotifier {
         'feature_wholesale' => wholesale,
         'feature_services' => services,
         'feature_webstore' => webstore,
-        'feature_repairs' => repairs,
         _ => true,
       };
 
@@ -61,7 +58,6 @@ class Features extends ChangeNotifier {
     wholesale = on('feature_wholesale');
     services = on('feature_services');
     webstore = on('feature_webstore');
-    repairs = on('feature_repairs');
     defaultVat = int.tryParse(s['default_vat'] ?? '') ?? 1900;
     targetMarginPct = int.tryParse(s['target_margin_pct'] ?? '') ?? 30;
     paymentTermDays = int.tryParse(s['payment_term_days'] ?? '') ?? 0;

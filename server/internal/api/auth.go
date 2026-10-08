@@ -38,7 +38,7 @@ type AuthUser struct {
 // discount = may apply remises on sale lines (enforced at document creation).
 var AllPerms = []string{
 	"dashboard", "pos", "sales", "purchases", "stock",
-	"products", "partners", "assistant", "reports", "sav",
+	"products", "partners", "assistant", "reports",
 	"webstore", "settings", "view_cost", "discount",
 }
 
@@ -52,7 +52,6 @@ func defaultPerms(role string) map[string]bool {
 	case "cashier":
 		p["pos"] = true
 		p["assistant"] = true
-		p["sav"] = true
 	}
 	return p
 }
