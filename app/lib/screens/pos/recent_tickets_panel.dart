@@ -80,15 +80,7 @@ class _RecentTicketsPanelState extends State<RecentTicketsPanel> {
                 const Icon(Icons.history_rounded, size: 18, color: T.mintDeep),
                 const SizedBox(width: 8),
                 const Expanded(child: Text('Derniers tickets', style: T.h2)),
-                IconButton(
-                  tooltip: 'Actualiser',
-                  onPressed: _load,
-                  icon: const Icon(
-                    Icons.refresh_rounded,
-                    size: 18,
-                    color: T.muted,
-                  ),
-                ),
+                _act('Actualiser', Icons.refresh_rounded, _load),
                 IconButton(
                   tooltip: 'Fermer (Échap)',
                   onPressed: () => Navigator.of(context).pop(),
@@ -110,9 +102,13 @@ class _RecentTicketsPanelState extends State<RecentTicketsPanel> {
                       child: CircularProgressIndicator(color: T.mint),
                     )
                   : items.isEmpty
-                  ? const EmptyState(
+                  ? EmptyState(
                       icon: Icons.receipt_long_outlined,
-                      text: 'Aucun ticket dans cette session.',
+                      text:
+                          'Aucun ticket dans cette session.\nLes ventes encaissées apparaîtront ici.',
+                      actions: [
+                        ('Retour à la caisse', () => Navigator.of(context).pop()),
+                      ],
                     )
                   : ListView.separated(
                       itemCount: items.length,
@@ -126,6 +122,22 @@ class _RecentTicketsPanelState extends State<RecentTicketsPanel> {
     );
   }
 
+  Widget _act(String label, IconData icon, VoidCallback? onPressed) =>
+      TextButton.icon(
+        onPressed: onPressed,
+        style: TextButton.styleFrom(
+          foregroundColor: T.ink,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          textStyle: const TextStyle(
+            fontFamily: T.sans,
+            fontSize: 13.5,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        icon: Icon(icon, size: 17),
+        label: Text(label),
+      );
+
   Widget _row(PosRecentTicket t) {
     final cancelled = t.status == 'cancelled';
     return Padding(
@@ -133,7 +145,7 @@ class _RecentTicketsPanelState extends State<RecentTicketsPanel> {
       child: Row(
         children: [
           SizedBox(
-            width: 44,
+            width: 50,
             child: Text(_time(t.postedAt), style: T.monoSmall),
           ),
           Expanded(
@@ -144,10 +156,10 @@ class _RecentTicketsPanelState extends State<RecentTicketsPanel> {
                 _method(t),
                 if (cancelled) 'annulé',
               ].join(' · '),
-              maxLines: 1,
+              maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: T.body.copyWith(
-                fontSize: 12.5,
+                fontSize: 14,
                 color: cancelled ? T.faint : T.ink,
                 decoration: cancelled ? TextDecoration.lineThrough : null,
               ),
@@ -158,10 +170,11 @@ class _RecentTicketsPanelState extends State<RecentTicketsPanel> {
             fmtDA(t.totalTTC),
             style: T.monoBody.copyWith(fontWeight: FontWeight.w600),
           ),
-          const SizedBox(width: 4),
-          IconButton(
-            tooltip: 'Réimprimer le ticket',
-            onPressed: _printing == t.id
+          const SizedBox(width: 6),
+          _act(
+            'Réimprimer',
+            Icons.print_outlined,
+            _printing == t.id
                 ? null
                 : () async {
                     setState(() => _printing = t.id);
@@ -171,25 +184,12 @@ class _RecentTicketsPanelState extends State<RecentTicketsPanel> {
                       if (mounted) setState(() => _printing = null);
                     }
                   },
-            icon: const Icon(Icons.print_outlined, size: 17, color: T.muted),
           ),
-          IconButton(
-            tooltip: 'Ouvrir le document',
-            onPressed: () => widget.onOpen(t),
-            icon: const Icon(
-              Icons.open_in_new_rounded,
-              size: 17,
-              color: T.muted,
-            ),
-          ),
-          IconButton(
-            tooltip: 'Retour sur ce ticket',
-            onPressed: cancelled ? null : () => widget.onReturn(t),
-            icon: const Icon(
-              Icons.assignment_return_outlined,
-              size: 17,
-              color: T.muted,
-            ),
+          _act('Ouvrir', Icons.open_in_new_rounded, () => widget.onOpen(t)),
+          _act(
+            'Retour',
+            Icons.assignment_return_outlined,
+            cancelled ? null : () => widget.onReturn(t),
           ),
         ],
       ),

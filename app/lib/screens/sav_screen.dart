@@ -9,6 +9,7 @@ import '../api/client.dart';
 import '../api/models.dart';
 import '../templates/template_render.dart' show saveAndOpenPdf;
 import '../theme/tokens.dart';
+import '../util/feedback.dart';
 import '../widgets/ui.dart';
 
 const _statusMeta = {
@@ -99,7 +100,7 @@ class _SavScreenState extends State<SavScreen> {
             icon: const Icon(Icons.search_rounded, size: 16, color: T.ink),
             label: Text('Recherche IMEI',
                 style:
-                    T.small.copyWith(color: T.ink, fontWeight: FontWeight.w700)),
+                    T.body.copyWith(color: T.ink, fontWeight: FontWeight.w700)),
           ),
           const SizedBox(width: 8),
           SizedBox(
@@ -150,9 +151,26 @@ class _SavScreenState extends State<SavScreen> {
           child: Card14(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             child: _items.isEmpty
-                ? EmptyState(
-                    icon: Icons.build_outlined,
-                    text: _loading ? 'Chargement…' : 'Aucune réparation')
+                ? (_loading
+                    ? const Center(
+                        child: CircularProgressIndicator(color: T.mint))
+                    : EmptyState(
+                        icon: Icons.build_outlined,
+                        text: _statusFilter != null ||
+                                _searchCtrl.text.trim().isNotEmpty
+                            ? 'Aucune réparation ne correspond.'
+                            : 'Aucune réparation pour le moment.\nEnregistrez l’appareil qu’un client vous confie.',
+                        actions: [
+                          if (_statusFilter != null ||
+                              _searchCtrl.text.trim().isNotEmpty)
+                            ('Tout afficher', () {
+                              _searchCtrl.clear();
+                              setState(() => _statusFilter = null);
+                              _load();
+                            }),
+                          ('Nouveau dépôt', () => _openForm()),
+                        ],
+                      ))
                 : ListView.separated(
                     itemCount: _items.length,
                     separatorBuilder: (_, _) => const Divider(),
@@ -169,7 +187,7 @@ class _SavScreenState extends State<SavScreen> {
                                 width: 130,
                                 child: Text(x.number,
                                     style: T.monoBody
-                                        .copyWith(fontSize: 11.5))),
+                                        .copyWith(fontSize: 14))),
                             Expanded(
                               flex: 3,
                               child: Column(
@@ -178,8 +196,7 @@ class _SavScreenState extends State<SavScreen> {
                                   Text(x.customerName, style: T.body),
                                   if (x.customerPhone != null)
                                     Text(x.customerPhone!,
-                                        style: T.monoSmall
-                                            .copyWith(fontSize: 10.5)),
+                                        style: T.monoSmall),
                                 ],
                               ),
                             ),
@@ -189,13 +206,11 @@ class _SavScreenState extends State<SavScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(x.device,
-                                      style:
-                                          T.body.copyWith(fontSize: 12.5)),
+                                      style: T.body),
                                   Text(x.fault,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: T.small
-                                          .copyWith(fontSize: 11)),
+                                      style: T.small),
                                 ],
                               ),
                             ),
@@ -214,16 +229,19 @@ class _SavScreenState extends State<SavScreen> {
                                 borderRadius:
                                     BorderRadius.circular(T.rChip),
                               ),
-                              child: Text(meta.$1.toUpperCase(),
+                              child: Text(meta.$1,
                                   style: T.label.copyWith(
-                                      color: meta.$3, fontSize: 9)),
+                                      color: meta.$3, fontSize: 13)),
                             ),
                             const SizedBox(width: 12),
                             Text(
                                 x.createdAt.length >= 10
                                     ? x.createdAt.substring(0, 10)
                                     : '',
-                                style: T.monoSmall.copyWith(fontSize: 10.5)),
+                                style: T.monoSmall),
+                            const SizedBox(width: 8),
+                            const Icon(Icons.chevron_right_rounded,
+                                size: 18, color: T.faint),
                           ]),
                         ),
                       );
@@ -278,7 +296,16 @@ class _RepairDialogState extends State<_RepairDialog> {
     super.dispose();
   }
 
+  Map<String, String> _fieldErrors = const {};
+
   Future<void> _save() async {
+    final errs = <String, String>{
+      if (_name.text.trim().isEmpty) 'name': 'Indiquez le nom du client.',
+      if (_device.text.trim().isEmpty) 'device': 'Indiquez l’appareil.',
+      if (_fault.text.trim().isEmpty) 'fault': 'Décrivez la panne.',
+    };
+    setState(() => _fieldErrors = errs);
+    if (errs.isNotEmpty) return;
     setState(() {
       _busy = true;
       _error = null;
@@ -399,39 +426,57 @@ class _RepairDialogState extends State<_RepairDialog> {
                     TextButton.icon(
                       onPressed: () => _printSlip(widget.existing!),
                       icon: const Icon(Icons.print_outlined,
-                          size: 14, color: T.muted),
-                      label: Text('Bon de dépôt',
-                          style: T.small.copyWith(color: T.muted)),
+                          size: 17, color: T.ink),
+                      label: Text('Imprimer le bon de dépôt',
+                          style: T.body.copyWith(
+                              color: T.ink, fontWeight: FontWeight.w700)),
                     ),
                 ]),
                 const SizedBox(height: 14),
-                Row(children: [
-                  Expanded(child: _F(label: 'Client', c: _name)),
-                  const SizedBox(width: 10),
+                const Text('Client', style: T.h2),
+                const SizedBox(height: 10),
+                _F(
+                    label: 'Nom du client',
+                    c: _name,
+                    required: true,
+                    error: _fieldErrors['name']),
+                _F(label: 'Téléphone', c: _phone, mono: true),
+                const SizedBox(height: 6),
+                const Text('Appareil', style: T.h2),
+                const SizedBox(height: 10),
+                _F(
+                    label: 'Appareil',
+                    help: 'Marque et modèle, ex. Samsung A54.',
+                    c: _device,
+                    required: true,
+                    error: _fieldErrors['device']),
+                _F(
+                    label: 'IMEI / N° de série',
+                    c: _serial,
+                    mono: true,
+                    help: 'Facultatif — permet de retrouver la garantie.'),
+                _F(
+                    label: 'Panne déclarée',
+                    c: _fault,
+                    required: true,
+                    error: _fieldErrors['fault']),
+                const SizedBox(height: 6),
+                const Text('Argent', style: T.h2),
+                const SizedBox(height: 10),
+                Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Expanded(
-                      child: _F(label: 'Téléphone', c: _phone, mono: true)),
-                ]),
-                Row(children: [
-                  Expanded(
-                      child:
-                          _F(label: 'Appareil (ex. Samsung A54)', c: _device)),
-                  const SizedBox(width: 10),
-                  Expanded(
-                      child: _F(label: 'IMEI / N° série', c: _serial, mono: true)),
-                ]),
-                _F(label: 'Panne déclarée', c: _fault),
-                Row(children: [
-                  Expanded(
-                      child:
-                          _F(label: 'Acompte (DA)', c: _deposit, mono: true)),
-                  const SizedBox(width: 10),
+                      child: _F(
+                          label: 'Acompte versé (DA)',
+                          c: _deposit,
+                          mono: true)),
+                  const SizedBox(width: 12),
                   Expanded(
                       child: _F(
                           label: 'Devis estimé (DA)', c: _quote, mono: true)),
                 ]),
                 _F(label: 'Notes', c: _notes),
                 if (widget.existing != null) ...[
-                  const MicroLabel('Statut'),
+                  const Text('Statut', style: T.label),
                   const SizedBox(height: 6),
                   Wrap(spacing: 6, runSpacing: 6, children: [
                     for (final e in _statusMeta.entries)
@@ -439,7 +484,7 @@ class _RepairDialogState extends State<_RepairDialog> {
                         label: Text(e.value.$1,
                             style: TextStyle(
                                 fontFamily: T.sans,
-                                fontSize: 12,
+                                fontSize: 13,
                                 fontWeight: FontWeight.w600,
                                 color: _status == e.key
                                     ? T.mintDark
@@ -457,7 +502,7 @@ class _RepairDialogState extends State<_RepairDialog> {
                 ],
                 if (_error != null) ...[
                   const SizedBox(height: 8),
-                  Text(_error!, style: T.small.copyWith(color: T.dangerDark)),
+                  FieldError(_error!),
                 ],
                 const SizedBox(height: 16),
                 Row(children: [
@@ -465,7 +510,7 @@ class _RepairDialogState extends State<_RepairDialog> {
                   TextButton(
                     onPressed: () => Navigator.of(context).pop(false),
                     child: Text('Fermer',
-                        style: T.small.copyWith(color: T.muted)),
+                        style: T.body.copyWith(color: T.muted)),
                   ),
                   const SizedBox(width: 8),
                   SizedBox(
@@ -563,10 +608,12 @@ class _ImeiLookupDialogState extends State<_ImeiLookupDialog> {
             children: [
               const Text('Recherche IMEI / N° de série', style: T.h2),
               const SizedBox(height: 12),
+              const Text('IMEI ou N° de série', style: T.label),
+              const SizedBox(height: 6),
               Row(children: [
                 Expanded(
                   child: Container(
-                    height: 42,
+                    height: 44,
                     decoration: BoxDecoration(
                       color: T.bg,
                       borderRadius: BorderRadius.circular(T.rInner),
@@ -595,7 +642,7 @@ class _ImeiLookupDialogState extends State<_ImeiLookupDialog> {
               ]),
               if (_error != null) ...[
                 const SizedBox(height: 10),
-                Text(_error!, style: T.small.copyWith(color: T.dangerDark)),
+                FieldError(_error!),
               ],
               if (u != null) ...[
                 const SizedBox(height: 14),
@@ -608,7 +655,7 @@ class _ImeiLookupDialogState extends State<_ImeiLookupDialog> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(u.productName, style: T.h2.copyWith(fontSize: 14)),
+                      Text(u.productName, style: T.h2.copyWith(fontSize: 15)),
                       const SizedBox(height: 6),
                       _kv('N° de série', u.serial),
                       _kv('Statut', switch (u.status) {
@@ -641,7 +688,7 @@ class _ImeiLookupDialogState extends State<_ImeiLookupDialog> {
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
                   child:
-                      Text('Fermer', style: T.small.copyWith(color: T.muted)),
+                      Text('Fermer', style: T.body.copyWith(color: T.muted)),
                 ),
               ]),
             ],
@@ -654,8 +701,8 @@ class _ImeiLookupDialogState extends State<_ImeiLookupDialog> {
   Widget _kv(String k, String v) => Padding(
         padding: const EdgeInsets.only(bottom: 3),
         child: Row(children: [
-          SizedBox(width: 110, child: Text(k, style: T.small)),
-          Expanded(child: Text(v, style: T.monoBody.copyWith(fontSize: 12))),
+          SizedBox(width: 120, child: Text(k, style: T.small)),
+          Expanded(child: Text(v, style: T.monoBody)),
         ]),
       );
 }
@@ -682,7 +729,7 @@ class _Pill extends StatelessWidget {
         child: Text(label,
             style: TextStyle(
               fontFamily: T.sans,
-              fontSize: 12,
+              fontSize: 14,
               fontWeight: FontWeight.w700,
               color: selected ? Colors.white : T.muted,
             )),
@@ -692,24 +739,37 @@ class _Pill extends StatelessWidget {
 }
 
 class _F extends StatelessWidget {
-  const _F({required this.label, required this.c, this.mono = false});
+  const _F({
+    required this.label,
+    required this.c,
+    this.mono = false,
+    this.required = false,
+    this.help,
+    this.error,
+  });
   final String label;
   final TextEditingController c;
   final bool mono;
+  final bool required;
+  final String? help;
+  final String? error;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.only(bottom: 12),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        MicroLabel(label),
-        const SizedBox(height: 4),
+        Text.rich(TextSpan(text: label, style: T.label, children: [
+          if (required)
+            const TextSpan(text: ' *', style: TextStyle(color: T.danger)),
+        ])),
+        const SizedBox(height: 5),
         Container(
-          height: 38,
+          height: 42,
           decoration: BoxDecoration(
             color: T.bg,
             borderRadius: BorderRadius.circular(T.rInner),
-            border: Border.all(color: T.border),
+            border: Border.all(color: error != null ? T.danger : T.border),
           ),
           child: TextField(
             controller: c,
@@ -718,11 +778,18 @@ class _F extends StatelessWidget {
               isDense: true,
               border: InputBorder.none,
               contentPadding:
-                  EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  EdgeInsets.symmetric(horizontal: 12, vertical: 12),
             ),
           ),
         ),
+        if (error != null)
+          FieldError(error)
+        else if (help != null) ...[
+          const SizedBox(height: 4),
+          Text(help!, style: T.small),
+        ],
       ]),
+
     );
   }
 }

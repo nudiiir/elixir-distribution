@@ -12,7 +12,7 @@ import '../../widgets/product_thumb.dart';
 import '../../widgets/ui.dart';
 import 'stock_common.dart';
 
-/// « Niveaux » : one row per product (zeros included), the KPI strip follows
+/// « Niveaux de stock » : one row per product (zeros included), the KPI strip follows
 /// the filters. ONE rule for « stock faible » (see [StockLevel.isLow]).
 class LevelsTab extends StatefulWidget {
   const LevelsTab({
@@ -176,7 +176,7 @@ class LevelsTabState extends State<LevelsTab> {
           'Catégorie',
           'Quantité',
           'Minimum',
-          if (widget.viewCost) 'CMUP (DA)',
+          if (widget.viewCost) 'Coût moyen (DA)',
           if (widget.viewCost) 'Valeur (DA)',
           'Prix de vente (DA)',
         ],
@@ -226,16 +226,16 @@ class LevelsTabState extends State<LevelsTab> {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       KpiStrip(loading: _loading && _rows.isEmpty, items: [
         if (widget.viewCost)
-          Kpi('Valeur au coût', fmtDA(cost), hint: 'qté × CMUP'),
-        Kpi('Valeur de vente', fmtDA(sale), hint: 'TTC, prix actuels'),
+          Kpi('Valeur au coût moyen', fmtDA(cost), hint: 'quantité × coût moyen'),
+        Kpi('Valeur au prix de vente', fmtDA(sale), hint: 'TTC, prix actuels'),
         if (widget.viewCost)
-          Kpi('Marge potentielle', fmtDA(saleHT - cost),
+          Kpi('Bénéfice possible', fmtDA(saleHT - cost),
               hint: saleHT > 0
                   ? '${((saleHT - cost) * 100 / saleHT).toStringAsFixed(1).replaceAll('.', ',')} % du HT'
                   : null),
-        Kpi('Références en rupture', '$rowsRupture',
+        Kpi('Produits en rupture', '$rowsRupture',
             tone: rowsRupture > 0 ? T.dangerDark : null,
-            hint: 'qté ≤ 0',
+            hint: 'quantité à zéro ou moins',
             onTap: () {
               setState(() {
                 _rupture = true;
@@ -245,7 +245,7 @@ class LevelsTabState extends State<LevelsTab> {
             }),
         Kpi('Sous le minimum', '$rowsUnder',
             tone: rowsUnder > 0 ? T.warnDark : null,
-            hint: 'qté < stock minimum',
+            hint: 'quantité sous le stock minimum',
             onTap: () {
               setState(() {
                 _underMin = true;
@@ -282,6 +282,11 @@ class LevelsTabState extends State<LevelsTab> {
           ),
         ],
         panel: FilterPanel(fields: [
+          ?depotFilter(
+            warehouses: widget.warehouses,
+            value: widget.warehouseId,
+            onChanged: widget.onWarehouse,
+          ),
           FilterField<String>(
             label: 'Catégorie',
             value: cats.containsKey(_category) ? _category : null,
@@ -348,18 +353,7 @@ class LevelsTabState extends State<LevelsTab> {
             }),
         ],
         onClearAll: _clearAll,
-        trailing: [
-          DepotDropdown(
-            warehouses: widget.warehouses,
-            value: widget.warehouseId,
-            onChanged: widget.onWarehouse,
-          ),
-          IconButton(
-            tooltip: 'Actualiser',
-            onPressed: load,
-            icon: const Icon(Icons.refresh_rounded, size: 18, color: T.muted),
-          ),
-        ],
+        trailing: [RefreshButton(onPressed: load)],
       ),
       const SizedBox(height: 12),
       Expanded(
@@ -382,6 +376,10 @@ class LevelsTabState extends State<LevelsTab> {
             }),
             RowAction('Voir les mouvements', Icons.swap_vert_rounded,
                 (l) => widget.onShowMoves(l.productId, l.productName)),
+            RowAction('Corriger le stock', Icons.tune_rounded, (l) async {
+              final done = await showAdjustStock(context, widget.api, l.productId);
+              if (done) load();
+            }),
           ],
           empty: _anyFilter
               ? EmptyState(
@@ -390,14 +388,14 @@ class LevelsTabState extends State<LevelsTab> {
                   actions: [('Effacer les filtres', _clearAll)])
               : EmptyState(
                   icon: Icons.inventory_2_outlined,
-                  text: 'Aucun produit stocké.\n'
-                      'Les réceptions fournisseur et les inventaires alimentent cette liste.',
+                  text: 'Aucun produit en stock.\n'
+                      'Les bons de réception et les inventaires remplissent cette liste.',
                   actions: [('Faire un inventaire', widget.onInventory)]),
           aggregates: (sel) => [
             if (widget.viewCost)
               ('Valeur', fmtDA(sel.fold<int>(0, (s, l) => s + _costValue(l)))),
             ('Rupture', '${sel.where((l) => l.isRupture).length}'),
-            ('Sous le min.', '${sel.where((l) => l.isUnderMin).length}'),
+            ('Sous le minimum','${sel.where((l) => l.isUnderMin).length}'),
           ],
           columns: [
             ColumnSpec(
@@ -436,8 +434,8 @@ class LevelsTabState extends State<LevelsTab> {
             ),
             ColumnSpec(
               id: 'qty',
-              label: 'Qté',
-              width: 120,
+              label: 'Quantité',
+              width: 130,
               numeric: true,
               hideable: false,
               sortKey: (l) => l.qtyMilli,
@@ -462,7 +460,7 @@ class LevelsTabState extends State<LevelsTab> {
             ColumnSpec(
               id: 'min',
               label: 'Minimum',
-              width: 90,
+              width: 100,
               numeric: true,
               visibleByDefault: false,
               sortKey: (l) => l.minStockMilli,
@@ -474,8 +472,8 @@ class LevelsTabState extends State<LevelsTab> {
             if (widget.viewCost)
               ColumnSpec(
                 id: 'cmup',
-                label: 'CMUP',
-                width: 115,
+                label: 'Coût moyen',
+                width: 130,
                 numeric: true,
                 sortKey: (l) => l.avgCost,
                 exportValue: (l) => l.avgCost / 100,

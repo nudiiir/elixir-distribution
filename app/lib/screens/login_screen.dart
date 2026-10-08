@@ -127,8 +127,8 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 8),
                 Center(
-                  child: Text('GESTION COMMERCIALE',
-                      style: T.label.copyWith(fontSize: 8.5)),
+                  child: Text('Gestion commerciale',
+                      style: T.label.copyWith(fontSize: 14)),
                 ),
                 const SizedBox(height: 26),
                 const MicroLabel('Utilisateur'),
@@ -169,16 +169,19 @@ class _LoginScreenState extends State<LoginScreen> {
                           horizontal: 10, vertical: 4),
                       child: Row(mainAxisSize: MainAxisSize.min, children: [
                         const Icon(Icons.dns_outlined,
-                            size: 12, color: T.faint),
+                            size: 15, color: T.faint),
                         const SizedBox(width: 6),
+                        Text('Serveur : ', style: T.small),
                         Text(
                             widget.api.baseUrl
                                 .replaceFirst('http://', ''),
-                            style: T.monoSmall.copyWith(fontSize: 10.5)),
-                        const SizedBox(width: 6),
+                            style: T.monoSmall),
+                        const SizedBox(width: 8),
                         Text('Modifier',
                             style: T.small.copyWith(
-                                fontSize: 10.5, color: T.mintDark)),
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w700,
+                                color: T.mintDark)),
                       ]),
                     ),
                   ),
@@ -210,8 +213,9 @@ class _LoginScreenState extends State<LoginScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const MicroLabel('Adresse du serveur'),
+                  const Text('Adresse du serveur', style: T.h2),
                   const SizedBox(height: 4),
+
                   Text(
                       "L'adresse IP du PC qui héberge le serveur Elixir "
                       '(ex. 192.168.1.10).',
@@ -257,8 +261,8 @@ class _LoginScreenState extends State<LoginScreen> {
                             ? '✓ Serveur joignable'
                             : '✗ Aucun serveur à cette adresse');
                       },
-                      child: Text('Tester',
-                          style: T.small.copyWith(color: T.muted)),
+                      child: Text('Tester la connexion',
+                          style: T.body.copyWith(color: T.ink)),
                     ),
                     const Spacer(),
                     SizedBox(

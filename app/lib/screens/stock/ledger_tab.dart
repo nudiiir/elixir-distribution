@@ -127,8 +127,11 @@ class LedgerTabState extends State<LedgerTab> {
     }
   }
 
-  void _toggleKind(String k) {
-    setState(() => _kindSel.contains(k) ? _kindSel.remove(k) : _kindSel.add(k));
+  /// One movement type at a time (the « Type » filter).
+  String? get _kind => _kindSel.isEmpty ? null : _kindSel.first;
+
+  void _setKind(String? k) {
+    setState(() => _kindSel = {?k});
     UiPrefs.instance.set(_p, 'kinds', _kindSel.toList());
     _load();
   }
@@ -160,18 +163,18 @@ class LedgerTabState extends State<LedgerTab> {
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       KpiStrip(loading: _loading && d == null, items: [
-        Kpi('Ouverture', d == null ? '—' : fmtQty(d.openingMilli),
+        Kpi('Stock au début', d == null ? '—' : fmtQty(d.openingMilli),
             hint: widget.viewCost && d != null
                 ? fmtDA(d.openingValue)
-                : 'stock au début de la période'),
+                : 'au début de la période'),
         Kpi('Entrées', d == null ? '—' : '+${fmtQty(d.inMilli)}',
-            tone: T.mintDark, hint: filtered ? 'types choisis' : null),
+            tone: T.mintDark, hint: filtered ? 'type choisi seulement' : 'sur la période'),
         Kpi('Sorties', d == null ? '—' : '−${fmtQty(d.outMilli)}',
-            tone: T.dangerDark, hint: filtered ? 'types choisis' : null),
-        Kpi('Clôture', d == null ? '—' : fmtQty(d.closingMilli),
+            tone: T.dangerDark, hint: filtered ? 'type choisi seulement' : 'sur la période'),
+        Kpi('Stock à la fin', d == null ? '—' : fmtQty(d.closingMilli),
             hint: widget.viewCost && d != null
                 ? fmtDA(d.closingValue)
-                : 'stock à la fin de la période'),
+                : 'à la fin de la période'),
       ]),
       const SizedBox(height: 12),
       ListToolbar(
@@ -183,17 +186,41 @@ class LedgerTabState extends State<LedgerTab> {
         },
         onSearchSubmitted: (_) => _load(),
         quickFilters: [
-          PeriodButton(
-            period: _period,
-            onChanged: (p) {
-              setState(() => _period = p);
-              p.save(_p);
+          for (final (k, l) in _kinds.take(2))
+            FilterPill(
+                label: l,
+                active: _kind == k,
+                onTap: () => _setKind(_kind == k ? null : k)),
+        ],
+        panel: Wrap(spacing: 14, runSpacing: 12, children: [
+          ?depotFilter(
+            warehouses: widget.warehouses,
+            value: widget.warehouseId,
+            onChanged: widget.onWarehouse,
+          ),
+          periodFilter(context, period: _period, onChanged: (p) {
+            setState(() => _period = p);
+            p.save(_p);
+            _load();
+          }),
+          FilterField<String>(
+            label: 'Type de mouvement',
+            value: _kind,
+            options: [for (final k in _kinds) k],
+            onChanged: _setKind,
+          ),
+          PickerFilter(
+            label: 'Produit',
+            value: _productId == null ? null : (_productName ?? '—'),
+            placeholder: 'Tous — choisir un produit…',
+            onPick: _pickProduct,
+            onClear: () {
+              setState(() => _productId = _productName = null);
+              _saveProduct();
               _load();
             },
           ),
-          for (final (k, l) in _kinds)
-            FilterPill(label: l, active: _kindSel.contains(k), onTap: () => _toggleKind(k)),
-        ],
+        ]),
         active: [
           if (_productId != null)
             ActiveFilter('Produit : ${_productName ?? '—'}', () {
@@ -202,30 +229,10 @@ class LedgerTabState extends State<LedgerTab> {
               _load();
             }),
           for (final (k, l) in _kinds)
-            if (_kindSel.contains(k)) ActiveFilter(l, () => _toggleKind(k)),
+            if (_kind == k) ActiveFilter('Type : $l', () => _setKind(null)),
         ],
         onClearAll: _clearAll,
-        trailing: [
-          Padding(
-            padding: const EdgeInsetsDirectional.only(start: 6),
-            child: FilterPill(
-              label: _productId == null ? 'Produit…' : 'Changer de produit',
-              icon: Icons.search_rounded,
-              active: false,
-              onTap: _pickProduct,
-            ),
-          ),
-          DepotDropdown(
-            warehouses: widget.warehouses,
-            value: widget.warehouseId,
-            onChanged: widget.onWarehouse,
-          ),
-          IconButton(
-            tooltip: 'Actualiser',
-            onPressed: _load,
-            icon: const Icon(Icons.refresh_rounded, size: 18, color: T.muted),
-          ),
-        ],
+        trailing: [RefreshButton(onPressed: _load)],
       ),
       if (d?.truncated == true)
         Padding(
@@ -282,7 +289,7 @@ class LedgerTabState extends State<LedgerTab> {
             ColumnSpec(
               id: 'date',
               label: 'Date',
-              width: 128,
+              width: 150,
               hideable: false,
               sortKey: (r) => '${r.createdAt}#${(_seq[r.id] ?? 0).toString().padLeft(8, '0')}',
               exportValue: (r) => frDateTime(r.at),
@@ -291,14 +298,14 @@ class LedgerTabState extends State<LedgerTab> {
             ColumnSpec(
               id: 'type',
               label: 'Type',
-              width: 120,
+              width: 140,
               sortKey: (r) => docLabel(r.docType),
               exportValue: (r) =>
                   r.isReversal ? '${docLabel(r.docType)} (annulation)' : docLabel(r.docType),
               cell: (context, r) => Text(
                   r.isReversal ? '${docLabel(r.docType)} ↺' : docLabel(r.docType),
                   style: T.small.copyWith(
-                      color: r.isReversal ? T.warnDark : T.ink, fontSize: 12),
+                      color: r.isReversal ? T.warnDark : T.ink, fontSize: 13),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis),
             ),
@@ -333,8 +340,8 @@ class LedgerTabState extends State<LedgerTab> {
             if (lots)
               ColumnSpec(
                 id: 'lot',
-                label: 'Lot',
-                width: 100,
+                label: 'N° de lot',
+                width: 110,
                 visibleByDefault: false,
                 sortKey: (r) => r.lotNumber ?? '',
                 exportValue: (r) => r.lotNumber ?? '',
@@ -343,7 +350,7 @@ class LedgerTabState extends State<LedgerTab> {
             ColumnSpec(
               id: 'in',
               label: 'Entrée',
-              width: 90,
+              width: 95,
               numeric: true,
               sortKey: (r) => r.inMilli,
               exportValue: (r) => r.inMilli / 1000,
@@ -353,7 +360,7 @@ class LedgerTabState extends State<LedgerTab> {
             ColumnSpec(
               id: 'out',
               label: 'Sortie',
-              width: 90,
+              width: 95,
               numeric: true,
               sortKey: (r) => r.outMilli,
               exportValue: (r) => r.outMilli / 1000,
@@ -362,8 +369,8 @@ class LedgerTabState extends State<LedgerTab> {
             ),
             ColumnSpec(
               id: 'balance',
-              label: 'Solde',
-              width: 90,
+              label: 'Stock après',
+              width: 110,
               numeric: true,
               sortKey: (r) => r.balanceMilli,
               exportValue: (r) => r.balanceMilli / 1000,
@@ -375,8 +382,8 @@ class LedgerTabState extends State<LedgerTab> {
             if (widget.viewCost)
               ColumnSpec(
                 id: 'cost',
-                label: 'Coût unit.',
-                width: 110,
+                label: 'Coût unitaire',
+                width: 130,
                 numeric: true,
                 visibleByDefault: false,
                 sortKey: (r) => r.unitCost,

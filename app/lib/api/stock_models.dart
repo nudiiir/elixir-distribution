@@ -159,8 +159,10 @@ class InvDraftLine {
   InvDraftLine.fromJson(Map<String, dynamic> j)
       : productId = (j['product_id'] as String?) ?? '',
         qtyMilli = _i(j['qty_milli']),
-        expectedMilli = (j['expected_milli'] as num?)?.toInt();
+        expectedMilli = (j['expected_milli'] as num?)?.toInt(),
+        description = (j['description'] as String?) ?? '';
   final String productId;
+  final String description;
   final int qtyMilli;
   final int? expectedMilli;
 }

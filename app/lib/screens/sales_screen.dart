@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
+import '../util/commands.dart';
 import '../widgets/doc_editor.dart';
 import '../widgets/doc_list.dart';
 import '../widgets/list_toolbar.dart';
@@ -22,9 +23,12 @@ DocEditorConfig? saleEditorFor(String docType) => switch (docType) {
       _ => null,
     };
 
+/// Ventes. Menu commands: `list` · `new:SALE_INVOICE` · `type:QUOTE` ·
+/// `type:DELIVERY_NOTE` · `type:SALE_CREDIT_NOTE` · `type:SALE_TICKET`.
 class SalesScreen extends StatefulWidget {
-  const SalesScreen({super.key, required this.api});
+  const SalesScreen({super.key, required this.api, this.command});
   final ApiClient api;
+  final ScreenCommand? command;
 
   @override
   State<SalesScreen> createState() => _SalesScreenState();
@@ -38,6 +42,38 @@ class _SalesScreenState extends State<SalesScreen> {
   void initState() {
     super.initState();
     _loadPartners();
+    widget.command?.addListener(_onCommand);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _onCommand());
+  }
+
+  @override
+  void didUpdateWidget(SalesScreen old) {
+    super.didUpdateWidget(old);
+    if (old.command != widget.command) {
+      old.command?.removeListener(_onCommand);
+      widget.command?.addListener(_onCommand);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.command?.removeListener(_onCommand);
+    super.dispose();
+  }
+
+  void _onCommand() {
+    final cmd = widget.command?.value;
+    if (cmd == null || !mounted) return;
+    widget.command!.done();
+    if (!popToModuleRoot(context)) return;
+    if (cmd == 'list') {
+      _listKey.currentState?.setType(null);
+    } else if (cmd.startsWith('type:')) {
+      _listKey.currentState?.setType(cmd.substring(5));
+    } else if (cmd.startsWith('new:')) {
+      final cfg = saleEditorFor(cmd.substring(4));
+      if (cfg != null) _newDoc(cfg);
+    }
   }
 
   Future<void> _loadPartners() async {
@@ -72,11 +108,11 @@ class _SalesScreenState extends State<SalesScreen> {
             primaryLabel: 'Nouvelle facture',
             onPrimary: () => _newDoc(saleInvoiceConfig),
             more: [
-              MenuEntry('Devis', Icons.request_quote_outlined,
+              MenuEntry('Nouveau devis', Icons.request_quote_outlined,
                   () => _newDoc(quoteConfig)),
-              MenuEntry('Bon de livraison', Icons.local_shipping_outlined,
+              MenuEntry('Nouveau bon de livraison', Icons.local_shipping_outlined,
                   () => _newDoc(deliveryNoteConfig)),
-              MenuEntry('Avoir client', Icons.assignment_return_outlined,
+              MenuEntry('Nouvel avoir client', Icons.assignment_return_outlined,
                   () => _newDoc(saleCreditNoteConfig)),
             ],
           ),
@@ -86,6 +122,7 @@ class _SalesScreenState extends State<SalesScreen> {
               key: _listKey,
               api: widget.api,
               allTypes: _saleTypes,
+              quickTypes: const ['SALE_INVOICE', 'QUOTE', 'DELIVERY_NOTE'],
               partnerNames: _partnerNames,
               partnerKind: 'customer',
               editorFor: saleEditorFor,

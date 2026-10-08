@@ -606,6 +606,12 @@ class ApiClient {
     return s == null ? null : CaisseSession.fromJson(s);
   }
 
+  /// Number of caisse sessions ever opened (the server returns the last 60).
+  Future<int> caisseSessionCount() async {
+    final j = await _get('/api/v1/caisse/sessions');
+    return (j['items'] as List? ?? const []).length;
+  }
+
   Future<CaisseSession> caisseOpen(int openingCash) async {
     final j = await _post('/api/v1/caisse/open', {'opening_cash': openingCash});
     return CaisseSession.fromJson(j['session']);

@@ -5,8 +5,60 @@ import 'package:flutter/material.dart';
 import '../api/client.dart';
 import '../api/cloud.dart';
 import '../theme/tokens.dart';
+import '../util/feedback.dart';
 import '../util/file_dialog.dart';
 import '../widgets/ui.dart';
+
+/// A plain vertical field: label above (red « * » when required), the
+/// input, then an optional helper line.
+Widget webField(
+  String label,
+  TextEditingController c, {
+  bool required = false,
+  String? hint,
+  String? help,
+  String? suffix,
+  int maxLines = 1,
+  ValueChanged<String>? onChanged,
+}) {
+  return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    Text.rich(TextSpan(text: label, style: T.label, children: [
+      if (required)
+        const TextSpan(text: ' *', style: TextStyle(color: T.danger)),
+    ])),
+    const SizedBox(height: 6),
+    TextField(
+      controller: c,
+      style: T.body,
+      maxLines: maxLines,
+      onChanged: onChanged,
+      decoration: InputDecoration(
+        isDense: true,
+        hintText: hint,
+        hintStyle: T.bodyMuted.copyWith(color: T.ghost),
+        suffixText: suffix,
+        filled: true,
+        fillColor: T.bg,
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
+        border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(T.rInner),
+            borderSide: const BorderSide(color: T.border)),
+        enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(T.rInner),
+            borderSide: const BorderSide(color: T.border)),
+        focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(T.rInner),
+            borderSide: const BorderSide(color: T.mintDeep, width: 1.4)),
+      ),
+    ),
+    if (help != null) ...[
+      const SizedBox(height: 4),
+      Text(help, style: T.small),
+    ],
+  ]);
+}
+
 
 /// « Boutique en ligne » — la vitrine `slug.shops.example.com` du magasin.
 /// Le catalogue part d'ici en SNAPSHOT (le site vit même PC éteint) et les
@@ -115,10 +167,9 @@ class _WebstoreScreenState extends State<WebstoreScreen> {
       _store = await _client.webStore();
       if (!mounted) return;
       Navigator.of(context, rootNavigator: true).pop();
-      messenger.showSnackBar(SnackBar(
-          backgroundColor: T.mintDeep,
-          content: Text('$n produits publiés sur la boutique',
-              style: const TextStyle(color: Colors.white))));
+      showToast(context, '$n produits publiés sur la boutique.',
+          actionLabel: 'Voir la boutique',
+          onAction: () => _openInBrowser(_store!.url));
       setState(() {});
     } catch (e) {
       if (!mounted) return;
@@ -184,7 +235,7 @@ class _WebstoreScreenState extends State<WebstoreScreen> {
                   Text(label,
                       style: TextStyle(
                         fontFamily: T.sans,
-                        fontSize: 13.5,
+                        fontSize: 14.5,
                         fontWeight:
                             _tab == i ? FontWeight.w800 : FontWeight.w600,
                         color: _tab == i ? T.ink : T.muted,
@@ -217,7 +268,7 @@ class _WebstoreScreenState extends State<WebstoreScreen> {
               client: _client,
               store: _store!,
               onSaved: (s) => setState(() => _store = s)),
-          1 => _ProductsPane(client: _client),
+          1 => _ProductsPane(client: _client, onPublish: _publish),
           _ => _OrdersPane(api: widget.api, client: _client, onAcked: _load),
         },
       ),
@@ -345,25 +396,20 @@ class _ClaimPaneState extends State<_ClaimPane> {
                 style: T.bodyMuted.copyWith(height: 1.5),
                 textAlign: TextAlign.center),
             const SizedBox(height: 18),
-            TextField(
-              controller: _name,
-              style: T.body,
-              decoration: const InputDecoration(
-                  labelText: 'Nom de la boutique (affiché sur le site)'),
-            ),
+            webField('Nom de la boutique', _name,
+                required: true, help: 'Affiché en haut du site.'),
             const SizedBox(height: 12),
-            TextField(
-              controller: _slug,
-              style: T.body,
+            webField(
+              'Adresse du site',
+              _slug,
+              required: true,
+              hint: 'mon-magasin',
+              suffix: '.shops.example.com',
+              help: 'Lettres minuscules, chiffres et tirets.',
               onChanged: (_) => setState(() {
                 _available = null;
                 _hint = null;
               }),
-              decoration: const InputDecoration(
-                labelText: 'Adresse du site',
-                hintText: 'mon-magasin',
-                suffixText: '.shops.example.com',
-              ),
             ),
             if (_hint != null) ...[
               const SizedBox(height: 8),
@@ -519,8 +565,8 @@ class _ConfigPaneState extends State<_ConfigPane> {
   Widget _section(String title, List<Widget> children) {
     return Card14(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        MicroLabel(title),
-        const SizedBox(height: 12),
+        Text(title, style: T.h2),
+        const SizedBox(height: 14),
         ...children,
       ]),
     );
@@ -572,40 +618,41 @@ class _ConfigPaneState extends State<_ConfigPane> {
           ]),
         ),
         const SizedBox(height: 14),
-        _section('APPARENCE', [
-          Row(children: [
-            Expanded(
-              child: TextField(
-                  controller: _name,
-                  style: T.body,
-                  decoration:
-                      const InputDecoration(labelText: 'Nom de la boutique')),
-            ),
-            const SizedBox(width: 14),
-            DropdownMenu<String>(
-              initialSelection: _template,
-              label: const Text('Modèle'),
-              onSelected: (v) => setState(() => _template = v ?? 'grid'),
-              dropdownMenuEntries: const [
-                DropdownMenuEntry(value: 'grid', label: 'Grille (catalogue)'),
-                DropdownMenuEntry(value: 'vitrine', label: 'Vitrine (avec bannière)'),
-              ],
-            ),
-            const SizedBox(width: 14),
-            DropdownMenu<String>(
-              initialSelection: _bg,
-              label: const Text('Fond'),
-              onSelected: (v) => setState(() => _bg = v ?? 'light'),
-              dropdownMenuEntries: const [
-                DropdownMenuEntry(value: 'light', label: 'Clair'),
-                DropdownMenuEntry(value: 'cream', label: 'Crème'),
-              ],
-            ),
+        _section('Apparence', [
+          webField('Nom de la boutique', _name, required: true),
+          const SizedBox(height: 12),
+          Wrap(spacing: 16, runSpacing: 12, children: [
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Modèle de page', style: T.label),
+              const SizedBox(height: 6),
+              DropdownMenu<String>(
+                initialSelection: _template,
+                width: 280,
+                onSelected: (v) => setState(() => _template = v ?? 'grid'),
+                dropdownMenuEntries: const [
+                  DropdownMenuEntry(value: 'grid', label: 'Grille (catalogue)'),
+                  DropdownMenuEntry(value: 'vitrine', label: 'Vitrine (avec bannière)'),
+                ],
+              ),
+            ]),
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Fond', style: T.label),
+              const SizedBox(height: 6),
+              DropdownMenu<String>(
+                initialSelection: _bg,
+                width: 180,
+                onSelected: (v) => setState(() => _bg = v ?? 'light'),
+                dropdownMenuEntries: const [
+                  DropdownMenuEntry(value: 'light', label: 'Clair'),
+                  DropdownMenuEntry(value: 'cream', label: 'Crème'),
+                ],
+              ),
+            ]),
           ]),
           const SizedBox(height: 14),
+          const Text('Couleur principale', style: T.label),
+          const SizedBox(height: 6),
           Row(children: [
-            Text('Couleur principale', style: T.small),
-            const SizedBox(width: 12),
             for (final c in _palette)
               Padding(
                 padding: const EdgeInsetsDirectional.only(end: 8),
@@ -627,60 +674,32 @@ class _ConfigPaneState extends State<_ConfigPane> {
               ),
           ]),
           const SizedBox(height: 14),
-          TextField(
-              controller: _about,
-              style: T.body,
-              maxLines: 2,
-              decoration: const InputDecoration(
-                  labelText: 'Présentation (affichée sur la bannière)')),
+          webField('Présentation', _about,
+              maxLines: 3, help: 'Affichée sur la bannière du site.'),
           const SizedBox(height: 12),
-          TextField(
-              controller: _announce,
-              style: T.body,
-              decoration: const InputDecoration(
-                  labelText: 'Bandeau d\'annonce (ex : Livraison 58 wilayas)')),
+          webField('Bandeau d’annonce', _announce,
+              hint: 'ex. Livraison 58 wilayas',
+              help: 'Une phrase courte en haut de toutes les pages.'),
         ]),
         const SizedBox(height: 14),
-        _section('CONTACT', [
-          Row(children: [
-            Expanded(
-                child: TextField(
-                    controller: _phone,
-                    style: T.body,
-                    decoration:
-                        const InputDecoration(labelText: 'Téléphone'))),
+        _section('Contact', [
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(child: webField('Téléphone', _phone)),
             const SizedBox(width: 12),
             Expanded(
-                child: TextField(
-                    controller: _whatsapp,
-                    style: T.body,
-                    decoration: const InputDecoration(
-                        labelText: 'WhatsApp (ex : 213550123456)'))),
+                child: webField('WhatsApp', _whatsapp,
+                    hint: 'ex. 213550123456',
+                    help: 'Avec l’indicatif 213, sans le 0.')),
           ]),
           const SizedBox(height: 12),
-          Row(children: [
-            Expanded(
-                child: TextField(
-                    controller: _instagram,
-                    style: T.body,
-                    decoration:
-                        const InputDecoration(labelText: 'Instagram'))),
-            const SizedBox(width: 12),
-            Expanded(
-                child: TextField(
-                    controller: _facebook,
-                    style: T.body,
-                    decoration:
-                        const InputDecoration(labelText: 'Facebook (lien ou nom)'))),
-          ]),
+          webField('Instagram', _instagram),
           const SizedBox(height: 12),
-          TextField(
-              controller: _address,
-              style: T.body,
-              decoration: const InputDecoration(labelText: 'Adresse du magasin')),
+          webField('Facebook', _facebook, help: 'Lien de la page ou son nom.'),
+          const SizedBox(height: 12),
+          webField('Adresse du magasin', _address),
         ]),
         const SizedBox(height: 14),
-        _section('CE QUE LES VISITEURS VOIENT', [
+        _section('Ce que les visiteurs voient', [
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             value: _showPrices,
@@ -692,10 +711,11 @@ class _ConfigPaneState extends State<_ConfigPane> {
             onChanged: (v) => setState(() => _showPrices = v),
           ),
           const SizedBox(height: 6),
+          const Text('Quantités en stock', style: T.label),
+          const SizedBox(height: 6),
           Row(children: [
-            Text('Quantités en stock', style: T.body),
-            const SizedBox(width: 16),
             DropdownMenu<String>(
+
               initialSelection: _qtyMode,
               onSelected: (v) => setState(() => _qtyMode = v ?? 'labels'),
               dropdownMenuEntries: const [
@@ -724,8 +744,9 @@ class _ConfigPaneState extends State<_ConfigPane> {
 // ---------------- products flags ----------------
 
 class _ProductsPane extends StatefulWidget {
-  const _ProductsPane({required this.client});
+  const _ProductsPane({required this.client, this.onPublish});
   final CloudClient client;
+  final VoidCallback? onPublish;
 
   @override
   State<_ProductsPane> createState() => _ProductsPaneState();
@@ -829,12 +850,14 @@ class _ProductsPaneState extends State<_ProductsPane> {
           child: CircularProgressIndicator(strokeWidth: 2.6, color: T.mintDeep));
     }
     if (_items!.isEmpty) {
-      return const _Notice(
+      return _Notice(
           icon: Icons.inventory_2_outlined,
           title: 'Aucun produit publié',
-          body:
-              'Cliquez « Publier le catalogue » en haut : vos produits '
-              'apparaîtront ici et vous pourrez choisir quoi montrer.');
+          body: 'Publiez le catalogue : vos produits apparaîtront ici et '
+              'vous pourrez choisir quoi montrer sur le site.',
+          action: widget.onPublish == null
+              ? null
+              : ('Publier le catalogue', widget.onPublish!));
     }
     final rows = _visible();
     return Column(children: [
@@ -865,12 +888,12 @@ class _ProductsPaneState extends State<_ProductsPane> {
       Padding(
         padding: const EdgeInsets.symmetric(horizontal: 18),
         child: Row(children: [
-          const Expanded(flex: 4, child: MicroLabel('PRODUIT')),
-          const Expanded(flex: 2, child: MicroLabel('PRIX')),
-          const Expanded(flex: 2, child: MicroLabel('STOCK')),
-          SizedBox(width: 78, child: MicroLabel('VISIBLE')),
-          SizedBox(width: 96, child: MicroLabel('PRIX CACHÉ')),
-          SizedBox(width: 78, child: MicroLabel('VEDETTE')),
+          const Expanded(flex: 4, child: Text('Produit', style: T.label)),
+          const Expanded(flex: 2, child: Text('Prix de vente', style: T.label)),
+          const Expanded(flex: 2, child: Text('Stock', style: T.label)),
+          const SizedBox(width: 84, child: Text('Visible', style: T.label)),
+          const SizedBox(width: 100, child: Text('Prix caché', style: T.label)),
+          const SizedBox(width: 96, child: Text('En vedette', style: T.label)),
         ]),
       ),
       const SizedBox(height: 4),
@@ -893,10 +916,10 @@ class _ProductsPaneState extends State<_ProductsPane> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: T.body.copyWith(
-                            color: p.visible ? T.ink : T.ghost,
+                            color: p.visible ? T.ink : T.faint,
                             fontWeight: FontWeight.w600)),
                     if (p.category != null)
-                      Text(p.category!, style: T.small.copyWith(fontSize: 11)),
+                      Text(p.category!, style: T.small),
                   ]),
                 ),
                 Expanded(
@@ -908,22 +931,25 @@ class _ProductsPaneState extends State<_ProductsPane> {
                         style: T.body)),
                 Expanded(flex: 2, child: Text(fmtQty(p.qtyMilli), style: T.body)),
                 SizedBox(
-                  width: 78,
+                  width: 84,
                   child: Checkbox(
                       value: p.visible,
                       activeColor: T.mintDeep,
                       onChanged: (v) => _flag(p, 'visible', v ?? true)),
                 ),
                 SizedBox(
-                  width: 96,
+                  width: 100,
                   child: Checkbox(
                       value: p.hidePrice,
                       activeColor: T.mintDeep,
                       onChanged: (v) => _flag(p, 'hide_price', v ?? false)),
                 ),
                 SizedBox(
-                  width: 78,
+                  width: 96,
                   child: IconButton(
+                    tooltip: p.featured
+                        ? 'Retirer de la vedette'
+                        : 'Mettre en vedette sur la page d’accueil',
                     onPressed: () => _flag(p, 'featured', !p.featured),
                     icon: Icon(
                         p.featured
@@ -1030,6 +1056,14 @@ class _OrdersPaneState extends State<_OrdersPane> {
   }
 
   Future<void> _reject(WebOrder o) async {
+    final ok = await confirmAction(
+      context,
+      title: 'Refuser la commande ${o.number} ?',
+      message: 'Le client ne sera pas livré. Ce choix ne peut pas être annulé.',
+      confirmLabel: 'Refuser la commande',
+      danger: true,
+    );
+    if (!ok || !mounted) return;
     final messenger = ScaffoldMessenger.of(context);
     try {
       await widget.client.webAckOrder(o.id, accept: false);
@@ -1080,20 +1114,21 @@ class _OrdersPaneState extends State<_OrdersPane> {
             },
           ),
           const Spacer(),
-          IconButton(
+          TextButton.icon(
               onPressed: _load,
-              tooltip: 'Actualiser',
-              icon: const Icon(Icons.refresh_rounded, size: 18, color: T.muted)),
+              icon: const Icon(Icons.refresh_rounded, size: 18),
+              label: const Text('Actualiser')),
         ]),
       ),
       Expanded(
         child: _orders!.isEmpty
-            ? const _Notice(
+            ? _Notice(
                 icon: Icons.shopping_bag_outlined,
-                title: 'Aucune commande',
+                title: _history ? 'Aucune commande' : 'Aucune commande à traiter',
                 body:
                     'Les commandes passées sur votre boutique en ligne '
-                    'apparaîtront ici.')
+                    'apparaîtront ici.',
+                action: ('Actualiser', _load))
             : ListView.builder(
                 padding: const EdgeInsets.fromLTRB(18, 4, 18, 18),
                 itemCount: _orders!.length,
@@ -1106,7 +1141,7 @@ class _OrdersPaneState extends State<_OrdersPane> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Row(children: [
-                              Text(o.number, style: T.h2.copyWith(fontSize: 14)),
+                              Text(o.number, style: T.h2.copyWith(fontSize: 15)),
                               const SizedBox(width: 10),
                               MintChip(
                                 switch (o.status) {
@@ -1162,7 +1197,7 @@ class _OrdersPaneState extends State<_OrdersPane> {
                                     child: const Text('Refuser')),
                                 const SizedBox(width: 10),
                                 PrimaryButton(
-                                    label: 'Accepter → brouillon Ventes',
+                                    label: 'Accepter (brouillon dans Ventes)',
                                     onPressed: () => _accept(o)),
                               ]),
                             ],

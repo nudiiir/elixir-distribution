@@ -65,8 +65,8 @@ class _ParkedTicketsDialogState extends State<ParkedTicketsDialog> {
       backgroundColor: T.surface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
       child: SizedBox(
-        width: 520,
-        height: 440,
+        width: 600,
+        height: 460,
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Column(
@@ -134,9 +134,9 @@ class _ParkedTicketsDialogState extends State<ParkedTicketsDialog> {
                                     [
                                       _hhmm(t.parkedAt),
                                       t.partner?.name ?? 'Client de passage',
-                                      '${t.itemCount} art.',
+                                      '${t.itemCount} article(s)',
                                     ].join(' · '),
-                                    maxLines: 1,
+                                    maxLines: 2,
                                     overflow: TextOverflow.ellipsis,
                                     style: T.body,
                                   ),
@@ -152,19 +152,20 @@ class _ParkedTicketsDialogState extends State<ParkedTicketsDialog> {
                                   onPressed: () => Navigator.of(context).pop(t),
                                   child: Text(
                                     'Reprendre',
-                                    style: T.small.copyWith(
+                                    style: T.body.copyWith(
                                       color: T.mintDark,
                                       fontWeight: FontWeight.w700,
                                     ),
                                   ),
                                 ),
-                                IconButton(
-                                  tooltip: 'Supprimer',
+                                TextButton(
                                   onPressed: () => _delete(t),
-                                  icon: const Icon(
-                                    Icons.delete_outline,
-                                    size: 17,
-                                    color: T.faint,
+                                  child: Text(
+                                    'Supprimer',
+                                    style: T.small.copyWith(
+                                      color: T.dangerDark,
+                                      fontWeight: FontWeight.w700,
+                                    ),
                                   ),
                                 ),
                               ],

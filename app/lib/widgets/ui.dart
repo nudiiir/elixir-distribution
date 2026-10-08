@@ -22,15 +22,22 @@ class Card14 extends StatelessWidget {
   }
 }
 
-/// Uppercase mono micro-label.
+/// Field / column / section label. Plain words in normal case: a shopkeeper
+/// reads « Prix de vente », not « PRIX DE VENTE » in a tiny mono font.
 class MicroLabel extends StatelessWidget {
   const MicroLabel(this.text, {super.key, this.color});
   final String text;
   final Color? color;
 
   @override
-  Widget build(BuildContext context) =>
-      Text(text.toUpperCase(), style: T.label.copyWith(color: color));
+  Widget build(BuildContext context) {
+    final t = text.isEmpty
+        ? text
+        : text.toUpperCase() == text && text.length > 1
+            ? text[0] + text.substring(1).toLowerCase()
+            : text;
+    return Text(t, style: T.label.copyWith(color: color));
+  }
 }
 
 /// Mint chip with mono label — like the PRIX/QTE chips on the Elixir website.
@@ -48,8 +55,8 @@ class MintChip extends StatelessWidget {
         color: color,
         borderRadius: BorderRadius.circular(5),
       ),
-      child: Text(text.toUpperCase(),
-          style: T.label.copyWith(color: fg, fontSize: 9.5)),
+      child: Text(text,
+          style: T.label.copyWith(color: fg, fontSize: 12)),
     );
   }
 }
@@ -73,7 +80,7 @@ class PrimaryButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: big ? 52 : 40,
+      height: big ? 54 : 44,
       child: FilledButton(
         style: FilledButton.styleFrom(
           backgroundColor: color,
@@ -83,7 +90,7 @@ class PrimaryButton extends StatelessWidget {
               borderRadius: BorderRadius.circular(T.rInner)),
           textStyle: TextStyle(
             fontFamily: T.sans,
-            fontSize: big ? 15 : 13.5,
+            fontSize: big ? 16 : 14.5,
             fontWeight: FontWeight.w700,
           ),
         ),
@@ -115,7 +122,7 @@ class SearchField extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 42,
+      height: 44,
       decoration: BoxDecoration(
         color: T.surface,
         borderRadius: BorderRadius.circular(T.rInner),

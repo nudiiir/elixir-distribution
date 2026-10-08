@@ -224,7 +224,7 @@ class _CloudCardState extends State<CloudCard> {
                             ? 'Connexion…'
                             : 'Non connecté',
                     style: T.label.copyWith(
-                        fontSize: 9.5,
+                        fontSize: 13,
                         color: connected
                             ? T.mintDark
                             : enabled

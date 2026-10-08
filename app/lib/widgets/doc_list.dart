@@ -1,16 +1,14 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
-import '../templates/template_defaults.dart';
+import '../screens/documents/doc_detail_page.dart';
 import '../templates/template_model.dart';
 import '../templates/template_render.dart';
 import '../theme/tokens.dart';
 import '../util/feedback.dart';
-import '../util/file_dialog.dart';
 import '../util/invoice_pdf.dart';
 import '../util/prefs.dart';
 import 'data_table.dart';
@@ -18,22 +16,52 @@ import 'doc_editor.dart';
 import 'list_toolbar.dart';
 import 'ui.dart';
 
+/// Short name of each document type (list column, titles).
 const docTypeLabels = {
   'QUOTE': 'Devis',
   'SALE_TICKET': 'Ticket',
   'SALE_INVOICE': 'Facture',
   'SALE_CREDIT_NOTE': 'Avoir',
-  'DELIVERY_NOTE': 'BL',
-  'PURCHASE_ORDER': 'Commande',
-  'PURCHASE_RECEIPT': 'Réception',
-  'PURCHASE_INVOICE': 'Facture fourn.',
-  'PURCHASE_CREDIT_NOTE': 'Avoir fourn.',
+  'DELIVERY_NOTE': 'Bon de livraison',
+  'PURCHASE_ORDER': 'Bon de commande',
+  'PURCHASE_RECEIPT': 'Bon de réception',
+  'PURCHASE_INVOICE': 'Facture fournisseur',
+  'PURCHASE_CREDIT_NOTE': 'Avoir fournisseur',
   'STOCK_ADJUSTMENT': 'Ajustement',
   'STOCK_TRANSFER': 'Transfert',
   'INVENTORY_COUNT': 'Inventaire',
   'PAYMENT_IN': 'Encaissement',
-  'PAYMENT_OUT': 'Règlement',
+  'PAYMENT_OUT': 'Paiement',
 };
+
+/// Plural names (quick filters, breadcrumbs).
+const docTypePlurals = {
+  'QUOTE': 'Devis',
+  'SALE_TICKET': 'Tickets',
+  'SALE_INVOICE': 'Factures',
+  'SALE_CREDIT_NOTE': 'Avoirs',
+  'DELIVERY_NOTE': 'Bons de livraison',
+  'PURCHASE_ORDER': 'Bons de commande',
+  'PURCHASE_RECEIPT': 'Bons de réception',
+  'PURCHASE_INVOICE': 'Factures fournisseur',
+  'PURCHASE_CREDIT_NOTE': 'Avoirs fournisseur',
+  'STOCK_ADJUSTMENT': 'Ajustements',
+  'STOCK_TRANSFER': 'Transferts',
+  'INVENTORY_COUNT': 'Inventaires',
+  'PAYMENT_IN': 'Encaissements',
+  'PAYMENT_OUT': 'Paiements',
+};
+
+/// Module a document type belongs to (first breadcrumb step).
+String docModuleLabel(String docType) {
+  if (docType.startsWith('PURCHASE')) return 'Achats';
+  if (docType.startsWith('STOCK') || docType == 'INVENTORY_COUNT') {
+    return 'Stock';
+  }
+  if (docType == 'PAYMENT_IN') return 'Clients';
+  if (docType == 'PAYMENT_OUT') return 'Fournisseurs';
+  return 'Ventes';
+}
 
 const paymentLabels = {
   'cash': 'Espèces',
@@ -43,6 +71,25 @@ const paymentLabels = {
   'transfer': 'Virement',
   'credit': 'Crédit',
 };
+
+/// Pops the module navigator back to its first page (the list). Stops at a
+/// page that refuses to close (an editor with unsaved changes) and asks it to
+/// close itself, which shows its « Enregistrer le brouillon ? » question.
+/// Returns true when the list is now on top.
+bool popToModuleRoot(BuildContext context) {
+  final nav = Navigator.of(context);
+  var blocked = false;
+  nav.popUntil((r) {
+    if (r.isFirst) return true;
+    if (r is ModalRoute && r.popDisposition == RoutePopDisposition.doNotPop) {
+      blocked = true;
+      return true;
+    }
+    return false;
+  });
+  if (blocked) nav.maybePop();
+  return !blocked;
+}
 
 class StatusChip extends StatelessWidget {
   const StatusChip({super.key, required this.status, this.orderStatus});
@@ -54,18 +101,18 @@ class StatusChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (label, bg, fg) = switch ((status, orderStatus)) {
-      ('posted', 'partial') => ('partiel', T.warnTint, T.warnDark),
-      ('posted', 'received') => ('reçu', T.mintTint, T.mintDark),
-      ('posted', 'closed') => ('clôturé', T.cream, T.faint),
-      ('posted', _) => ('validé', T.mintTint, T.mintDark),
-      ('cancelled', _) => ('annulé', T.dangerTint, T.dangerDark),
-      _ => ('brouillon', T.cream, T.faint),
+      ('posted', 'partial') => ('Reçu en partie', T.warnTint, T.warnDark),
+      ('posted', 'received') => ('Reçu', T.mintTint, T.mintDark),
+      ('posted', 'closed') => ('Clôturé', T.cream, T.muted),
+      ('posted', _) => ('Validé', T.mintTint, T.mintDark),
+      ('cancelled', _) => ('Annulé', T.dangerTint, T.dangerDark),
+      _ => ('Brouillon', T.cream, T.muted),
     };
-    return _Chip(label: label, bg: bg, fg: fg);
+    return DocChip(label: label, bg: bg, fg: fg);
   }
 }
 
-/// Règlement d'un document : payé / partiel / à payer (rien si sans objet).
+/// Paiement d'un document : payé / partiel / à payer (rien si sans objet).
 class PaymentChip extends StatelessWidget {
   const PaymentChip({super.key, required this.status, this.overdue = false});
   final String status; // paid | partial | due | ''
@@ -75,16 +122,19 @@ class PaymentChip extends StatelessWidget {
   Widget build(BuildContext context) {
     if (status.isEmpty) return const SizedBox.shrink();
     final (label, bg, fg) = switch (status) {
-      'paid' => ('payé', T.mintTint, T.mintDark),
-      'partial' => (overdue ? 'partiel · retard' : 'partiel', T.warnTint, T.warnDark),
-      _ => (overdue ? 'en retard' : 'à payer', T.warnTint, T.warnDark),
+      'paid' => ('Payé', T.mintTint, T.mintDark),
+      'partial' => (overdue ? 'Payé en partie · en retard' : 'Payé en partie',
+          T.warnTint, T.warnDark),
+      _ => (overdue ? 'En retard' : 'À payer', T.warnTint, T.warnDark),
     };
-    return _Chip(label: label, bg: bg, fg: fg);
+    return DocChip(label: label, bg: bg, fg: fg);
   }
 }
 
-class _Chip extends StatelessWidget {
-  const _Chip({required this.label, required this.bg, required this.fg});
+/// Small coloured badge (status, payment…).
+class DocChip extends StatelessWidget {
+  const DocChip(
+      {super.key, required this.label, required this.bg, required this.fg});
   final String label;
   final Color bg;
   final Color fg;
@@ -95,17 +145,19 @@ class _Chip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration:
           BoxDecoration(color: bg, borderRadius: BorderRadius.circular(T.rChip)),
-      child: Text(label.toUpperCase(),
-          style: T.label.copyWith(color: fg, fontSize: 9)),
+      child: Text(label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: T.label.copyWith(color: fg, fontSize: 12.5)),
     );
   }
 }
 
-int _amountOf(String docType, int totalTTC, int amount) =>
+int docAmountOf(String docType, int totalTTC, int amount) =>
     docType.startsWith('PAYMENT') ? amount : totalTTC;
 
 // ---------------------------------------------------------------------------
-// Shared document actions (list row menu + detail dialog + other screens)
+// Shared document actions (list row menu + detail page + other screens)
 // ---------------------------------------------------------------------------
 
 /// Editor configuration for a document type (every editable type).
@@ -137,7 +189,7 @@ List<(String, String)> docConversions(
         when status == 'posted' &&
             orderStatus != 'closed' &&
             orderStatus != 'received' =>
-      const [('Réception', 'RECEIVE')],
+      const [('Bon de réception', 'RECEIVE')],
     'PURCHASE_RECEIPT' when status == 'posted' =>
       const [('Facture fournisseur', 'PURCHASE_INVOICE')],
     _ => const [],
@@ -158,7 +210,7 @@ String stockImpactText(String docType, List<DocLine> lines,
       'Stock : sortie de $q unité(s) du dépôt.',
     'SALE_CREDIT_NOTE' => 'Stock : retour de $q unité(s) en stock.',
     'PURCHASE_INVOICE' when onReference =>
-      'Stock : déjà entré par la réception (seul l’écart entre).',
+      'Stock : déjà entré par le bon de réception (seule la différence entre).',
     'PURCHASE_RECEIPT' ||
     'PURCHASE_INVOICE' =>
       'Stock : entrée de $q unité(s), le coût moyen est recalculé.',
@@ -166,7 +218,7 @@ String stockImpactText(String docType, List<DocLine> lines,
       'Stock : sortie de $q unité(s) (retour fournisseur).',
     'STOCK_TRANSFER' => 'Stock : $q unité(s) passent d’un dépôt à l’autre.',
     'STOCK_ADJUSTMENT' => 'Stock : ajustement des quantités saisies.',
-    'INVENTORY_COUNT' => 'Stock : les écarts d’inventaire sont appliqués.',
+    'INVENTORY_COUNT' => 'Stock : les différences d’inventaire sont appliquées.',
     _ => 'Aucun mouvement de stock.',
   };
 }
@@ -205,39 +257,54 @@ Future<bool> convertDocument(BuildContext context, ApiClient api, DocDetail d,
   return changed == true;
 }
 
-/// Contrepassation d'un document validé (motif demandé). True if done.
-Future<bool> voidDocumentFlow(
-    BuildContext context, ApiClient api, String docId) async {
+/// « Annuler le document » for a validated document: the motif is asked, the
+/// stock and accounts are put back, the document stays visible marked
+/// « Annulé » (une trace est gardée). True if done.
+Future<bool> voidDocumentFlow(BuildContext context, ApiClient api, String docId,
+    {String? docType}) async {
+  final what = switch (docType) {
+    'SALE_INVOICE' || 'PURCHASE_INVOICE' => 'la facture',
+    'SALE_CREDIT_NOTE' || 'PURCHASE_CREDIT_NOTE' => 'l’avoir',
+    'SALE_TICKET' => 'le ticket',
+    _ => 'le document',
+  };
   final reason = TextEditingController();
   final ok = await showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
       backgroundColor: T.surface,
-      title: Text('Contrepasser ce document ?', style: T.h2),
+      title: Text('Annuler $what ?', style: T.h2),
       content: SizedBox(
-        width: 360,
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text(
-              'Des écritures inverses seront créées (stock et comptes). Le '
-              'document garde son numéro et reste visible, marqué annulé. '
-              'Créez ensuite le document corrigé.',
-              style: T.body.copyWith(height: 1.4)),
-          const SizedBox(height: 10),
-          TextField(
-              controller: reason,
-              autofocus: true,
-              style: T.body,
-              decoration: const InputDecoration(labelText: 'Motif')),
-        ]),
+        width: 400,
+        child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                  'Le stock et les comptes sont remis comme avant. Une trace est '
+                  'gardée : le document garde son numéro et reste visible, marqué '
+                  '« Annulé ». Créez ensuite le document corrigé.',
+                  style: T.body.copyWith(height: 1.4)),
+              const SizedBox(height: 14),
+              Text('Motif de l’annulation', style: T.label),
+              const SizedBox(height: 5),
+              TextField(
+                  controller: reason,
+                  autofocus: true,
+                  style: T.body,
+                  decoration: const InputDecoration(
+                      hintText: 'Ex. erreur de quantité, client parti…',
+                      border: OutlineInputBorder())),
+            ]),
       ),
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Non')),
+            child: const Text('Ne pas annuler')),
         FilledButton(
             style: FilledButton.styleFrom(backgroundColor: T.danger),
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Contrepasser')),
+            child: Text('Annuler $what')),
       ],
     ),
   );
@@ -246,7 +313,9 @@ Future<bool> voidDocumentFlow(
   if (ok != true) return false;
   try {
     await api.voidDocument(docId, reason: text);
-    if (context.mounted) showToast(context, 'Document contrepassé');
+    if (context.mounted) {
+      showToast(context, 'Document annulé (une trace est gardée).');
+    }
     return true;
   } on ApiException catch (e) {
     if (context.mounted) showToast(context, e.message, kind: ToastKind.error);
@@ -319,7 +388,7 @@ const _periodLabels = {
   'month': 'Ce mois',
   'lastmonth': 'Mois dernier',
   'year': 'Cette année',
-  'custom': 'Personnalisée…',
+  'custom': 'Choisir les dates…',
 };
 
 (DateTime, DateTime)? _periodRange(String? key) {
@@ -358,6 +427,7 @@ class DocListPane extends StatefulWidget {
     required this.allTypes,
     required this.editorFor,
     required this.exportName,
+    this.quickTypes = const [],
     this.partnerNames = const {},
     this.prefsKey,
     this.partnerKind,
@@ -367,6 +437,9 @@ class DocListPane extends StatefulWidget {
 
   final ApiClient api;
   final List<String> allTypes;
+
+  /// At most three types offered as quick pills (the rest is in « Type »).
+  final List<String> quickTypes;
   final Map<String, String>? partnerNames;
   final String exportName;
 
@@ -404,6 +477,8 @@ class DocListPaneState extends State<DocListPane> {
   int _seq = 0;
 
   String get _pk => widget.prefsKey ?? 'docs_${widget.exportName}';
+  bool get _supplier => widget.partnerKind == 'supplier';
+  String get _partnerWord => _supplier ? 'Fournisseur' : 'Client';
 
   @override
   void initState() {
@@ -457,6 +532,14 @@ class DocListPaneState extends State<DocListPane> {
     refresh();
   }
 
+  /// Shows the list filtered on [docType] (null = every type) — used by the
+  /// menu commands `type:…` and `list`.
+  void setType(String? docType) {
+    if (!mounted) return;
+    _apply(() => _typeFilter =
+        docType != null && widget.allTypes.contains(docType) ? docType : null);
+  }
+
   Future<void> refresh() async {
     final seq = ++_seq;
     setState(() {
@@ -500,7 +583,7 @@ class DocListPaneState extends State<DocListPane> {
   Future<void> _openDetail(DocSummary d) async {
     final changed = await showDocDetailDialog(context, widget.api, d.id,
         editorFor: widget.editorFor);
-    if (changed == true) refresh();
+    if (changed == true && mounted) refresh();
   }
 
   Future<DocDetail?> _detail(DocSummary d) async {
@@ -539,16 +622,23 @@ class DocListPaneState extends State<DocListPane> {
   List<RowAction<DocSummary>> _rowMenu(DocSummary d) => [
         RowAction('Ouvrir', Icons.open_in_new_rounded, _openDetail),
         if (canPdf(d.docType))
-          RowAction('PDF', Icons.picture_as_pdf_outlined, _rowPdf),
+          RowAction('Imprimer (PDF)', Icons.picture_as_pdf_outlined, _rowPdf),
         if (docEditorConfigFor(d.docType) != null)
           RowAction('Dupliquer', Icons.copy_all_rounded, _rowDuplicate),
         for (final (label, target)
             in docConversions(d.docType, d.status, d.orderStatus))
-          RowAction('Convertir en $label', Icons.transform_rounded,
+          RowAction(
+              target == 'RECEIVE'
+                  ? 'Recevoir (bon de réception)'
+                  : 'Convertir en ${label.toLowerCase()}',
+              Icons.transform_rounded,
               (x) => _rowConvert(x, target)),
         if (d.status == 'posted' && !d.docType.startsWith('PAYMENT'))
-          RowAction('Contrepasser…', Icons.undo_rounded, (x) async {
-            if (await voidDocumentFlow(context, widget.api, x.id)) refresh();
+          RowAction('Annuler le document…', Icons.undo_rounded, (x) async {
+            if (await voidDocumentFlow(context, widget.api, x.id,
+                docType: x.docType)) {
+              refresh();
+            }
           }, danger: true),
         if (d.status == 'draft')
           RowAction('Annuler le brouillon', Icons.block_rounded, (x) async {
@@ -596,25 +686,53 @@ class DocListPaneState extends State<DocListPane> {
         : '${_frShort(_from!)} → ${_frShort(_to!)}';
   }
 
+  void _clearFilters() => _apply(() {
+        _typeFilter = null;
+        _period = null;
+        _from = null;
+        _to = null;
+        _partnerFilter = null;
+        _partnerName = null;
+        _paymentFilter = null;
+        _statusFilter = null;
+      });
+
   Widget _panel() {
     return Wrap(spacing: 14, runSpacing: 12, children: [
+      FilterField<String>(
+        label: 'Type',
+        value: _typeFilter,
+        allLabel: 'Tous les types',
+        options: [
+          for (final t in widget.allTypes) (t, docTypePlurals[t] ?? t)
+        ],
+        onChanged: (v) => _apply(() => _typeFilter = v),
+      ),
       FilterField<String>(
         label: 'Période',
         value: _period,
         allLabel: 'Toutes les dates',
-        options: [for (final e in _periodLabels.entries) (e.key, e.value)],
+        options: [
+          for (final e in _periodLabels.entries)
+            (
+              e.key,
+              e.key == 'custom' && _period == 'custom'
+                  ? _periodChip
+                  : e.value
+            )
+        ],
         onChanged: _setPeriod,
       ),
       SizedBox(
-        width: 230,
+        width: 240,
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const MicroLabel('Partenaire'),
+          MicroLabel(_partnerWord),
           const SizedBox(height: 5),
           InkWell(
             onTap: _pickPartner,
             borderRadius: BorderRadius.circular(T.rInner),
             child: Container(
-              height: 38,
+              height: 40,
               padding: const EdgeInsets.symmetric(horizontal: 10),
               decoration: BoxDecoration(
                 color: T.surface,
@@ -624,16 +742,16 @@ class DocListPaneState extends State<DocListPane> {
               ),
               child: Row(children: [
                 const Icon(Icons.person_search_rounded,
-                    size: 16, color: T.faint),
+                    size: 17, color: T.faint),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                       _partnerFilter == null
-                          ? 'Tous — rechercher…'
-                          : (_partnerName ?? 'Partenaire'),
+                          ? 'Tous — choisir…'
+                          : (_partnerName ?? _partnerWord),
                       overflow: TextOverflow.ellipsis,
                       style: T.body.copyWith(
-                          fontSize: 13,
+                          fontSize: 14,
                           color: _partnerFilter == null ? T.muted : T.ink)),
                 ),
                 if (_partnerFilter != null)
@@ -644,7 +762,7 @@ class DocListPaneState extends State<DocListPane> {
                         _partnerFilter = null;
                         _partnerName = null;
                       }),
-                      child: const Icon(Icons.close, size: 14, color: T.faint),
+                      child: const Icon(Icons.close, size: 16, color: T.faint),
                     ),
                   ),
               ]),
@@ -653,14 +771,16 @@ class DocListPaneState extends State<DocListPane> {
         ]),
       ),
       FilterField<String>(
-        label: 'Règlement',
+        label: 'Paiement',
         value: _paymentFilter,
+        allLabel: 'Tous les paiements',
         options: [for (final e in paymentLabels.entries) (e.key, e.value)],
         onChanged: (v) => _apply(() => _paymentFilter = v),
       ),
       FilterField<String>(
         label: 'Statut',
         value: _statusFilter,
+        allLabel: 'Tous les statuts',
         options: const [
           ('draft', 'Brouillons'),
           ('posted', 'Validés'),
@@ -672,16 +792,19 @@ class DocListPaneState extends State<DocListPane> {
   }
 
   List<ActiveFilter> get _active => [
+        if (_typeFilter != null && !widget.quickTypes.contains(_typeFilter))
+          ActiveFilter('Type : ${docTypePlurals[_typeFilter] ?? _typeFilter}',
+              () => _apply(() => _typeFilter = null)),
         if (_period != null && _from != null)
           ActiveFilter('Période : $_periodChip', () => _setPeriod(null)),
         if (_partnerFilter != null)
-          ActiveFilter('Partenaire : ${_partnerName ?? '—'}', () => _apply(() {
+          ActiveFilter('$_partnerWord : ${_partnerName ?? '—'}', () => _apply(() {
                 _partnerFilter = null;
                 _partnerName = null;
               })),
         if (_paymentFilter != null)
           ActiveFilter(
-              'Règlement : ${paymentLabels[_paymentFilter] ?? _paymentFilter}',
+              'Paiement : ${paymentLabels[_paymentFilter] ?? _paymentFilter}',
               () => _apply(() => _paymentFilter = null)),
         if (_statusFilter != null)
           ActiveFilter(
@@ -700,13 +823,20 @@ class DocListPaneState extends State<DocListPane> {
 
   @override
   Widget build(BuildContext context) {
-    final filtered = _qCtrl.text.trim().isNotEmpty || _active.isNotEmpty;
+    final filtered = _qCtrl.text.trim().isNotEmpty ||
+        _active.isNotEmpty ||
+        _typeFilter != null;
+    final typeWord = _typeFilter == null
+        ? 'document'
+        : (docTypeLabels[_typeFilter] ?? 'document').toLowerCase();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         ListToolbar(
           search: _qCtrl,
-          searchHint: 'N°, partenaire, réf., note ou montant…',
+          searchHint: _supplier
+              ? 'Numéro, fournisseur, référence, note ou montant…'
+              : 'Numéro, client, note ou montant…',
           onSearchChanged: (_) {
             _debounce?.cancel();
             _debounce = Timer(const Duration(milliseconds: 300), refresh);
@@ -716,29 +846,17 @@ class DocListPaneState extends State<DocListPane> {
             refresh();
           },
           quickFilters: [
-            FilterPill(
-              label: 'Tous',
-              active: _typeFilter == null,
-              onTap: () => _apply(() => _typeFilter = null),
-            ),
-            for (final t in widget.allTypes)
+            for (final t in widget.quickTypes.take(3))
               FilterPill(
-                label: docTypeLabels[t] ?? t,
+                label: docTypePlurals[t] ?? t,
                 active: _typeFilter == t,
-                onTap: () => _apply(() => _typeFilter = t),
+                onTap: () =>
+                    _apply(() => _typeFilter = _typeFilter == t ? null : t),
               ),
           ],
           panel: _panel(),
           active: _active,
-          onClearAll: () => _apply(() {
-            _period = null;
-            _from = null;
-            _to = null;
-            _partnerFilter = null;
-            _partnerName = null;
-            _paymentFilter = null;
-            _statusFilter = null;
-          }),
+          onClearAll: _clearFilters,
         ),
         const SizedBox(height: 12),
         Expanded(
@@ -756,21 +874,13 @@ class DocListPaneState extends State<DocListPane> {
             empty: EmptyState(
               icon: Icons.receipt_long_outlined,
               text: filtered
-                  ? 'Aucun document ne correspond à ces filtres.'
+                  ? 'Aucun $typeWord ne correspond à ces filtres.'
                   : 'Aucun document pour l’instant.',
               actions: [
                 if (filtered)
                   ('Effacer les filtres', () {
                     _qCtrl.clear();
-                    _apply(() {
-                      _period = null;
-                      _from = null;
-                      _to = null;
-                      _partnerFilter = null;
-                      _partnerName = null;
-                      _paymentFilter = null;
-                      _statusFilter = null;
-                    });
+                    _clearFilters();
                   }),
                 ...widget.emptyActions,
               ],
@@ -779,7 +889,7 @@ class DocListPaneState extends State<DocListPane> {
               (
                 'Total TTC',
                 fmtDA(rows.fold(0,
-                    (s, d) => s + _amountOf(d.docType, d.totalTTC, d.amount)))
+                    (s, d) => s + docAmountOf(d.docType, d.totalTTC, d.amount)))
               ),
               ('Reste à payer', fmtDA(rows.fold(0, (s, d) => s + d.remaining))),
             ],
@@ -787,14 +897,16 @@ class DocListPaneState extends State<DocListPane> {
               ColumnSpec(
                 id: 'number',
                 label: 'Numéro',
-                width: 140,
+                width: 160,
                 hideable: false,
                 sortKey: (d) => d.number ?? '',
                 exportValue: (d) => d.number ?? 'brouillon',
-                cell: (context, d) => Text(d.number ?? '—',
-                    style: T.monoBody.copyWith(
-                        fontSize: 12,
-                        color: d.number == null ? T.ghost : T.ink)),
+                cell: (context, d) => Text(d.number ?? 'Brouillon',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: d.number == null
+                        ? T.small.copyWith(fontStyle: FontStyle.italic)
+                        : T.monoBody.copyWith(fontSize: 13)),
               ),
               ColumnSpec(
                 id: 'type',
@@ -807,7 +919,7 @@ class DocListPaneState extends State<DocListPane> {
               ),
               ColumnSpec(
                 id: 'partner',
-                label: 'Partenaire',
+                label: _partnerWord,
                 flex: 3,
                 sortKey: (d) => _partnerOf(d).toLowerCase(),
                 exportValue: _partnerOf,
@@ -822,7 +934,7 @@ class DocListPaneState extends State<DocListPane> {
               ColumnSpec(
                 id: 'date',
                 label: 'Date',
-                width: 95,
+                width: 110,
                 sortKey: (d) => d.docDate,
                 exportValue: (d) => d.docDate,
                 cell: (context, d) => Text(d.docDate, style: T.monoSmall),
@@ -830,12 +942,12 @@ class DocListPaneState extends State<DocListPane> {
               ColumnSpec(
                 id: 'due',
                 label: 'Échéance',
-                width: 92,
+                width: 110,
                 sortKey: (d) => d.dueDate ?? '',
                 exportValue: (d) => d.dueDate ?? '',
                 cell: (context, d) {
                   if (d.dueDate == null) {
-                    return Text('—', style: T.monoSmall.copyWith(color: T.ghost));
+                    return Text('—', style: T.monoSmall);
                   }
                   final late = _overdue(d);
                   return Text(d.dueDate!,
@@ -847,38 +959,37 @@ class DocListPaneState extends State<DocListPane> {
               ColumnSpec(
                 id: 'total',
                 label: 'Total TTC',
-                width: 120,
+                width: 135,
                 numeric: true,
-                sortKey: (d) => _amountOf(d.docType, d.totalTTC, d.amount),
+                sortKey: (d) => docAmountOf(d.docType, d.totalTTC, d.amount),
                 exportValue: (d) =>
-                    _amountOf(d.docType, d.totalTTC, d.amount) / 100,
+                    docAmountOf(d.docType, d.totalTTC, d.amount) / 100,
                 cell: (context, d) => Text(
-                    fmtDA(_amountOf(d.docType, d.totalTTC, d.amount)),
+                    fmtDA(docAmountOf(d.docType, d.totalTTC, d.amount)),
                     style: T.monoBody),
               ),
               ColumnSpec(
                 id: 'paid',
                 label: 'Payé',
-                width: 110,
+                width: 125,
                 numeric: true,
                 sortKey: (d) => d.paid,
                 exportValue: (d) => d.paymentStatus.isEmpty ? '' : d.paid / 100,
                 cell: (context, d) => d.paymentStatus.isEmpty
-                    ? Text('—', style: T.monoSmall.copyWith(color: T.ghost))
-                    : Text(fmtDA(d.paid),
-                        style: T.monoSmall.copyWith(color: T.muted)),
+                    ? Text('—', style: T.monoSmall)
+                    : Text(fmtDA(d.paid), style: T.monoSmall),
               ),
               ColumnSpec(
                 id: 'remaining',
                 label: 'Reste à payer',
-                width: 120,
+                width: 135,
                 numeric: true,
                 sortKey: (d) => d.remaining,
                 exportValue: (d) =>
                     d.paymentStatus.isEmpty ? '' : d.remaining / 100,
                 cell: (context, d) {
                   if (d.paymentStatus.isEmpty) {
-                    return Text('—', style: T.monoSmall.copyWith(color: T.ghost));
+                    return Text('—', style: T.monoSmall);
                   }
                   return Text(fmtDA(d.remaining),
                       style: T.monoBody.copyWith(
@@ -890,7 +1001,7 @@ class DocListPaneState extends State<DocListPane> {
               ColumnSpec(
                 id: 'status',
                 label: 'Statut',
-                width: 178,
+                width: 230,
                 sortKey: (d) =>
                     '${d.status}:${d.orderStatus ?? ''}:${d.paymentStatus}',
                 exportValue: (d) => [
@@ -901,19 +1012,24 @@ class DocListPaneState extends State<DocListPane> {
                   },
                   if (d.orderStatus != null) d.orderStatus!,
                   if (d.paymentStatus.isNotEmpty)
-                    {'paid': 'payé', 'partial': 'partiel', 'due': 'à payer'}[
+                    {'paid': 'payé', 'partial': 'payé en partie', 'due': 'à payer'}[
                             d.paymentStatus] ??
                         '',
                 ].join(' · '),
-                cell: (context, d) => Wrap(spacing: 4, children: [
+                cell: (context, d) => Row(children: [
                   StatusChip(status: d.status, orderStatus: d.orderStatus),
-                  PaymentChip(status: d.paymentStatus, overdue: _overdue(d)),
+                  if (d.paymentStatus.isNotEmpty) ...[
+                    const SizedBox(width: 4),
+                    Flexible(
+                        child: PaymentChip(
+                            status: d.paymentStatus, overdue: _overdue(d))),
+                  ],
                 ]),
               ),
               ColumnSpec(
                 id: 'supplier_ref',
                 label: 'Réf. fournisseur',
-                width: 120,
+                width: 140,
                 visibleByDefault: false,
                 sortKey: (d) => d.supplierRef ?? '',
                 exportValue: (d) => d.supplierRef ?? '',
@@ -922,14 +1038,14 @@ class DocListPaneState extends State<DocListPane> {
               ),
               ColumnSpec(
                 id: 'payment',
-                label: 'Règlement',
-                width: 90,
+                label: 'Paiement',
+                width: 110,
                 visibleByDefault: false,
                 sortKey: (d) => d.paymentMethod ?? '',
                 exportValue: (d) => paymentLabels[d.paymentMethod] ?? '',
                 cell: (context, d) => Text(
                     paymentLabels[d.paymentMethod] ?? '—',
-                    style: T.small.copyWith(fontSize: 11)),
+                    style: T.small),
               ),
             ],
           ),
@@ -939,8 +1055,7 @@ class DocListPaneState extends State<DocListPane> {
   }
 }
 
-/// Compact period picker: quick presets + custom from/to — a small popup,
-/// not a full-screen calendar.
+/// Compact period picker: from/to — a small popup, not a full-screen calendar.
 class _PeriodDialog extends StatefulWidget {
   const _PeriodDialog({this.from, this.to});
   final DateTime? from;
@@ -987,15 +1102,15 @@ class _PeriodDialogState extends State<_PeriodDialog> {
       shape:
           RoundedRectangleBorder(borderRadius: BorderRadius.circular(T.rCard)),
       child: SizedBox(
-        width: 320,
+        width: 360,
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(18),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const MicroLabel('Période personnalisée'),
-              const SizedBox(height: 8),
+              const Text('Choisir les dates', style: T.h2),
+              const SizedBox(height: 12),
               Row(children: [
                 Expanded(
                   child: _DateBtn(
@@ -1011,12 +1126,12 @@ class _PeriodDialogState extends State<_PeriodDialog> {
                       onTap: () => _pickDate(false)),
                 ),
               ]),
-              const SizedBox(height: 12),
+              const SizedBox(height: 14),
               Row(children: [
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  child:
-                      Text('Annuler', style: T.small.copyWith(color: T.muted)),
+                  child: Text('Annuler',
+                      style: T.body.copyWith(color: T.muted)),
                 ),
                 const Spacer(),
                 SizedBox(
@@ -1046,706 +1161,43 @@ class _DateBtn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(T.rInner),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        decoration: BoxDecoration(
-          color: T.bg,
-          borderRadius: BorderRadius.circular(T.rInner),
-          border: Border.all(color: T.border),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            MicroLabel(label),
-            const SizedBox(height: 2),
-            Text(value, style: T.monoBody.copyWith(fontSize: 12)),
-          ],
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      MicroLabel(label),
+      const SizedBox(height: 5),
+      InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(T.rInner),
+        child: Container(
+          height: 42,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          alignment: AlignmentDirectional.centerStart,
+          decoration: BoxDecoration(
+            color: T.bg,
+            borderRadius: BorderRadius.circular(T.rInner),
+            border: Border.all(color: T.border),
+          ),
+          child: Row(children: [
+            const Icon(Icons.calendar_today_outlined, size: 15, color: T.faint),
+            const SizedBox(width: 8),
+            Text(value, style: T.monoBody),
+          ]),
         ),
       ),
-    );
+    ]);
   }
 }
 
 // ---------------------------------------------------------------------------
-// Detail dialog
+// Detail page
 // ---------------------------------------------------------------------------
 
-/// Document detail dialog with actions. Returns true if the document changed
-/// (or a new document was created from it). Public: other screens (stock,
-/// partners…) open documents through it.
+/// Opens the document detail PAGE (pushed in the current module navigator,
+/// the menu stays visible). Returns true if the document changed (or a new
+/// document was created from it). The name is kept for the many callers.
 Future<bool?> showDocDetailDialog(
     BuildContext context, ApiClient api, String docId,
     {DocEditorConfig? Function(String docType)? editorFor}) {
-  return showDialog<bool>(
-    context: context,
-    builder: (context) =>
-        _DocDetailDialog(api: api, docId: docId, editorFor: editorFor),
-  );
-}
-
-class _DocDetailDialog extends StatefulWidget {
-  const _DocDetailDialog(
-      {required this.api, required this.docId, this.editorFor});
-  final ApiClient api;
-  final String docId;
-  final DocEditorConfig? Function(String docType)? editorFor;
-
-  @override
-  State<_DocDetailDialog> createState() => _DocDetailDialogState();
-}
-
-class _DocDetailDialogState extends State<_DocDetailDialog> {
-  DocDetail? _doc;
-  List<DocAttachment> _attachments = const [];
-  String? _error;
-  bool _busy = false;
-  bool _changed = false;
-
-  DocEditorConfig? Function(String) get _editorFor =>
-      widget.editorFor ?? docEditorConfigFor;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    try {
-      final d = await widget.api.getDocument(widget.docId);
-      if (mounted) setState(() => _doc = d);
-      _loadAttachments();
-    } catch (e) {
-      if (mounted) setState(() => _error = '$e');
-    }
-  }
-
-  Future<void> _loadAttachments() async {
-    try {
-      final a = await widget.api.documentAttachments(widget.docId);
-      if (mounted) setState(() => _attachments = a);
-    } catch (_) {}
-  }
-
-  Future<void> _run(Future<void> Function() action) async {
-    setState(() {
-      _busy = true;
-      _error = null;
-    });
-    try {
-      await action();
-    } on ApiException catch (e) {
-      if (mounted) setState(() => _error = e.message);
-    } catch (e) {
-      if (mounted) setState(() => _error = '$e');
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _post() async {
-    final d = _doc!;
-    final lines = d.lines.length;
-    final ok = await confirmAction(context,
-        title: 'Valider ${docTypeLabels[d.docType] ?? 'ce document'} ?',
-        message: '$lines ligne${lines > 1 ? 's' : ''} · total TTC '
-            '${fmtDA(_amountOf(d.docType, d.totalTTC, d.amount))}\n'
-            '${stockImpactText(d.docType, d.lines, onReference: d.refDocumentId != null)}\n'
-            'Un document validé reçoit son numéro et ne se modifie plus '
-            '(il se contrepasse).',
-        confirmLabel: 'Valider',
-        icon: Icons.task_alt_rounded);
-    if (!ok) return;
-    await _run(() async {
-      await widget.api.postDocument(widget.docId);
-      _changed = true;
-      await _load();
-    });
-  }
-
-  Future<void> _cancel() async {
-    if (await cancelDraftFlow(context, widget.api, widget.docId)) {
-      _changed = true;
-      await _load();
-    }
-  }
-
-  Future<void> _void() async {
-    if (await voidDocumentFlow(context, widget.api, widget.docId)) {
-      _changed = true;
-      await _load();
-    }
-  }
-
-  Future<void> _edit() async {
-    final cfg = _editorFor(_doc!.docType);
-    if (cfg == null) return;
-    final changed = await Navigator.of(context).push<bool>(MaterialPageRoute(
-      builder: (_) => DocEditorScreen(api: widget.api, config: cfg, existing: _doc),
-    ));
-    if (!mounted) return;
-    if (changed == true) {
-      Navigator.of(context).pop(true);
-    } else {
-      await _load();
-    }
-  }
-
-  /// Opens an editor over the dialog (duplicate / convert / receive); when
-  /// something was saved, the dialog closes so the list refreshes.
-  Future<void> _leaveTo(Future<bool> Function(BuildContext) open) async {
-    final saved = await open(context);
-    if (saved && mounted) Navigator.of(context).pop(true);
-  }
-
-  /// Clôture du reliquat : la fin normale de la plupart des BC de ce marché.
-  Future<void> _closeOrder() async {
-    final reason = TextEditingController();
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: T.surface,
-        title: Text('Clôturer le reliquat', style: T.h2),
-        content: SizedBox(
-          width: 340,
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text(
-                'Les quantités non reçues seront annulées. La commande ne '
-                'pourra plus recevoir.',
-                style: T.body.copyWith(height: 1.4)),
-            const SizedBox(height: 10),
-            TextField(
-                controller: reason,
-                style: T.body,
-                decoration: const InputDecoration(labelText: 'Motif')),
-          ]),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Annuler')),
-          FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Clôturer')),
-        ],
-      ),
-    );
-    final text = reason.text.trim();
-    reason.dispose();
-    if (ok != true) return;
-    await _run(() async {
-      await widget.api.closeOrder(widget.docId, reason: text);
-      _changed = true;
-      await _load();
-    });
-  }
-
-  /// Écarts de rapprochement contre le document lié (facture vs réception,
-  /// réception vs commande).
-  Future<void> _match() async {
-    List<MatchExceptionRow> items = const [];
-    await _run(() async {
-      items = await widget.api.matchDocument(widget.docId);
-    });
-    if (!mounted || _error != null) return;
-    await showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: T.surface,
-        title: Text('Rapprochement', style: T.h2),
-        content: SizedBox(
-          width: 460,
-          child: items.isEmpty
-              ? Text('Aucun écart : les documents concordent.', style: T.body)
-              : Column(mainAxisSize: MainAxisSize.min, children: [
-                  for (final x in items)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Row(children: [
-                        Icon(
-                            switch (x.kind) {
-                              'price' => Icons.price_change_outlined,
-                              'qty' => Icons.exposure_outlined,
-                              _ => Icons.help_outline,
-                            },
-                            size: 16,
-                            color: T.warnDark),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(x.product, style: T.body),
-                                Text(
-                                    x.kind == 'price'
-                                        ? '${x.detail} : ${fmtDA(x.thisValue)} vs ${fmtDA(x.refValue)}'
-                                        : x.kind == 'qty'
-                                            ? '${x.detail} : ${fmtQty(x.thisValue)} vs ${fmtQty(x.refValue)}'
-                                            : x.detail,
-                                    style: T.small),
-                              ]),
-                        ),
-                      ]),
-                    ),
-                ]),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Fermer')),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _pdf() async {
-    final d = _doc;
-    if (d == null || _busy) return;
-    await _run(() async {
-      try {
-        await printDocumentPdf(widget.api, d);
-      } catch (e) {
-        throw ApiException(0, 'PDF impossible : $e');
-      }
-    });
-  }
-
-  /// One "bon de garantie" per product of the document sold with a warranty.
-  Future<void> _printWarranty() async {
-    final d = _doc;
-    if (d == null || _busy) return;
-    await _run(() async {
-      final products = <Product>[];
-      for (final id in {
-        for (final l in d.lines)
-          if (l.productId != null) l.productId!
-      }) {
-        try {
-          products.add(await widget.api.getProduct(id));
-        } catch (_) {}
-      }
-      final withWarranty = products.where((p) => p.warrantyMonths > 0).toList();
-      if (withWarranty.isEmpty) {
-        throw ApiException(0, 'Aucun produit sous garantie dans ce document.');
-      }
-      final company = await widget.api.settings();
-      Partner? partner;
-      if (d.partnerId != null) {
-        try {
-          partner = await widget.api.getPartner(d.partnerId!);
-        } catch (_) {}
-      }
-      final rec = await widget.api.defaultTemplate('warranty');
-      final tpl =
-          rec == null ? defaultTplDoc('warranty', 'fr') : TplDoc.fromJson(rec.body);
-      for (final p in withWarranty) {
-        final bytes = await renderTemplateBytes(tpl,
-            lang: rec?.lang ?? 'fr',
-            data: warrantyData(
-                product: p, doc: d, client: partner, company: company));
-        await saveAndOpenPdf(
-            bytes, 'garantie-${d.number ?? d.id.substring(0, 8)}-${p.name}');
-      }
-    });
-  }
-
-  Future<void> _addAttachment() async {
-    final path = pickFile('Tous les fichiers', '*.*');
-    if (path == null) return;
-    await _run(() async {
-      final f = File(path);
-      if (await f.length() > 5 * 1024 * 1024) {
-        throw ApiException(0, 'Fichier trop volumineux (5 Mo maximum).');
-      }
-      await widget.api.addDocumentAttachment(widget.docId,
-          path.split(RegExp(r'[\\/]')).last, await f.readAsBytes());
-      await _loadAttachments();
-    });
-  }
-
-  Future<void> _deleteAttachment(DocAttachment a) async {
-    final ok = await confirmAction(context,
-        title: 'Supprimer la pièce jointe ?',
-        message: '« ${a.name} » sera supprimée définitivement.',
-        confirmLabel: 'Supprimer',
-        danger: true);
-    if (!ok) return;
-    await _run(() async {
-      await widget.api.deleteDocumentAttachment(widget.docId, a.id);
-      await _loadAttachments();
-    });
-  }
-
-  Widget _infoSection(DocDetail d) {
-    final rows = <Widget>[
-      if (d.paymentStatus.isNotEmpty)
-        Row(children: [
-          const MicroLabel('Règlement'),
-          const SizedBox(width: 8),
-          PaymentChip(
-              status: d.paymentStatus,
-              overdue: d.dueDate != null &&
-                  d.remaining > 0 &&
-                  d.dueDate!.compareTo(todayISO()) < 0),
-          const SizedBox(width: 10),
-          Text('payé ${fmtDA(d.paid)}', style: T.monoSmall),
-          if (d.remaining > 0) ...[
-            const SizedBox(width: 10),
-            Text('reste ${fmtDA(d.remaining)}',
-                style: T.monoSmall.copyWith(
-                    color: T.warnDark, fontWeight: FontWeight.w700)),
-          ],
-          if (d.dueDate != null) ...[
-            const SizedBox(width: 10),
-            Text('échéance ${d.dueDate}', style: T.monoSmall),
-          ],
-        ]),
-      if ((d.notes ?? '').isNotEmpty)
-        _noteLine(Icons.print_outlined, 'Note (imprimée)', d.notes!),
-      if ((d.internalNotes ?? '').isNotEmpty)
-        _noteLine(Icons.lock_outline_rounded, 'Note interne', d.internalNotes!),
-      Row(children: [
-        const Icon(Icons.attach_file_rounded, size: 14, color: T.faint),
-        const SizedBox(width: 6),
-        Expanded(
-          child: Wrap(spacing: 6, runSpacing: 4, children: [
-            for (final a in _attachments)
-              InputChip(
-                label: Text('${a.name} · ${fmtFileSize(a.size)}',
-                    style: T.small.copyWith(fontSize: 11.5, color: T.ink)),
-                onPressed: () =>
-                    openAttachment(context, widget.api, widget.docId, a),
-                onDeleted: _busy ? null : () => _deleteAttachment(a),
-                deleteButtonTooltipMessage: 'Supprimer',
-                tooltip: 'Ouvrir',
-                visualDensity: VisualDensity.compact,
-                backgroundColor: T.bg,
-                side: const BorderSide(color: T.border),
-              ),
-            TextButton.icon(
-              onPressed: _busy ? null : _addAttachment,
-              icon: const Icon(Icons.add_rounded, size: 15, color: T.muted),
-              label: Text(
-                  _attachments.isEmpty ? 'Joindre un fichier' : 'Joindre',
-                  style: T.small.copyWith(color: T.muted)),
-            ),
-          ]),
-        ),
-      ]),
-    ];
-    return Container(
-      color: T.surface,
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          for (final r in rows)
-            Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: r),
-        ],
-      ),
-    );
-  }
-
-  Widget _noteLine(IconData icon, String label, String text) => Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, size: 14, color: T.faint),
-          const SizedBox(width: 6),
-          SizedBox(width: 110, child: MicroLabel(label)),
-          Expanded(
-              child: Text(text,
-                  style: T.body.copyWith(fontSize: 12.5), maxLines: 3)),
-        ],
-      );
-
-  List<PopupMenuEntry<VoidCallback>> _moreItems(DocDetail d) {
-    PopupMenuItem<VoidCallback> item(
-            String label, IconData icon, VoidCallback onTap) =>
-        PopupMenuItem<VoidCallback>(
-          value: onTap,
-          height: 36,
-          child: Row(children: [
-            Icon(icon, size: 16, color: T.muted),
-            const SizedBox(width: 10),
-            Text(label, style: T.body.copyWith(fontSize: 13)),
-          ]),
-        );
-    return [
-      if (docEditorConfigFor(d.docType) != null)
-        item('Dupliquer', Icons.copy_all_rounded,
-            () => _leaveTo((c) => duplicateDocument(c, widget.api, d))),
-      for (final (label, target)
-          in docConversions(d.docType, d.status, d.orderStatus))
-        item('Convertir en $label', Icons.transform_rounded,
-            () => _leaveTo((c) => convertDocument(c, widget.api, d, target))),
-      if (d.status == 'posted' &&
-          (d.docType == 'SALE_TICKET' ||
-              d.docType == 'SALE_INVOICE' ||
-              d.docType == 'DELIVERY_NOTE'))
-        item('Bon de garantie', Icons.verified_user_outlined, _printWarranty),
-      if (d.status == 'posted' &&
-          d.refDocumentId != null &&
-          (d.docType == 'PURCHASE_INVOICE' || d.docType == 'PURCHASE_RECEIPT'))
-        item('Écarts (rapprochement)', Icons.rule_rounded, _match),
-      if (d.status == 'posted' &&
-          d.docType == 'PURCHASE_ORDER' &&
-          d.orderStatus != 'closed' &&
-          d.orderStatus != 'received')
-        item('Clôturer le reliquat', Icons.lock_clock_outlined, _closeOrder),
-    ];
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final d = _doc;
-    return Dialog(
-      backgroundColor: T.bg,
-      shape:
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(T.rCard)),
-      child: SizedBox(
-        width: 680,
-        height: 620,
-        child: d == null
-            ? Center(
-                child: _error != null
-                    ? Text(_error!, style: T.bodyMuted)
-                    : const CircularProgressIndicator(color: T.mint))
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Container(
-                    decoration: const BoxDecoration(
-                      color: T.surface,
-                      borderRadius:
-                          BorderRadius.vertical(top: Radius.circular(T.rCard)),
-                    ),
-                    padding: const EdgeInsets.all(16),
-                    child: Row(children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(docTypeLabels[d.docType] ?? d.docType,
-                                style: T.h2),
-                            const SizedBox(height: 3),
-                            Text(
-                                '${d.number ?? 'brouillon'} · ${d.docDate}'
-                                '${d.supplierRef != null ? ' · réf. ${d.supplierRef}' : ''}'
-                                '${d.reason != null ? ' · motif : ${d.reason}' : ''}',
-                                style: T.monoSmall),
-                          ],
-                        ),
-                      ),
-                      StatusChip(status: d.status, orderStatus: d.orderStatus),
-                      IconButton(
-                        tooltip: 'Fermer',
-                        onPressed: () => Navigator.of(context).pop(_changed),
-                        icon: const Icon(Icons.close, size: 18, color: T.muted),
-                      ),
-                    ]),
-                  ),
-                  const Divider(),
-                  if (_error != null)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-                      child: FieldError(_error),
-                    ),
-                  Expanded(
-                    child: d.docType == 'PAYMENT_IN' ||
-                            d.docType == 'PAYMENT_OUT'
-                        ? Center(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const MicroLabel('Montant'),
-                                const SizedBox(height: 6),
-                                Text(fmtDA(d.amount), style: T.monoBig),
-                                const SizedBox(height: 6),
-                                Text(
-                                    paymentLabels[d.paymentMethod] ??
-                                        d.paymentMethod ??
-                                        '',
-                                    style: T.bodyMuted),
-                              ],
-                            ),
-                          )
-                        : ListView.separated(
-                            padding: const EdgeInsets.symmetric(vertical: 4),
-                            itemCount: d.lines.length,
-                            separatorBuilder: (_, _) => const Divider(),
-                            itemBuilder: (context, i) {
-                              final l = d.lines[i];
-                              final extras = <String>[
-                                if (l.productId == null) 'ligne libre',
-                                if (l.qtyFreeMilli > 0)
-                                  '+${fmtQty(l.qtyFreeMilli)} gratuit',
-                                if (l.packFactorMilli != 1000)
-                                  'pack ×${fmtQty(l.packFactorMilli)}',
-                                if ((l.lotNumber ?? '').isNotEmpty)
-                                  'lot ${l.lotNumber}',
-                                if ((l.expiryDate ?? '').isNotEmpty)
-                                  'DLC ${l.expiryDate}',
-                                if (d.docType == 'PURCHASE_ORDER' &&
-                                    d.status == 'posted')
-                                  'reçu ${fmtQty(l.qtyReceivedMilli)}/${fmtQty(l.qtyMilli)}'
-                                      '${l.qtyCancelledMilli > 0 ? ' · annulé ${fmtQty(l.qtyCancelledMilli)}' : ''}',
-                              ];
-                              final transfer = d.docType == 'STOCK_TRANSFER';
-                              return Padding(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 16, vertical: 8),
-                                child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.stretch,
-                                    children: [
-                                      Row(children: [
-                                        Expanded(
-                                            child: Text(l.description,
-                                                style: T.body,
-                                                maxLines: 1,
-                                                overflow:
-                                                    TextOverflow.ellipsis)),
-                                        SizedBox(
-                                            width: 70,
-                                            child: Text('×${fmtQty(l.qtyMilli)}',
-                                                style: T.monoSmall)),
-                                        if (!transfer) ...[
-                                          SizedBox(
-                                              width: 100,
-                                              child: Text(fmtDA(l.unitPrice),
-                                                  textAlign: TextAlign.end,
-                                                  style: T.monoSmall)),
-                                          SizedBox(
-                                              width: 110,
-                                              child: Text(fmtDA(l.lineTTC),
-                                                  textAlign: TextAlign.end,
-                                                  style: T.monoBody)),
-                                        ],
-                                      ]),
-                                      if (extras.isNotEmpty)
-                                        Padding(
-                                          padding:
-                                              const EdgeInsets.only(top: 2),
-                                          child: Text(extras.join('  ·  '),
-                                              style: T.small
-                                                  .copyWith(fontSize: 10.5)),
-                                        ),
-                                    ]),
-                              );
-                            },
-                          ),
-                  ),
-                  const Divider(),
-                  _infoSection(d),
-                  const Divider(),
-                  Container(
-                    decoration: const BoxDecoration(
-                      color: T.surface,
-                      borderRadius: BorderRadius.vertical(
-                          bottom: Radius.circular(T.rCard)),
-                    ),
-                    padding: const EdgeInsets.all(16),
-                    child: Row(children: [
-                      if (d.docType != 'STOCK_TRANSFER') ...[
-                        if (d.timbre > 0) ...[
-                          MicroLabel('Timbre ${fmtDA(d.timbre)}'),
-                          const SizedBox(width: 16),
-                        ],
-                        MicroLabel(
-                            'HT ${fmtDA(d.totalHT)} · TVA ${fmtDA(d.totalVAT)}'),
-                      ],
-                      const Spacer(),
-                      if (canPdf(d.docType)) ...[
-                        TextButton.icon(
-                          onPressed: _busy ? null : _pdf,
-                          icon: const Icon(Icons.picture_as_pdf_outlined,
-                              size: 14, color: T.muted),
-                          label: Text('PDF',
-                              style: T.small.copyWith(color: T.muted)),
-                        ),
-                        const SizedBox(width: 4),
-                      ],
-                      if (_moreItems(d).isNotEmpty)
-                        PopupMenuButton<VoidCallback>(
-                          tooltip: 'Plus d’actions',
-                          enabled: !_busy,
-                          color: T.surface,
-                          position: PopupMenuPosition.over,
-                          itemBuilder: (_) => _moreItems(d),
-                          onSelected: (f) => f(),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 6),
-                            child: Row(mainAxisSize: MainAxisSize.min, children: [
-                              Text('Plus',
-                                  style: T.small.copyWith(color: T.muted)),
-                              const Icon(Icons.expand_more_rounded,
-                                  size: 16, color: T.muted),
-                            ]),
-                          ),
-                        ),
-                      if (d.status == 'posted' &&
-                          d.docType == 'PURCHASE_ORDER' &&
-                          d.orderStatus != 'closed' &&
-                          d.orderStatus != 'received') ...[
-                        TextButton.icon(
-                          onPressed: _busy
-                              ? null
-                              : () => _leaveTo((c) =>
-                                  convertDocument(c, widget.api, d, 'RECEIVE')),
-                          icon: const Icon(Icons.move_to_inbox_outlined,
-                              size: 14, color: T.mintDark),
-                          label: Text('Recevoir',
-                              style: T.small.copyWith(
-                                  color: T.mintDark,
-                                  fontWeight: FontWeight.w700)),
-                        ),
-                        const SizedBox(width: 4),
-                      ],
-                      if (d.status == 'posted' &&
-                          !d.docType.startsWith('PAYMENT')) ...[
-                        TextButton(
-                          onPressed: _busy ? null : _void,
-                          child: Text('Contrepasser',
-                              style: T.small.copyWith(color: T.dangerDark)),
-                        ),
-                        const SizedBox(width: 6),
-                      ],
-                      if (d.status == 'draft') ...[
-                        TextButton(
-                          onPressed: _busy ? null : _cancel,
-                          child: Text('Annuler',
-                              style: T.small.copyWith(color: T.dangerDark)),
-                        ),
-                        const SizedBox(width: 6),
-                        if (_editorFor(d.docType) != null) ...[
-                          TextButton(
-                            onPressed: _busy ? null : _edit,
-                            child: Text('Modifier',
-                                style: T.small.copyWith(color: T.muted)),
-                          ),
-                          const SizedBox(width: 6),
-                        ],
-                        SizedBox(
-                          width: 120,
-                          child: PrimaryButton(
-                            label: 'Valider',
-                            onPressed: _busy ? null : _post,
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                      ],
-                      if (d.docType != 'STOCK_TRANSFER')
-                        Text(fmtDA(_amountOf(d.docType, d.totalTTC, d.amount)),
-                            style: T.monoBig.copyWith(fontSize: 20)),
-                    ]),
-                  ),
-                ],
-              ),
-      ),
-    );
-  }
+  return Navigator.of(context).push<bool>(MaterialPageRoute(
+    builder: (_) => DocDetailPage(api: api, docId: docId, editorFor: editorFor),
+  ));
 }

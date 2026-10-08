@@ -37,10 +37,10 @@ class ReorderTab extends StatefulWidget {
   final Map<String, String> company;
 
   @override
-  State<ReorderTab> createState() => _ReorderTabState();
+  State<ReorderTab> createState() => ReorderTabState();
 }
 
-class _ReorderTabState extends State<ReorderTab> {
+class ReorderTabState extends State<ReorderTab> {
   static const _p = 'stock_reorder';
   static const _none = '__none__';
 
@@ -132,6 +132,16 @@ class _ReorderTabState extends State<ReorderTab> {
       '${r.productId}:${r.imageRev}',
       () => Product.fromJson(
           {'id': r.productId, 'name': r.productName, 'image_rev': r.imageRev}));
+
+  /// « Créer les bons de commande » of the page header: the shown rows.
+  Future<void> createOrdersForShown() async {
+    final rows = _visible;
+    if (rows.isEmpty) {
+      showToast(context, 'Rien à commander dans la liste affichée.', kind: ToastKind.info);
+      return;
+    }
+    await _createOrders(rows);
+  }
 
   /// One draft PURCHASE_ORDER per supplier with the edited quantities.
   Future<bool> _createOrders(List<ReorderRow> rows) async {
@@ -276,6 +286,11 @@ class _ReorderTabState extends State<ReorderTab> {
           ),
         ],
         panel: FilterPanel(fields: [
+          ?depotFilter(
+            warehouses: widget.warehouses,
+            value: widget.warehouseId,
+            onChanged: widget.onWarehouse,
+          ),
           FilterField<String>(
             label: 'Fournisseur',
             value: _supplier == _none || suppliers.containsKey(_supplier) ? _supplier : null,
@@ -299,33 +314,14 @@ class _ReorderTabState extends State<ReorderTab> {
               _save();
             }),
         ],
-        trailing: [
-          DepotDropdown(
-            warehouses: widget.warehouses,
-            value: widget.warehouseId,
-            onChanged: widget.onWarehouse,
-          ),
-          IconButton(
-            tooltip: 'Recalculer',
-            onPressed: _load,
-            icon: const Icon(Icons.refresh_rounded, size: 18, color: T.muted),
-          ),
-          const SizedBox(width: 6),
-          SizedBox(
-            height: 36,
-            child: OutlinedButton.icon(
-              onPressed: _busy || rows.isEmpty ? null : () => _createOrders(rows),
-              icon: const Icon(Icons.local_shipping_outlined, size: 16),
-              label: Text(_busy ? 'Création…' : 'Créer les bons de commande'),
-            ),
-          ),
-        ],
+        trailing: [RefreshButton(onPressed: _load, label: 'Recalculer')],
       ),
-      const SizedBox(height: 6),
+      const SizedBox(height: 8),
       Text(
-          'Objectif : max(2 × stock minimum, 30 jours de ventes), arrondi au conditionnement. '
-          'Cochez des lignes pour ne commander qu’une partie.',
-          style: T.small.copyWith(fontSize: 11.5)),
+          'Quantité proposée : de quoi tenir 30 jours de ventes (au moins 2 fois le stock minimum), '
+          'arrondie à l’emballage (carton, pack…). Corrigez les quantités si besoin ; cochez des lignes '
+          'pour ne commander qu’une partie.',
+          style: T.small),
       const SizedBox(height: 10),
       Expanded(
         child: DataListView<ReorderRow>(
@@ -365,6 +361,7 @@ class _ReorderTabState extends State<ReorderTab> {
                   setState(() => _urgentOnly = false);
                   _save();
                 }),
+              ('Recalculer', _load),
             ],
           ),
           aggregates: (sel) => [
@@ -383,7 +380,7 @@ class _ReorderTabState extends State<ReorderTab> {
               exportValue: (r) => r.supplierName ?? '',
               cell: (context, r) => Text(r.supplierName ?? 'Sans fournisseur',
                   style: T.small.copyWith(
-                      color: r.supplierName == null ? T.warnDark : T.ink, fontSize: 12.5),
+                      color: r.supplierName == null ? T.warnDark : T.ink, fontSize: 13.5),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis),
             ),
@@ -395,7 +392,7 @@ class _ReorderTabState extends State<ReorderTab> {
               sortKey: (r) => r.productName.toLowerCase(),
               exportValue: (r) => r.productName,
               cell: (context, r) => Row(children: [
-                ProductThumb(api: widget.api, product: _thumb(r), size: 24),
+                ProductThumb(api: widget.api, product: _thumb(r), size: 28),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(r.productName,
@@ -405,8 +402,8 @@ class _ReorderTabState extends State<ReorderTab> {
             ),
             ColumnSpec(
               id: 'qty',
-              label: 'Stock',
-              width: 90,
+              label: 'En stock',
+              width: 100,
               numeric: true,
               sortKey: (r) => r.qtyMilli,
               exportValue: (r) => r.qtyMilli / 1000,
@@ -421,8 +418,8 @@ class _ReorderTabState extends State<ReorderTab> {
             ),
             ColumnSpec(
               id: 'min',
-              label: 'Min.',
-              width: 70,
+              label: 'Minimum',
+              width: 95,
               numeric: true,
               sortKey: (r) => r.minStockMilli,
               exportValue: (r) => r.minStockMilli / 1000,
@@ -432,8 +429,8 @@ class _ReorderTabState extends State<ReorderTab> {
             ),
             ColumnSpec(
               id: 'daily',
-              label: 'Ventes / j',
-              width: 85,
+              label: 'Ventes par jour',
+              width: 130,
               numeric: true,
               sortKey: (r) => r.avgDailyMilli,
               exportValue: (r) => r.avgDailyMilli / 1000,
@@ -443,8 +440,8 @@ class _ReorderTabState extends State<ReorderTab> {
             ),
             ColumnSpec(
               id: 'coverage',
-              label: 'Couverture',
-              width: 90,
+              label: 'Jours de stock',
+              width: 120,
               numeric: true,
               sortKey: (r) => r.coverageDays ?? 99999,
               exportValue: (r) => r.coverageDays ?? '',
@@ -456,8 +453,8 @@ class _ReorderTabState extends State<ReorderTab> {
             if (widget.viewCost)
               ColumnSpec(
                 id: 'cost',
-                label: 'Dernier coût',
-                width: 110,
+                label: 'Dernier prix d’achat',
+                width: 160,
                 numeric: true,
                 sortKey: (r) => r.lastUnitCost,
                 exportValue: (r) => r.lastUnitCost / 100,
@@ -467,7 +464,7 @@ class _ReorderTabState extends State<ReorderTab> {
             ColumnSpec(
               id: 'order',
               label: 'À commander',
-              width: 150,
+              width: 175,
               numeric: true,
               hideable: false,
               sortKey: (r) => _qtyOf(r),
@@ -480,12 +477,12 @@ class _ReorderTabState extends State<ReorderTab> {
                       padding: const EdgeInsetsDirectional.only(end: 6),
                       child: Text(
                           '${fmtQty((_qtyOf(r) * 1000) ~/ r.packFactorMilli)} ${r.packName!.toLowerCase()}',
-                          style: T.small.copyWith(fontSize: 10.5)),
+                          style: T.small.copyWith(fontSize: 13)),
                     ),
                   ),
                 SizedBox(
-                  width: 72,
-                  height: 30,
+                  width: 80,
+                  height: 36,
                   child: TextField(
                     controller: _qty[r.productId],
                     textAlign: TextAlign.end,
@@ -494,7 +491,7 @@ class _ReorderTabState extends State<ReorderTab> {
                     decoration: InputDecoration(
                       isDense: true,
                       contentPadding:
-                          const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+                          const EdgeInsets.symmetric(horizontal: 8, vertical: 9),
                       filled: true,
                       fillColor: T.bg,
                       border: OutlineInputBorder(
@@ -513,9 +510,9 @@ class _ReorderTabState extends State<ReorderTab> {
       ),
       if (widget.viewCost && rows.isNotEmpty)
         Padding(
-          padding: const EdgeInsets.only(top: 6),
+          padding: const EdgeInsets.only(top: 8),
           child: Text('Montant HT estimé des lignes affichées : ${fmtDA(total)}',
-              style: T.small),
+              style: T.body.copyWith(fontSize: 14, fontWeight: FontWeight.w600)),
         ),
     ]);
   }

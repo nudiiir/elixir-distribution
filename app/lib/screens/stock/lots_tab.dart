@@ -10,7 +10,7 @@ import '../../widgets/list_toolbar.dart';
 import '../../widgets/ui.dart';
 import 'stock_common.dart';
 
-/// « Dates de péremption » : lots with their DLC, soonest first.
+/// « Dates de péremption » : lots with their expiry date, soonest first.
 class LotsTab extends StatefulWidget {
   const LotsTab({
     super.key,
@@ -30,10 +30,10 @@ class LotsTab extends StatefulWidget {
   final Map<String, String> company;
 
   @override
-  State<LotsTab> createState() => _LotsTabState();
+  State<LotsTab> createState() => LotsTabState();
 }
 
-class _LotsTabState extends State<LotsTab> {
+class LotsTabState extends State<LotsTab> {
   static const _p = 'stock_lots';
 
   final _search = TextEditingController();
@@ -116,6 +116,9 @@ class _LotsTabState extends State<LotsTab> {
     return widget.warehouses.isEmpty ? null : widget.warehouses.first.id;
   }
 
+  /// « Ajouter une date de péremption » of the page header.
+  void addLot() => _edit();
+
   Future<void> _edit({Lot? existing}) async {
     final saved = await showDialog<bool>(
       context: context,
@@ -168,7 +171,7 @@ class _LotsTabState extends State<LotsTab> {
         'doc_date': todayISO(),
         'warehouse_id': wh,
         'reason': 'péremption',
-        'notes': 'Retrait du rayon — DLC ${l.expiryDate ?? '—'}',
+        'notes': 'Retrait du rayon — péremption le ${l.expiryDate == null ? '—' : frDate(l.expiryDate!)}',
         'lines': [
           {
             'product_id': l.productId,
@@ -208,8 +211,9 @@ class _LotsTabState extends State<LotsTab> {
     final days = l.daysLeft;
     if (days == null) return (T.faint, '—');
     if (days < 0) return (T.dangerDark, 'Périmé (${-days} j)');
-    if (days <= 15) return (T.warnDark, 'J-$days');
-    return (T.mintDark, 'J-$days');
+    if (days == 0) return (T.warnDark, 'Aujourd’hui');
+    if (days <= 15) return (T.warnDark, '$days jour(s)');
+    return (T.mintDark, '$days jours');
   }
 
   @override
@@ -238,16 +242,25 @@ class _LotsTabState extends State<LotsTab> {
                 _save();
               },
             ),
-          FilterPill(
-            label: 'Lots épuisés',
-            icon: Icons.visibility_outlined,
-            active: !_hideEmpty,
-            onTap: () {
-              setState(() => _hideEmpty = !_hideEmpty);
+        ],
+        panel: FilterPanel(fields: [
+          ?depotFilter(
+            warehouses: widget.warehouses,
+            value: widget.warehouseId,
+            onChanged: widget.onWarehouse,
+            label: 'Dépôt pour « Retirer du rayon »',
+          ),
+          FilterField<bool>(
+            label: 'Lots vides (quantité 0)',
+            value: _hideEmpty ? null : true,
+            allLabel: 'Masqués',
+            options: const [(true, 'Affichés')],
+            onChanged: (v) {
+              setState(() => _hideEmpty = v == null);
               _save();
             },
           ),
-        ],
+        ]),
         active: [
           if (_window != null)
             ActiveFilter(
@@ -260,33 +273,13 @@ class _LotsTabState extends State<LotsTab> {
               _save();
             }),
         ],
-        trailing: [
-          DepotDropdown(
-            warehouses: widget.warehouses,
-            value: widget.warehouseId,
-            onChanged: widget.onWarehouse,
-          ),
-          IconButton(
-            tooltip: 'Actualiser',
-            onPressed: _load,
-            icon: const Icon(Icons.refresh_rounded, size: 18, color: T.muted),
-          ),
-          const SizedBox(width: 6),
-          SizedBox(
-            height: 36,
-            child: OutlinedButton.icon(
-              onPressed: () => _edit(),
-              icon: const Icon(Icons.add_rounded, size: 16),
-              label: const Text('Ajouter un lot'),
-            ),
-          ),
-        ],
+        trailing: [RefreshButton(onPressed: _load)],
       ),
-      const SizedBox(height: 6),
+      const SizedBox(height: 8),
       Text(
-          'Les quantités des lots suivent les mouvements de stock. « Retirer du rayon » sort le lot '
-          'du dépôt ${widget.warehouseId == null ? 'par défaut' : 'choisi'} par un ajustement « péremption ».',
-          style: T.small.copyWith(fontSize: 11.5)),
+          'Les quantités des lots suivent les ventes et les achats. « Retirer du rayon » sort le lot '
+          'du stock du dépôt ${widget.warehouseId == null ? 'par défaut' : 'choisi'} (ajustement « péremption »).',
+          style: T.small),
       const SizedBox(height: 10),
       Expanded(
         child: DataListView<Lot>(
@@ -310,7 +303,7 @@ class _LotsTabState extends State<LotsTab> {
           empty: EmptyState(
             icon: Icons.hourglass_bottom_rounded,
             text: _lots.isEmpty
-                ? 'Aucun lot suivi.\nLes réceptions avec n° de lot ou DLC créent les lots automatiquement.'
+                ? 'Aucune date de péremption suivie.\nLes bons de réception avec un n° de lot ou une date de péremption les créent automatiquement.'
                 : 'Aucun lot ne correspond à ces filtres.',
             actions: [
               if (_window != null || _search.text.isNotEmpty)
@@ -321,12 +314,12 @@ class _LotsTabState extends State<LotsTab> {
                   });
                   _save();
                 }),
-              ('Ajouter un lot', () => _edit()),
+              ('Ajouter une date de péremption', () => _edit()),
             ],
           ),
           aggregates: (sel) => [
             ('Périmés', '${sel.where((l) => (l.daysLeft ?? 1) < 0).length}'),
-            ('≤ 15 j', '${sel.where((l) => (l.daysLeft ?? 99) >= 0 && (l.daysLeft ?? 99) <= 15).length}'),
+            ('Dans 15 jours ou moins', '${sel.where((l) => (l.daysLeft ?? 99) >= 0 && (l.daysLeft ?? 99) <= 15).length}'),
           ],
           columns: [
             ColumnSpec(
@@ -350,31 +343,31 @@ class _LotsTabState extends State<LotsTab> {
             ),
             ColumnSpec(
               id: 'expiry',
-              label: 'Péremption',
-              width: 110,
+              label: 'Date de péremption',
+              width: 170,
               sortKey: (l) => l.expiryDate ?? '9999',
               exportValue: (l) => l.expiryDate == null ? '' : frDate(l.expiryDate!),
               cell: (context, l) => Text(
                   l.expiryDate == null ? '—' : frDate(l.expiryDate!),
-                  style: T.monoBody.copyWith(fontSize: 12)),
+                  style: T.monoBody.copyWith(fontSize: 13.5)),
             ),
             ColumnSpec(
               id: 'due',
-              label: 'Échéance',
-              width: 120,
+              label: 'Reste',
+              width: 140,
               sortKey: (l) => l.daysLeft ?? 99999,
               exportValue: (l) => l.daysLeft ?? '',
               cell: (context, l) {
                 final (color, label) = _due(l);
                 return Text(label,
                     style: T.monoBody.copyWith(
-                        fontSize: 12, color: color, fontWeight: FontWeight.w700));
+                        fontSize: 13.5, color: color, fontWeight: FontWeight.w700));
               },
             ),
             ColumnSpec(
               id: 'qty',
-              label: 'Qté',
-              width: 90,
+              label: 'Quantité',
+              width: 100,
               numeric: true,
               sortKey: (l) => l.qtyMilli,
               exportValue: (l) => l.qtyMilli / 1000,
@@ -474,102 +467,122 @@ class _LotDialogState extends State<LotDialog> {
     }
   }
 
-  Widget _box(Widget child) => Container(
-        height: 38,
+  Widget _box(Widget child, {bool error = false}) => Container(
+        height: 44,
         alignment: AlignmentDirectional.centerStart,
         decoration: BoxDecoration(
-          color: T.bg,
+          color: T.surface,
           borderRadius: BorderRadius.circular(T.rInner),
-          border: Border.all(color: T.border),
+          border: Border.all(color: error ? T.danger : T.border3),
         ),
         child: child,
       );
 
+  /// Label above the field, red « * » when required.
+  Widget _label(String text, {bool required = false}) => Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Text.rich(TextSpan(children: [
+          TextSpan(text: text),
+          if (required)
+            const TextSpan(text: ' *', style: TextStyle(color: T.dangerDark)),
+        ]), style: T.label.copyWith(color: T.ink)),
+      );
+
+  Widget _help(String text) => Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: Text(text, style: T.small),
+      );
+
   @override
   Widget build(BuildContext context) {
+    final edit = widget.existing != null;
     return Dialog(
       backgroundColor: T.surface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(T.rCard)),
       child: SizedBox(
-        width: 430,
+        width: 460,
         child: Padding(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.all(22),
           child: Column(
             mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(children: [
                 Expanded(
-                    child: Text(widget.existing == null ? 'Nouveau lot' : 'Lot', style: T.h2)),
-                IconButton(
-                  tooltip: 'Fermer (Échap)',
+                    child: Text(edit ? 'Modifier la date de péremption' : 'Nouvelle date de péremption',
+                        style: T.h2)),
+                TextButton.icon(
                   onPressed: () => Navigator.of(context).pop(false),
-                  icon: const Icon(Icons.close, size: 18, color: T.muted),
+                  icon: const Icon(Icons.close, size: 18),
+                  label: const Text('Fermer'),
+                  style: TextButton.styleFrom(foregroundColor: T.muted),
                 ),
               ]),
-              const SizedBox(height: 8),
-              const MicroLabel('Produit'),
-              const SizedBox(height: 4),
-              if (widget.existing != null)
+              const SizedBox(height: 14),
+              _label('Produit', required: !edit),
+              if (edit)
                 Text(widget.existing!.productName, style: T.body)
               else
                 InkWell(
                   onTap: _pickProduct,
                   borderRadius: BorderRadius.circular(T.rInner),
-                  child: _box(Padding(
+                  child: _box(
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Row(children: [
+                        Expanded(
+                          child: Text(_product?.name ?? 'Choisir le produit…',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: _product == null ? T.bodyMuted : T.body),
+                        ),
+                        const Icon(Icons.search_rounded, size: 18, color: T.muted),
+                      ]),
+                    ),
+                    error: _productError != null,
+                  ),
+                ),
+              FieldError(_productError),
+              const SizedBox(height: 14),
+              _label('Date de péremption', required: true),
+              InkWell(
+                onTap: _pickExpiry,
+                borderRadius: BorderRadius.circular(T.rInner),
+                child: _box(
+                  Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 12),
                     child: Row(children: [
                       Expanded(
-                        child: Text(_product?.name ?? 'Choisir le produit…',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: _product == null ? T.bodyMuted : T.body),
+                        child: Text(_expiry == null ? 'Choisir la date…' : frDate(_expiry!),
+                            style: _expiry == null ? T.bodyMuted : T.monoBody),
                       ),
-                      const Icon(Icons.search_rounded, size: 16, color: T.muted),
+                      const Icon(Icons.calendar_today_rounded, size: 17, color: T.muted),
                     ]),
-                  )),
+                  ),
+                  error: _expiryError != null,
                 ),
-              FieldError(_productError),
-              const SizedBox(height: 10),
-              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    const MicroLabel('Péremption'),
-                    const SizedBox(height: 4),
-                    InkWell(
-                      onTap: _pickExpiry,
-                      borderRadius: BorderRadius.circular(T.rInner),
-                      child: _box(Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        child: Text(_expiry == null ? '—' : frDate(_expiry!),
-                            style: T.monoBody),
-                      )),
-                    ),
-                    FieldError(_expiryError),
-                  ]),
+              ),
+              FieldError(_expiryError),
+              const SizedBox(height: 14),
+              _label('Quantité dans ce lot'),
+              _box(
+                TextField(
+                  controller: _qty,
+                  style: T.monoBody,
+                  onSubmitted: (_) => _save(),
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  ),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    const MicroLabel('Quantité'),
-                    const SizedBox(height: 4),
-                    _box(TextField(
-                      controller: _qty,
-                      style: T.monoBody,
-                      onSubmitted: (_) => _save(),
-                      decoration: const InputDecoration(
-                        isDense: true,
-                        border: InputBorder.none,
-                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                      ),
-                    )),
-                    FieldError(_qtyError),
-                  ]),
-                ),
-              ]),
-              const SizedBox(height: 10),
-              const MicroLabel('N° de lot (facultatif)'),
-              const SizedBox(height: 4),
+                error: _qtyError != null,
+              ),
+              FieldError(_qtyError),
+              if (_qtyError == null)
+                _help('Elle suit ensuite toute seule les ventes et les achats.'),
+              const SizedBox(height: 14),
+              _label('N° de lot (facultatif)'),
               _box(TextField(
                 controller: _lotNumber,
                 style: T.monoBody,
@@ -577,22 +590,22 @@ class _LotDialogState extends State<LotDialog> {
                 decoration: const InputDecoration(
                   isDense: true,
                   border: InputBorder.none,
-                  contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                 ),
               )),
               FieldError(_error),
-              const SizedBox(height: 16),
+              const SizedBox(height: 20),
               Row(children: [
                 const Spacer(),
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(false),
-                  child: Text('Annuler', style: T.small.copyWith(color: T.muted)),
+                  child: const Text('Annuler', style: TextStyle(fontSize: 14)),
                 ),
                 const SizedBox(width: 8),
                 SizedBox(
-                  width: 130,
+                  width: 150,
                   child: PrimaryButton(
-                    label: _busy ? '…' : 'Enregistrer',
+                    label: _busy ? 'Enregistrement…' : 'Enregistrer',
                     onPressed: _busy ? null : _save,
                   ),
                 ),

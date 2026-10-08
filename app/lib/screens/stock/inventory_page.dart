@@ -6,6 +6,8 @@ import '../../api/models.dart';
 import '../../theme/tokens.dart';
 import '../../util/feedback.dart';
 import '../../util/prefs.dart';
+import '../../widgets/app_page.dart';
+import '../../widgets/doc_list.dart' show StatusChip;
 import '../../widgets/list_toolbar.dart';
 import '../../widgets/ui.dart';
 import 'stock_common.dart';
@@ -531,6 +533,7 @@ class _InventoryPageState extends State<InventoryPage> {
         .where((w) => w.id == _warehouseId)
         .map((w) => w.name)
         .firstOrNull;
+    final resumed = _draftId != null;
 
     return PopScope(
       canPop: !(_dirty && _counted.isNotEmpty),
@@ -539,198 +542,181 @@ class _InventoryPageState extends State<InventoryPage> {
       },
       child: CallbackShortcuts(
         bindings: {
-          const SingleActivator(LogicalKeyboardKey.escape): _close,
           const SingleActivator(LogicalKeyboardKey.keyS, control: true): _saveForLater,
         },
-        child: Scaffold(
-          backgroundColor: T.bg,
-          body: Padding(
-            padding: const EdgeInsets.fromLTRB(24, 18, 24, 18),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              Row(children: [
-                IconButton(
-                  tooltip: 'Retour (Échap)',
-                  onPressed: _close,
-                  icon: const Icon(Icons.arrow_back_rounded, color: T.ink),
-                ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: PageHeader(
-                    title: 'Inventaire physique',
-                    subtitle: whName == null && _draftId == null
-                        ? null
-                        : [
-                            ?whName,
-                            if (_draftId != null)
-                              'session enregistrée${_draftDate == null ? '' : ' le ${frDate(_draftDate!)}'}',
-                          ].join(' · '),
-                    primaryLabel: _busy ? 'Validation…' : 'Vérifier et valider',
-                    primaryIcon: Icons.fact_check_outlined,
-                    onPrimary: _busy || _loading ? null : _validate,
-                    trailing: [
-                      Tooltip(
-                        message: 'Ctrl+S',
-                        child: SizedBox(
-                          height: 40,
-                          child: OutlinedButton.icon(
-                            onPressed: _busy || _loading ? null : _saveForLater,
-                            icon: const Icon(Icons.save_outlined, size: 16),
-                            label: const Text('Enregistrer pour plus tard'),
-                          ),
+        child: AppPage(
+          crumbs: [
+            Crumb('Stock', _close),
+            Crumb('Inventaire', resumed ? _close : null),
+            if (resumed)
+              Crumb('Comptage${_draftDate == null ? '' : ' du ${frDate(_draftDate!)}'}'),
+          ],
+          title: resumed ? 'Inventaire en cours' : 'Nouvel inventaire',
+          subtitle: Text(
+            [
+              if (whName != null) 'Dépôt : $whName',
+              if (resumed)
+                'comptage enregistré${_draftDate == null ? '' : ' le ${frDate(_draftDate!)}'}'
+              else
+                'comptez les produits, puis vérifiez les différences avant de valider',
+            ].join(' · '),
+            style: T.bodyMuted,
+          ),
+          onBack: _close,
+          scroll: false,
+          actions: [
+            PageAction(
+              label: 'Enregistrer pour plus tard',
+              icon: Icons.save_outlined,
+              onPressed: _busy || _loading ? null : _saveForLater,
+            ),
+            PageAction(
+              label: _busy ? 'Validation…' : 'Vérifier et valider',
+              icon: Icons.fact_check_outlined,
+              primary: true,
+              onPressed: _busy || _loading ? null : _validate,
+            ),
+          ],
+          body: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            if (_openDrafts.isNotEmpty && !resumed)
+              _OpenDrafts(drafts: _openDrafts, onResume: _resume, onDiscard: _discardDraft),
+            PageSection(
+              title: 'Ce que vous comptez',
+              child: Wrap(
+                  spacing: 14,
+                  runSpacing: 12,
+                  crossAxisAlignment: WrapCrossAlignment.end,
+                  children: [
+                    SizedBox(
+                      width: 230,
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        const MicroLabel('Dépôt compté'),
+                        const SizedBox(height: 5),
+                        DepotDropdown(
+                          warehouses: widget.warehouses,
+                          value: _warehouseId,
+                          allowAll: false,
+                          onChanged: _changeWarehouse,
                         ),
+                      ]),
+                    ),
+                    FilterField<String>(
+                      label: 'Produits à compter',
+                      value: _allProducts ? null : 'part',
+                      allLabel: 'Tous les produits',
+                      width: 250,
+                      options: const [('part', 'Une catégorie ou une marque')],
+                      onChanged: (v) {
+                        setState(() => _allProducts = v == null);
+                        _saveScope();
+                      },
+                    ),
+                    if (!_allProducts) ...[
+                      FilterField<String>(
+                        label: 'Catégorie',
+                        value: _categories.any((c) => c.id == _category) ? _category : null,
+                        allLabel: 'Toutes',
+                        options: [for (final c in _categories) (c.id, c.name)],
+                        onChanged: (v) {
+                          setState(() => _category = v);
+                          _saveScope();
+                        },
                       ),
-                      const SizedBox(width: 10),
+                      FilterField<String>(
+                        label: 'Marque',
+                        value: brands.contains(_brand) ? _brand : null,
+                        allLabel: 'Toutes',
+                        options: [for (final b in brands) (b, b)],
+                        onChanged: (v) {
+                          setState(() => _brand = v);
+                          _saveScope();
+                        },
+                      ),
                     ],
-                  ),
-                ),
-              ]),
-              const SizedBox(height: 12),
-              if (_openDrafts.isNotEmpty && _draftId == null) ...[
-                _OpenDrafts(drafts: _openDrafts, onResume: _resume, onDiscard: _discardDraft),
-                const SizedBox(height: 12),
-              ],
-              Card14(
-                child: Wrap(spacing: 14, runSpacing: 10, crossAxisAlignment: WrapCrossAlignment.end, children: [
-                  SizedBox(
-                    width: 210,
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      const MicroLabel('Dépôt inventorié'),
-                      const SizedBox(height: 5),
-                      DepotDropdown(
-                        warehouses: widget.warehouses,
-                        value: _warehouseId,
-                        allowAll: false,
-                        onChanged: _changeWarehouse,
-                      ),
-                    ]),
-                  ),
-                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    const MicroLabel('Périmètre'),
-                    const SizedBox(height: 5),
-                    Row(mainAxisSize: MainAxisSize.min, children: [
-                      FilterPill(
-                        label: 'Tous les produits',
-                        active: _allProducts,
-                        onTap: () {
-                          setState(() => _allProducts = true);
-                          _saveScope();
-                        },
-                      ),
-                      FilterPill(
-                        label: 'Par catégorie / marque',
-                        active: !_allProducts,
-                        onTap: () {
-                          setState(() => _allProducts = false);
-                          _saveScope();
-                        },
-                      ),
-                    ]),
-                  ]),
-                  if (!_allProducts) ...[
-                    FilterField<String>(
-                      label: 'Catégorie',
-                      value: _categories.any((c) => c.id == _category) ? _category : null,
-                      allLabel: 'Toutes',
-                      options: [for (final c in _categories) (c.id, c.name)],
-                      onChanged: (v) {
-                        setState(() => _category = v);
-                        _saveScope();
-                      },
-                    ),
-                    FilterField<String>(
-                      label: 'Marque',
-                      value: brands.contains(_brand) ? _brand : null,
-                      allLabel: 'Toutes',
-                      options: [for (final b in brands) (b, b)],
-                      onChanged: (v) {
-                        setState(() => _brand = v);
-                        _saveScope();
-                      },
-                    ),
-                  ],
-                  SizedBox(
-                    width: 300,
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      const MicroLabel('Scanner pour compter'),
-                      const SizedBox(height: 5),
-                      SizedBox(
-                        height: 38,
-                        child: TextField(
-                          controller: _scan,
-                          focusNode: _scanFocus,
-                          autofocus: true,
-                          onSubmitted: _onScan,
-                          style: T.monoBody,
-                          decoration: InputDecoration(
-                            isDense: true,
-                            hintText: 'Code-barres (produit ou carton)',
-                            hintStyle: T.small.copyWith(color: T.ghost),
-                            prefixIcon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
-                            filled: true,
-                            fillColor: T.surface,
-                            contentPadding: const EdgeInsets.symmetric(vertical: 8),
-                            border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(T.rInner),
-                                borderSide: const BorderSide(color: T.border)),
-                            enabledBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(T.rInner),
-                                borderSide: const BorderSide(color: T.border)),
+                    SizedBox(
+                      width: 330,
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        const MicroLabel('Scanner pour compter (+1 à chaque passage)'),
+                        const SizedBox(height: 5),
+                        SizedBox(
+                          height: 42,
+                          child: TextField(
+                            controller: _scan,
+                            focusNode: _scanFocus,
+                            autofocus: true,
+                            onSubmitted: _onScan,
+                            style: T.monoBody,
+                            decoration: InputDecoration(
+                              isDense: true,
+                              hintText: 'Code-barres du produit ou du carton',
+                              hintStyle: T.small.copyWith(color: T.ghost),
+                              prefixIcon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
+                              filled: true,
+                              fillColor: T.surface,
+                              contentPadding: const EdgeInsets.symmetric(vertical: 11),
+                              border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(T.rInner),
+                                  borderSide: const BorderSide(color: T.border)),
+                              enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(T.rInner),
+                                  borderSide: const BorderSide(color: T.border)),
+                            ),
                           ),
                         ),
-                      ),
-                    ]),
+                      ]),
+                    ),
+                  ]),
+            ),
+            if (_scanMsg != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10, left: 4),
+                child: Row(children: [
+                  Icon(_scanOk ? Icons.check_circle_rounded : Icons.error_outline_rounded,
+                      size: 16, color: _scanOk ? T.mintDark : T.dangerDark),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(_scanMsg!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: T.body.copyWith(
+                            fontSize: 14, color: _scanOk ? T.mintDark : T.dangerDark)),
                   ),
                 ]),
               ),
-              if (_scanMsg != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 6, left: 4),
-                  child: Row(children: [
-                    Icon(_scanOk ? Icons.check_circle_rounded : Icons.error_outline_rounded,
-                        size: 14, color: _scanOk ? T.mintDark : T.dangerDark),
-                    const SizedBox(width: 6),
-                    Text(_scanMsg!,
-                        style: T.small.copyWith(color: _scanOk ? T.mintDark : T.dangerDark)),
-                  ]),
-                ),
-              const SizedBox(height: 12),
-              ListToolbar(
-                search: _search,
-                searchHint: 'Filtrer la liste…',
-                onSearchChanged: (_) => setState(() {}),
-                quickFilters: [
-                  FilterPill(
-                      label: 'Tous',
-                      active: _show == _Show.all,
-                      count: scope.length,
-                      onTap: () => setState(() => _show = _Show.all)),
-                  FilterPill(
-                      label: 'Non comptés',
-                      active: _show == _Show.uncounted,
-                      count: scope.length - countedInScope,
-                      onTap: () => setState(() => _show = _Show.uncounted)),
-                  FilterPill(
-                      label: 'Comptés',
-                      active: _show == _Show.counted,
-                      count: _counted.length,
-                      onTap: () => setState(() => _show = _Show.counted)),
-                  FilterPill(
-                      label: 'Écarts',
-                      icon: Icons.difference_outlined,
-                      active: _show == _Show.diff,
-                      count: diffCount,
-                      onTap: () => setState(() => _show = _Show.diff)),
-                ],
-              ),
-              const SizedBox(height: 6),
-              Text(
-                  'Saisissez la quantité réellement comptée — une ligne laissée vide ne bouge pas. '
-                  'Le stock théorique est figé au moment où la ligne est comptée.',
-                  style: T.small.copyWith(fontSize: 11.5)),
-              const SizedBox(height: 8),
-              Expanded(child: _buildList(shown)),
-            ]),
-          ),
+            ListToolbar(
+              search: _search,
+              searchHint: 'Chercher dans la liste…',
+              onSearchChanged: (_) => setState(() {}),
+              quickFilters: [
+                FilterPill(
+                    label: 'Pas encore comptés',
+                    active: _show == _Show.uncounted,
+                    count: scope.length - countedInScope,
+                    onTap: () => setState(
+                        () => _show = _show == _Show.uncounted ? _Show.all : _Show.uncounted)),
+                FilterPill(
+                    label: 'Comptés',
+                    active: _show == _Show.counted,
+                    count: _counted.length,
+                    onTap: () => setState(
+                        () => _show = _show == _Show.counted ? _Show.all : _Show.counted)),
+                FilterPill(
+                    label: 'Avec une différence',
+                    icon: Icons.difference_outlined,
+                    active: _show == _Show.diff,
+                    count: diffCount,
+                    onTap: () =>
+                        setState(() => _show = _show == _Show.diff ? _Show.all : _Show.diff)),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+                'Tapez la quantité que vous comptez réellement. Une ligne laissée vide ne change pas. '
+                'Le stock du logiciel est figé au moment où vous comptez la ligne.',
+                style: T.small),
+            const SizedBox(height: 8),
+            Expanded(child: _buildList(shown)),
+          ]),
         ),
       ),
     );
@@ -743,7 +729,7 @@ class _InventoryPageState extends State<InventoryPage> {
           for (var i = 0; i < 8; i++)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 12),
-              child: SkeletonBar(width: 320, height: 10),
+              child: SkeletonBar(width: 320, height: 12),
             ),
         ]),
       );
@@ -760,8 +746,10 @@ class _InventoryPageState extends State<InventoryPage> {
         child: EmptyState(
           icon: Icons.inventory_2_outlined,
           text: !_allProducts && _category == null && _brand == null
-              ? 'Choisissez une catégorie ou une marque, ou inventoriez tous les produits.'
-              : 'Aucun produit dans cette vue.',
+              ? 'Choisissez une catégorie ou une marque à compter, ou comptez tous les produits.'
+              : _products.isEmpty
+                  ? 'Aucun produit à compter : créez d’abord vos produits.'
+                  : 'Aucun produit dans cette vue.',
           actions: [
             if (_show != _Show.all || _search.text.isNotEmpty)
               ('Tout afficher', () {
@@ -771,7 +759,7 @@ class _InventoryPageState extends State<InventoryPage> {
                 });
               }),
             if (!_allProducts)
-              ('Tous les produits', () {
+              ('Compter tous les produits', () {
                 setState(() => _allProducts = true);
                 _saveScope();
               }),
@@ -779,22 +767,29 @@ class _InventoryPageState extends State<InventoryPage> {
         ),
       );
     }
+    Widget head(String t, double w, {bool end = false, bool center = false}) => SizedBox(
+        width: w,
+        child: Align(
+            alignment: center
+                ? Alignment.center
+                : end
+                    ? AlignmentDirectional.centerEnd
+                    : AlignmentDirectional.centerStart,
+            child: MicroLabel(t)));
+    final totalDiff = _counted.entries
+        .fold<int>(0, (s, e) => s + ((e.value - _theo(e.key)) * _cost(e.key)) ~/ 1000);
     return Card14(
       padding: EdgeInsets.zero,
       child: Column(children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
           child: Row(children: [
             const Expanded(child: MicroLabel('Produit')),
-            const SizedBox(width: 130, child: MicroLabel('Code-barres')),
-            const SizedBox(
-                width: 100,
-                child: Align(alignment: AlignmentDirectional.centerEnd, child: MicroLabel('Théorique'))),
+            head('Code-barres', 150),
+            head('Stock du logiciel', 140, end: true),
             const SizedBox(width: 16),
-            const SizedBox(width: 110, child: Center(child: MicroLabel('Compté'))),
-            const SizedBox(
-                width: 90,
-                child: Align(alignment: AlignmentDirectional.centerEnd, child: MicroLabel('Écart'))),
+            head('Compté', 120, center: true),
+            head('Différence', 110, end: true),
           ]),
         ),
         const Divider(),
@@ -809,40 +804,40 @@ class _InventoryPageState extends State<InventoryPage> {
               final diff = counted == null ? null : counted - theo;
               final bad = _invalid.contains(p.id);
               return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                 child: Row(children: [
                   Expanded(
                     child: Text(p.name,
-                        style: T.body.copyWith(fontSize: 13),
+                        style: T.body.copyWith(fontSize: 14),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis),
                   ),
                   SizedBox(
-                      width: 130,
+                      width: 150,
                       child: Text(p.barcode ?? '—',
                           style: T.monoSmall, maxLines: 1, overflow: TextOverflow.ellipsis)),
                   SizedBox(
-                    width: 100,
+                    width: 140,
                     child: Text(qtyUnit(theo, p.unit),
                         textAlign: TextAlign.end, style: T.monoBody.copyWith(color: T.muted)),
                   ),
                   const SizedBox(width: 16),
                   SizedBox(
-                    width: 110,
-                    height: 32,
+                    width: 120,
+                    height: 38,
                     child: TextField(
                       controller: _ctrl(p.id),
                       textAlign: TextAlign.center,
                       textInputAction: TextInputAction.next,
-                      style: T.monoBody.copyWith(fontSize: 13, fontWeight: FontWeight.w700),
+                      style: T.monoBody.copyWith(fontSize: 14, fontWeight: FontWeight.w700),
                       onChanged: (v) => _onCountChanged(p.id, v),
                       decoration: InputDecoration(
                         isDense: true,
                         hintText: 'compté',
-                        hintStyle: T.small.copyWith(color: T.ghost, fontSize: 11),
+                        hintStyle: T.small.copyWith(color: T.ghost, fontSize: 13),
                         filled: true,
                         fillColor: counted != null ? T.mintTint : T.bg,
-                        contentPadding: const EdgeInsets.symmetric(vertical: 8),
+                        contentPadding: const EdgeInsets.symmetric(vertical: 10),
                         border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8),
                             borderSide: BorderSide(color: bad ? T.danger : T.border)),
@@ -853,14 +848,14 @@ class _InventoryPageState extends State<InventoryPage> {
                     ),
                   ),
                   SizedBox(
-                    width: 90,
+                    width: 110,
                     child: Text(
                       bad
                           ? 'invalide'
                           : diff == null
                               ? ''
                               : diff == 0
-                                  ? '='
+                                  ? 'aucune'
                                   : '${diff > 0 ? '+' : '−'}${fmtQty(diff.abs())}',
                       textAlign: TextAlign.end,
                       style: T.monoBody.copyWith(
@@ -869,7 +864,7 @@ class _InventoryPageState extends State<InventoryPage> {
                               ? T.dangerDark
                               : (diff ?? 0) > 0
                                   ? T.mintDark
-                                  : T.faint),
+                                  : T.muted),
                     ),
                   ),
                 ]),
@@ -879,16 +874,19 @@ class _InventoryPageState extends State<InventoryPage> {
         ),
         const Divider(),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
           child: Row(children: [
-            MicroLabel('${_counted.length} produit(s) compté(s)'),
+            Text('${_counted.length} produit(s) compté(s)', style: T.body.copyWith(fontSize: 14)),
             const SizedBox(width: 18),
-            MicroLabel('${_counted.entries.where((e) => e.value != _theo(e.key)).length} écart(s)'),
+            Text(
+                '${_counted.entries.where((e) => e.value != _theo(e.key)).length} différence(s)',
+                style: T.body.copyWith(fontSize: 14)),
             const Spacer(),
             if (widget.viewCost)
               Text(
-                'Écart en valeur : ${fmtDA(_counted.entries.fold<int>(0, (s, e) => s + ((e.value - _theo(e.key)) * _cost(e.key)) ~/ 1000))}',
-                style: T.monoBody.copyWith(fontSize: 12, fontWeight: FontWeight.w600),
+                'Différence en DA : ${fmtDA(totalDiff)}',
+                style: T.monoBody.copyWith(
+                    fontWeight: FontWeight.w700, color: totalDiff < 0 ? T.dangerDark : T.ink),
               ),
           ]),
         ),
@@ -905,35 +903,35 @@ class _OpenDrafts extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card14(
+    return PageSection(
+      title: 'Inventaires en cours (${drafts.length})',
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          const Icon(Icons.history_rounded, size: 16, color: T.warnDark),
-          const SizedBox(width: 8),
-          Text('Inventaires en cours (${drafts.length})',
-              style: T.body.copyWith(fontWeight: FontWeight.w700)),
-          const SizedBox(width: 8),
-          Text('— reprenez une session enregistrée ou commencez-en une nouvelle ci-dessous.',
-              style: T.small),
-        ]),
-        const SizedBox(height: 6),
+        Text('Reprenez un comptage enregistré, ou commencez-en un nouveau ci-dessous.',
+            style: T.bodyMuted),
+        const SizedBox(height: 8),
         for (final d in drafts.take(5))
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 3),
             child: Row(children: [
-              SizedBox(width: 95, child: Text(frDate(d.docDate), style: T.monoSmall)),
+              SizedBox(width: 110, child: Text(frDate(d.docDate), style: T.monoSmall)),
               SizedBox(
-                  width: 160,
+                  width: 170,
                   child: Text(d.warehouseName ?? '—',
                       style: T.small, maxLines: 1, overflow: TextOverflow.ellipsis)),
               Expanded(
-                  child: Text('${d.lineCount} ligne(s) comptée(s) · ${d.notes ?? ''}',
+                  child: Text('${d.lineCount} produit(s) compté(s) · ${d.notes ?? ''}',
                       style: T.small, maxLines: 1, overflow: TextOverflow.ellipsis)),
-              TextButton(onPressed: () => onResume(d), child: const Text('Reprendre')),
-              IconButton(
-                tooltip: 'Abandonner cette session',
+              TextButton.icon(
                 onPressed: () => onDiscard(d),
-                icon: const Icon(Icons.delete_outline_rounded, size: 17, color: T.muted),
+                icon: const Icon(Icons.delete_outline_rounded, size: 17),
+                label: const Text('Abandonner'),
+                style: TextButton.styleFrom(foregroundColor: T.muted),
+              ),
+              const SizedBox(width: 6),
+              OutlinedButton.icon(
+                onPressed: () => onResume(d),
+                icon: const Icon(Icons.play_arrow_rounded, size: 17),
+                label: const Text('Reprendre'),
               ),
             ]),
           ),
@@ -944,7 +942,7 @@ class _OpenDrafts extends StatelessWidget {
 
 typedef _Diff = ({String id, String name, int theo, int counted, int diff, int value});
 
-/// Rapport d'écarts shown before posting.
+/// Différences found by the count, shown before posting (a confirmation).
 class _DiffReport extends StatelessWidget {
   const _DiffReport({
     required this.counted,
@@ -971,13 +969,13 @@ class _DiffReport extends StatelessWidget {
       backgroundColor: T.surface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(T.rCard)),
       child: SizedBox(
-        width: 760,
-        height: 560,
+        width: 820,
+        height: 580,
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             Row(children: [
-              const Expanded(child: Text('Rapport d’écarts', style: T.h2)),
+              const Expanded(child: Text('Vérifier les différences', style: T.h2)),
               IconButton(
                 tooltip: 'Fermer (Échap)',
                 onPressed: () => Navigator.of(context).pop(false),
@@ -985,23 +983,23 @@ class _DiffReport extends StatelessWidget {
               ),
             ]),
             Text(
-                '$warehouse — $counted produit(s) compté(s), ${diffs.length} écart(s). '
-                'Seuls les écarts ajusteront le stock ; les produits non comptés ne bougent pas.',
+                '$warehouse — $counted produit(s) compté(s), ${diffs.length} différence(s). '
+                'Seules les différences corrigent le stock ; les produits non comptés ne changent pas.',
                 style: T.bodyMuted),
             const SizedBox(height: 12),
             Row(children: [
               const Expanded(child: MicroLabel('Produit')),
-              head('Théorique', 90, end: true),
+              head('Stock du logiciel', 140, end: true),
               head('Compté', 90, end: true),
-              head('Écart', 90, end: true),
-              if (viewCost) head('Écart en valeur', 130, end: true),
+              head('Différence', 100, end: true),
+              if (viewCost) head('Différence en DA', 150, end: true),
             ]),
             const Divider(),
             Expanded(
               child: diffs.isEmpty
                   ? const EmptyState(
                       icon: Icons.verified_outlined,
-                      text: 'Aucun écart : le stock compté correspond au stock théorique.')
+                      text: 'Aucune différence : ce que vous avez compté correspond au stock du logiciel.')
                   : ListView.separated(
                       itemCount: diffs.length,
                       separatorBuilder: (_, _) => const Divider(),
@@ -1015,7 +1013,7 @@ class _DiffReport extends StatelessWidget {
                                 child: Text(d.name,
                                     style: T.body, maxLines: 1, overflow: TextOverflow.ellipsis)),
                             SizedBox(
-                                width: 90,
+                                width: 140,
                                 child: Text(fmtQty(d.theo),
                                     textAlign: TextAlign.end, style: T.monoBody)),
                             SizedBox(
@@ -1023,14 +1021,14 @@ class _DiffReport extends StatelessWidget {
                                 child: Text(fmtQty(d.counted),
                                     textAlign: TextAlign.end, style: T.monoBody)),
                             SizedBox(
-                                width: 90,
+                                width: 100,
                                 child: Text('${d.diff > 0 ? '+' : '−'}${fmtQty(d.diff.abs())}',
                                     textAlign: TextAlign.end,
                                     style: T.monoBody
                                         .copyWith(color: c, fontWeight: FontWeight.w700))),
                             if (viewCost)
                               SizedBox(
-                                  width: 130,
+                                  width: 150,
                                   child: Text(fmtDA(d.value),
                                       textAlign: TextAlign.end,
                                       style: T.monoBody.copyWith(color: c))),
@@ -1044,11 +1042,11 @@ class _DiffReport extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 6),
                 child: Row(children: [
-                  Text('Surplus ${fmtDA(plus)}', style: T.small.copyWith(color: T.mintDark)),
+                  Text('En plus : ${fmtDA(plus)}', style: T.body.copyWith(fontSize: 14, color: T.mintDark)),
                   const SizedBox(width: 16),
-                  Text('Manquants ${fmtDA(minus)}', style: T.small.copyWith(color: T.dangerDark)),
+                  Text('En moins : ${fmtDA(minus)}', style: T.body.copyWith(fontSize: 14, color: T.dangerDark)),
                   const Spacer(),
-                  Text('Total : ${fmtDA(total)}',
+                  Text('Différence en DA : ${fmtDA(total)}',
                       style: T.monoBody.copyWith(
                           fontWeight: FontWeight.w800,
                           color: total < 0 ? T.dangerDark : T.ink)),
@@ -1067,11 +1065,213 @@ class _DiffReport extends StatelessWidget {
                 style: FilledButton.styleFrom(backgroundColor: T.mint, foregroundColor: T.ink),
                 onPressed: () => Navigator.of(context).pop(true),
                 icon: const Icon(Icons.check_rounded, size: 18),
-                label: Text(diffs.isEmpty ? 'Valider l’inventaire' : 'Valider et ajuster le stock'),
+                label: Text(diffs.isEmpty ? 'Valider l’inventaire' : 'Valider et corriger le stock'),
               ),
             ]),
           ]),
         ),
+      ),
+    );
+  }
+}
+
+/// A validated (or cancelled) inventory: « Stock / Inventaire / n° ».
+/// Shows what was counted against the software stock; the full document
+/// (print, cancel) opens from « Document complet ». Pops true when changed.
+class InventoryDetailPage extends StatefulWidget {
+  const InventoryDetailPage({
+    super.key,
+    required this.api,
+    required this.doc,
+    required this.viewCost,
+  });
+  final ApiClient api;
+  final StockDoc doc;
+  final bool viewCost;
+
+  @override
+  State<InventoryDetailPage> createState() => _InventoryDetailPageState();
+}
+
+class _InventoryDetailPageState extends State<InventoryDetailPage> {
+  InvDraft? _inv;
+  String? _error;
+  bool _diffOnly = false;
+  bool _changed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _error = null);
+    try {
+      final d = await widget.api.inventoryDraft(widget.doc.id);
+      if (mounted) setState(() => _inv = d);
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Inventaire indisponible : $e');
+    }
+  }
+
+  Future<void> _openFull() async {
+    final changed = await openStockDocument(context, widget.api, widget.doc.id);
+    if (changed) {
+      _changed = true;
+      _load();
+    }
+  }
+
+  void _back() => Navigator.of(context).pop(_changed);
+
+  int _diffOf(InvDraftLine l) => l.qtyMilli - (l.expectedMilli ?? l.qtyMilli);
+
+  Widget _head(String t, double w) => SizedBox(
+      width: w,
+      child: Align(alignment: AlignmentDirectional.centerEnd, child: MicroLabel(t)));
+
+  Widget _line(InvDraftLine l) {
+    final d = _diffOf(l);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(children: [
+        Expanded(
+          child: Text(l.description.isEmpty ? '—' : l.description,
+              style: T.body, maxLines: 1, overflow: TextOverflow.ellipsis),
+        ),
+        SizedBox(
+          width: 150,
+          child: Text(l.expectedMilli == null ? '—' : fmtQty(l.expectedMilli!),
+              textAlign: TextAlign.end, style: T.monoBody.copyWith(color: T.muted)),
+        ),
+        SizedBox(
+          width: 110,
+          child: Text(fmtQty(l.qtyMilli),
+              textAlign: TextAlign.end,
+              style: T.monoBody.copyWith(fontWeight: FontWeight.w700)),
+        ),
+        SizedBox(
+          width: 120,
+          child: Text(
+            d == 0 ? 'aucune' : '${d > 0 ? '+' : '−'}${fmtQty(d.abs())}',
+            textAlign: TextAlign.end,
+            style: T.monoBody.copyWith(
+                fontWeight: FontWeight.w700,
+                color: d < 0
+                    ? T.dangerDark
+                    : d > 0
+                        ? T.mintDark
+                        : T.muted),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _lines(List<InvDraftLine> shown) {
+    if (_error != null) {
+      return EmptyState(
+          icon: Icons.cloud_off_rounded, text: _error!, actions: [('Réessayer', _load)]);
+    }
+    if (_inv == null) {
+      return Column(children: [
+        for (var i = 0; i < 5; i++)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 10),
+            child: SkeletonBar(width: 320, height: 12),
+          ),
+      ]);
+    }
+    if (shown.isEmpty) {
+      return EmptyState(
+        icon: Icons.verified_outlined,
+        text: _diffOnly
+            ? 'Aucune différence : tout ce qui a été compté correspondait au stock.'
+            : 'Aucun produit compté dans cet inventaire.',
+        actions: [
+          if (_diffOnly) ('Voir tous les produits', () => setState(() => _diffOnly = false)),
+        ],
+      );
+    }
+    return Column(children: [
+      Row(children: [
+        const Expanded(child: MicroLabel('Produit')),
+        _head('Stock du logiciel', 150),
+        _head('Compté', 110),
+        _head('Différence', 120),
+      ]),
+      const SizedBox(height: 6),
+      const Divider(),
+      for (final l in shown) ...[_line(l), const Divider()],
+    ]);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final doc = widget.doc;
+    final number = doc.number ?? 'en cours';
+    final lines = _inv?.lines ?? const <InvDraftLine>[];
+    final withDiff = lines.where((l) => _diffOf(l) != 0).length;
+    final shown = [for (final l in lines) if (!_diffOnly || _diffOf(l) != 0) l];
+
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _back();
+      },
+      child: AppPage(
+        crumbs: [
+          Crumb('Stock', _back),
+          Crumb('Inventaire', _back),
+          Crumb(number),
+        ],
+        title: 'Inventaire $number',
+        subtitle: Row(children: [
+          StatusChip(status: doc.status),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Text(
+                [frDate(doc.docDate), if (doc.warehouseName != null) doc.warehouseName!]
+                    .join(' · '),
+                style: T.bodyMuted,
+                overflow: TextOverflow.ellipsis),
+          ),
+        ]),
+        onBack: _back,
+        actions: [
+          PageAction(
+            label: 'Document complet (imprimer, annuler)',
+            icon: Icons.description_outlined,
+            primary: true,
+            onPressed: _openFull,
+          ),
+        ],
+        body: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          PageSection(
+            title: 'Résumé',
+            child: FactGrid(columns: 3, facts: [
+              ('Date', frDate(doc.docDate)),
+              ('Dépôt', doc.warehouseName ?? ''),
+              ('Ce qui a été compté', (doc.notes ?? '').replaceFirst('Inventaire — ', '')),
+              ('Produits comptés', '${doc.lineCount}'),
+              ('Produits avec une différence', _inv == null ? '…' : '$withDiff'),
+              ('En plus / en moins', '+${fmtQty(doc.inMilli)} / −${fmtQty(doc.outMilli)}'),
+              if (widget.viewCost) ('Différence en DA', fmtDA(doc.value)),
+            ]),
+          ),
+          PageSection(
+            title: 'Produits comptés',
+            trailing: FilterPill(
+              label: 'Seulement les différences',
+              icon: Icons.difference_outlined,
+              active: _diffOnly,
+              count: withDiff,
+              onTap: () => setState(() => _diffOnly = !_diffOnly),
+            ),
+            child: _lines(shown),
+          ),
+        ]),
       ),
     );
   }

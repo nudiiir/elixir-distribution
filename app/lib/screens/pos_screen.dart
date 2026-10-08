@@ -1321,24 +1321,59 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
+  /// A labelled header button: icon + word (+ its keyboard key as a small
+  /// extra hint). Nothing in the POS header is an icon alone.
   Widget _headerButton({
-    required String tooltip,
+    required String label,
     required IconData icon,
     required VoidCallback onPressed,
-    int badge = 0,
-  }) => Tooltip(
-    message: tooltip,
-    child: IconButton(
-      onPressed: onPressed,
-      icon: Badge(
-        isLabelVisible: badge > 0,
-        label: Text('$badge'),
-        backgroundColor: T.warn,
-        textColor: T.ink,
-        child: Icon(icon, size: 17, color: T.muted),
+    String? keyHint,
+    String? tooltip,
+    bool highlight = false,
+  }) {
+    final btn = OutlinedButton(
+      style: OutlinedButton.styleFrom(
+        foregroundColor: highlight ? T.warnDark : T.ink,
+        backgroundColor: highlight ? T.warnTint : T.surface,
+        side: BorderSide(color: highlight ? T.warn : T.border3),
+        minimumSize: const Size(0, 40),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(T.rInner),
+        ),
+        textStyle: const TextStyle(
+          fontFamily: T.sans,
+          fontSize: 14,
+          fontWeight: FontWeight.w700,
+        ),
       ),
-    ),
-  );
+      onPressed: onPressed,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 18),
+          const SizedBox(width: 7),
+          Text(label),
+          if (keyHint != null) ...[
+            const SizedBox(width: 7),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+              decoration: BoxDecoration(
+                color: T.bg,
+                borderRadius: BorderRadius.circular(5),
+                border: Border.all(color: T.border3),
+              ),
+              child: Text(
+                keyHint,
+                style: T.monoSmall.copyWith(fontSize: 12, color: T.muted),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+    return tooltip == null ? btn : Tooltip(message: tooltip, child: btn);
+  }
 
   Widget _buildBody(BuildContext context) {
     return Row(
@@ -1385,75 +1420,69 @@ class _PosScreenState extends State<PosScreen> {
                             'Ouverte ${_session!.openedAt.length >= 16 ? _session!.openedAt.substring(11, 16) : ''} · ${_session!.userName}',
                             style: T.monoSmall.copyWith(
                               color: T.mintDark,
-                              fontSize: 10.5,
+                              fontSize: 13,
                             ),
                           ),
                         ],
                       ),
                     ),
-                    const SizedBox(width: 6),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                // Every caisse action, visible and labelled. Shortcuts stay
+                // as extras (shown as small key hints).
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
                     _headerButton(
-                      tooltip: 'Mettre en attente (F4)',
+                      label: 'Mettre en attente',
                       icon: Icons.pause_circle_outline,
+                      keyHint: 'F4',
+                      tooltip: 'Garder ce ticket de côté pour servir un autre client',
                       onPressed: _hold,
                     ),
                     _headerButton(
-                      tooltip: 'Tickets en attente (F5)',
+                      label: 'En attente ($_parkedCount)',
                       icon: Icons.pending_actions_outlined,
-                      badge: _parkedCount,
+                      keyHint: 'F5',
+                      highlight: _parkedCount > 0,
+                      tooltip: 'Reprendre un ticket mis en attente',
                       onPressed: _showParked,
                     ),
                     _headerButton(
-                      tooltip: 'Derniers tickets (F7)',
+                      label: 'Derniers tickets',
                       icon: Icons.history_rounded,
+                      keyHint: 'F7',
+                      tooltip: 'Revoir, réimprimer ou rembourser un ticket',
                       onPressed: _showRecent,
                     ),
-                    Tooltip(
-                      message: 'Retour / remboursement client',
-                      child: IconButton(
-                        onPressed: () => _startReturn(),
-                        icon: const Icon(
-                          Icons.assignment_return_outlined,
-                          size: 17,
-                          color: T.muted,
-                        ),
-                      ),
+                    _headerButton(
+                      label: 'Retour',
+                      icon: Icons.assignment_return_outlined,
+                      tooltip: 'Retour / remboursement client',
+                      onPressed: () => _startReturn(),
                     ),
-                    Tooltip(
-                      message: 'Vendre une carte cadeau',
-                      child: IconButton(
-                        onPressed: () => showDialog<void>(
-                          context: context,
-                          builder: (_) => _GiftSellDialog(api: widget.api),
-                        ).then((_) => _searchFocus.requestFocus()),
-                        icon: const Icon(
-                          Icons.card_giftcard,
-                          size: 17,
-                          color: T.muted,
-                        ),
-                      ),
+                    _headerButton(
+                      label: 'Carte cadeau',
+                      icon: Icons.card_giftcard,
+                      tooltip: 'Vendre une carte cadeau',
+                      onPressed: () => showDialog<void>(
+                        context: context,
+                        builder: (_) => _GiftSellDialog(api: widget.api),
+                      ).then((_) => _searchFocus.requestFocus()),
                     ),
-                    Tooltip(
-                      message: 'Rapport X (état de caisse)',
-                      child: IconButton(
-                        onPressed: _showXReport,
-                        icon: const Icon(
-                          Icons.receipt_long_outlined,
-                          size: 17,
-                          color: T.muted,
-                        ),
-                      ),
+                    _headerButton(
+                      label: 'Rapport X',
+                      icon: Icons.receipt_long_outlined,
+                      tooltip: 'État de caisse en cours, sans clôturer',
+                      onPressed: _showXReport,
                     ),
-                    Tooltip(
-                      message: 'Clôturer la caisse (Z)',
-                      child: IconButton(
-                        onPressed: _closeCaisse,
-                        icon: const Icon(
-                          Icons.lock_outline,
-                          size: 17,
-                          color: T.muted,
-                        ),
-                      ),
+                    _headerButton(
+                      label: 'Clôturer la caisse',
+                      icon: Icons.lock_outline,
+                      tooltip: 'Compter la caisse et imprimer le rapport Z',
+                      onPressed: _closeCaisse,
                     ),
                   ],
                 ),
@@ -1478,7 +1507,7 @@ class _PosScreenState extends State<PosScreen> {
                     autofocus: true,
                     onChanged: _onQueryChanged,
                     onSubmitted: _onSubmitted,
-                    style: T.body.copyWith(fontSize: 14),
+                    style: T.body.copyWith(fontSize: 15.5),
                     decoration: InputDecoration(
                       isDense: true,
                       border: InputBorder.none,
@@ -1486,7 +1515,7 @@ class _PosScreenState extends State<PosScreen> {
                           'Scanner un code-barres ou rechercher un produit… (F3)',
                       hintStyle: T.bodyMuted.copyWith(
                         color: T.ghost,
-                        fontSize: 14,
+                        fontSize: 15,
                       ),
                       prefixIcon: const Icon(
                         Icons.qr_code_scanner,
@@ -1500,7 +1529,7 @@ class _PosScreenState extends State<PosScreen> {
                 if (_cats.isNotEmpty || _favorites.isNotEmpty) ...[
                   const SizedBox(height: 10),
                   SizedBox(
-                    height: 32,
+                    height: 38,
                     child: ListView(
                       scrollDirection: Axis.horizontal,
                       children: [
@@ -1560,19 +1589,38 @@ class _PosScreenState extends State<PosScreen> {
                         });
                       }
                       if (shown.isEmpty) {
-                        return const EmptyState(
+                        final filtered = _catFilter != null ||
+                            _favOnly ||
+                            _searchCtrl.text.trim().isNotEmpty;
+                        return EmptyState(
                           icon: Icons.qr_code_scanner,
-                          text:
-                              'Aucun produit.\nScannez un code-barres ou tapez un nom.',
+                          text: filtered
+                              ? 'Aucun produit ne correspond.\nScannez un code-barres ou tapez un autre nom.'
+                              : 'Aucun produit à vendre.\nAjoutez vos produits dans « Produits », puis revenez ici.',
+                          actions: [
+                            if (filtered)
+                              (
+                                'Voir tous les produits',
+                                () {
+                                  _searchCtrl.clear();
+                                  setState(() {
+                                    _catFilter = null;
+                                    _favOnly = false;
+                                  });
+                                  _search('');
+                                  _searchFocus.requestFocus();
+                                },
+                              ),
+                          ],
                         );
                       }
                       return GridView.builder(
                         gridDelegate:
                             const SliverGridDelegateWithMaxCrossAxisExtent(
-                              maxCrossAxisExtent: 180,
+                              maxCrossAxisExtent: 200,
                               mainAxisSpacing: 10,
                               crossAxisSpacing: 10,
-                              mainAxisExtent: 120,
+                              mainAxisExtent: 156,
                             ),
                         itemCount: shown.length,
                         itemBuilder: (context, i) => _ProductTile(
@@ -1585,6 +1633,7 @@ class _PosScreenState extends State<PosScreen> {
                             _searchFocus.requestFocus();
                           },
                           onSecondaryTap: () => _toggleFavorite(shown[i]),
+                          canPin: widget.user.isAdmin,
                         ),
                       );
                     },
@@ -1596,7 +1645,7 @@ class _PosScreenState extends State<PosScreen> {
         ),
         // ================= Right: ticket =================
         Container(
-          width: 400,
+          width: 430,
           decoration: const BoxDecoration(
             color: T.surface,
             border: BorderDirectional(start: BorderSide(color: T.border)),
@@ -1611,16 +1660,16 @@ class _PosScreenState extends State<PosScreen> {
                   children: [
                     const Icon(
                       Icons.receipt_outlined,
-                      size: 16,
+                      size: 18,
                       color: T.mintDeep,
                     ),
                     const SizedBox(width: 8),
-                    const MicroLabel('Ticket en cours'),
+                    const Text('Ticket en cours', style: T.h2),
                     const SizedBox(width: 8),
                     if (_cart.isNotEmpty)
                       Container(
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 7,
+                          horizontal: 8,
                           vertical: 2,
                         ),
                         decoration: BoxDecoration(
@@ -1628,7 +1677,7 @@ class _PosScreenState extends State<PosScreen> {
                           borderRadius: BorderRadius.circular(999),
                         ),
                         child: Text(
-                          '$_itemCount',
+                          '$_itemCount article${_itemCount > 1 ? 's' : ''}',
                           style: T.monoSmall.copyWith(
                             color: T.mintDark,
                             fontWeight: FontWeight.w600,
@@ -1637,14 +1686,18 @@ class _PosScreenState extends State<PosScreen> {
                       ),
                     const Spacer(),
                     if (_cart.isNotEmpty)
-                      IconButton(
+                      TextButton.icon(
                         onPressed: _clearTicket,
-                        tooltip: 'Vider le ticket',
-                        icon: const Icon(
-                          Icons.delete_outline,
-                          size: 17,
-                          color: T.faint,
+                        style: TextButton.styleFrom(
+                          foregroundColor: T.dangerDark,
+                          textStyle: const TextStyle(
+                            fontFamily: T.sans,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
+                        icon: const Icon(Icons.delete_outline, size: 18),
+                        label: const Text('Vider'),
                       ),
                   ],
                 ),
@@ -1657,7 +1710,7 @@ class _PosScreenState extends State<PosScreen> {
                   mouseCursor: SystemMouseCursors.click,
                   borderRadius: BorderRadius.circular(T.rInner),
                   child: Container(
-                    height: 40,
+                    height: 46,
                     padding: const EdgeInsets.symmetric(horizontal: 12),
                     decoration: BoxDecoration(
                       color: _client == null ? T.bg : T.mintTint,
@@ -1670,7 +1723,7 @@ class _PosScreenState extends State<PosScreen> {
                       children: [
                         Icon(
                           Icons.person_outline,
-                          size: 16,
+                          size: 18,
                           color: _client == null ? T.faint : T.mintDark,
                         ),
                         const SizedBox(width: 8),
@@ -1680,7 +1733,7 @@ class _PosScreenState extends State<PosScreen> {
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               fontFamily: T.sans,
-                              fontSize: 12.5,
+                              fontSize: 14.5,
                               fontWeight: FontWeight.w600,
                               color: _client == null ? T.faint : T.mintDark,
                             ),
@@ -1695,24 +1748,33 @@ class _PosScreenState extends State<PosScreen> {
                           const SizedBox(width: 6),
                         ],
                         if (_client != null)
-                          InkWell(
-                            onTap: () => setState(() {
+                          TextButton.icon(
+                            onPressed: () => setState(() {
                               _client = null;
                               if (_paymentMethod == 'credit') {
                                 _paymentMethod = 'cash';
                               }
                             }),
-                            child: const Icon(
-                              Icons.close,
-                              size: 14,
-                              color: T.mintDark,
+                            style: TextButton.styleFrom(
+                              foregroundColor: T.mintDark,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                              ),
+                              textStyle: const TextStyle(
+                                fontFamily: T.sans,
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
+                            icon: const Icon(Icons.close, size: 16),
+                            label: const Text('Retirer'),
                           )
                         else
                           Text(
-                            'Choisir (F6)',
+                            'Choisir un client (F6)',
                             style: T.small.copyWith(
-                              fontSize: 11,
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w700,
                               color: T.mintDark,
                             ),
                           ),
@@ -1770,91 +1832,122 @@ class _PosScreenState extends State<PosScreen> {
                     const Divider(),
                     const SizedBox(height: 8),
                     Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
+                      crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        const MicroLabel('Total à payer'),
-                        if (_canDiscount && _cart.isNotEmpty)
-                          Padding(
-                            padding: const EdgeInsetsDirectional.only(start: 6),
-                            child: Tooltip(
-                              message: 'Remise sur tout le ticket',
-                              child: InkWell(
-                                onTap: _ticketDiscount,
-                                borderRadius: BorderRadius.circular(6),
-                                child: const Padding(
-                                  padding: EdgeInsets.all(3),
-                                  child: Icon(
-                                    Icons.percent_rounded,
-                                    size: 14,
-                                    color: T.mintDark,
-                                  ),
-                                ),
+                        const Text(
+                          'Total à payer',
+                          style: TextStyle(
+                            fontFamily: T.sans,
+                            fontSize: 17,
+                            fontWeight: FontWeight.w700,
+                            color: T.ink,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: FittedBox(
+                            alignment: AlignmentDirectional.centerEnd,
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              fmtDA(_totalTTC),
+                              style: const TextStyle(
+                                fontFamily: T.sans,
+                                fontSize: 32,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: -0.5,
+                                color: T.ink,
                               ),
                             ),
-                          ),
-                        const Spacer(),
-                        Text(
-                          fmtDA(_totalTTC),
-                          style: const TextStyle(
-                            fontFamily: T.sans,
-                            fontSize: 24,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: -0.5,
-                            color: T.ink,
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 14),
-                    Row(
-                      children: [
-                        for (final (id, label, icon) in const [
-                          ('cash', 'Espèces', Icons.payments_outlined),
-                          ('cib', 'CIB', Icons.credit_card),
-                          ('edahabia', 'Edahabia', Icons.contactless_outlined),
-                          ('cheque', 'Chèque', Icons.request_page_outlined),
-                          ('credit', 'Crédit', Icons.menu_book_outlined),
-                          ('gift', 'Cadeau', Icons.card_giftcard),
-                        ]) ...[
-                          if (id != 'cash') const SizedBox(width: 4),
-                          _PayChoice(
-                            label: label,
-                            icon: icon,
-                            selected: _paymentMethod == id,
-                            onTap: () {
-                              setState(() => _paymentMethod = id);
-                              if (id == 'credit' && _client == null) {
-                                _pickClient();
-                              }
-                            },
+                    if (_canDiscount && _cart.isNotEmpty)
+                      Align(
+                        alignment: AlignmentDirectional.centerStart,
+                        child: TextButton.icon(
+                          onPressed: _ticketDiscount,
+                          style: TextButton.styleFrom(
+                            foregroundColor: T.mintDark,
+                            padding: const EdgeInsets.symmetric(horizontal: 6),
+                            textStyle: const TextStyle(
+                              fontFamily: T.sans,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
-                        ],
+                          icon: const Icon(Icons.percent_rounded, size: 17),
+                          label: const Text('Remise sur tout le ticket'),
+                        ),
+                      ),
+                    const SizedBox(height: 10),
+                    const Text('Paiement', style: T.label),
+                    const SizedBox(height: 6),
+                    // 2 rows of 3: each tile has room for its icon AND word.
+                    for (final row in const [
+                      [
+                        ('cash', 'Espèces', Icons.payments_outlined),
+                        ('cib', 'CIB', Icons.credit_card),
+                        ('edahabia', 'Edahabia', Icons.contactless_outlined),
                       ],
-                    ),
+                      [
+                        ('cheque', 'Chèque', Icons.request_page_outlined),
+                        ('credit', 'Crédit client', Icons.menu_book_outlined),
+                        ('gift', 'Carte cadeau', Icons.card_giftcard),
+                      ],
+                    ]) ...[
+                      if (row.first.$1 != 'cash') const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          for (final (id, label, icon) in row) ...[
+                            if (id != row.first.$1) const SizedBox(width: 6),
+                            _PayChoice(
+                              label: label,
+                              icon: icon,
+                              selected: _paymentMethod == id,
+                              onTap: () {
+                                setState(() => _paymentMethod = id);
+                                if (id == 'credit' && _client == null) {
+                                  _pickClient();
+                                }
+                              },
+                            ),
+                          ],
+                        ],
+                      ),
+                    ],
                     const SizedBox(height: 12),
                     Row(
                       children: [
                         SizedBox(
-                          width: 54,
-                          height: 54,
+                          height: 58,
                           child: Tooltip(
-                            message: 'Paiement mixte (F8)',
-                            child: OutlinedButton(
+                            message:
+                                'Payer avec plusieurs moyens (ex. espèces + CIB) — F8',
+                            child: OutlinedButton.icon(
                               style: OutlinedButton.styleFrom(
-                                padding: EdgeInsets.zero,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                ),
                                 foregroundColor: T.ink,
-                                side: const BorderSide(color: T.border2),
+                                side: const BorderSide(color: T.border3),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(12),
+                                ),
+                                textStyle: const TextStyle(
+                                  fontFamily: T.sans,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
                                 ),
                               ),
                               onPressed: _cart.isEmpty || _checkingOut
                                   ? null
                                   : () => _startCheckout(mixed: true),
-                              child: const Icon(
+                              icon: const Icon(
                                 Icons.call_split_rounded,
                                 size: 20,
                               ),
+                              label: const Text('Mixte (F8)'),
                             ),
                           ),
                         ),
@@ -1876,7 +1969,7 @@ class _PosScreenState extends State<PosScreen> {
     return Tooltip(
       message: 'Encaisser (F9)',
       child: SizedBox(
-        height: 54,
+        height: 58,
         child: FilledButton(
           style: FilledButton.styleFrom(
             backgroundColor: T.mint,
@@ -1891,10 +1984,10 @@ class _PosScreenState extends State<PosScreen> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Text(
-                _checkingOut ? 'Encaissement…' : 'Encaisser',
+                _checkingOut ? 'Encaissement…' : 'Encaisser (F9)',
                 style: const TextStyle(
                   fontFamily: T.sans,
-                  fontSize: 15,
+                  fontSize: 17,
                   fontWeight: FontWeight.w800,
                 ),
               ),
@@ -1909,12 +2002,16 @@ class _PosScreenState extends State<PosScreen> {
                   ),
                 ),
                 const SizedBox(width: 10),
-                Text(
-                  fmtDA(_totalTTC),
-                  style: const TextStyle(
-                    fontFamily: T.mono,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
+                Flexible(
+                  child: Text(
+                    fmtDA(_totalTTC),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontFamily: T.mono,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               ],
@@ -1943,7 +2040,7 @@ class _RenduPanel extends StatelessWidget {
             color: T.mintDeep,
           ),
           const SizedBox(height: 8),
-          const MicroLabel('Rendu'),
+          const Text('Monnaie à rendre', style: T.h2),
           const SizedBox(height: 4),
           Text(
             fmtDA(change),
@@ -1976,13 +2073,15 @@ class _ProductTile extends StatefulWidget {
     required this.onTap,
     this.favorite = false,
     this.onSecondaryTap,
+    this.canPin = false,
   });
   final ApiClient api;
   final Product product;
   final int stockMilli;
   final VoidCallback onTap;
   final bool favorite;
-  final VoidCallback? onSecondaryTap;
+  final VoidCallback? onSecondaryTap; // pin / unpin (also the visible pin button)
+  final bool canPin;
 
   @override
   State<_ProductTile> createState() => _ProductTileState();
@@ -2027,10 +2126,25 @@ class _ProductTileState extends State<_ProductTile> {
             children: [
               Row(
                 children: [
-                  ProductThumb(api: widget.api, product: p, size: 34),
-                  if (widget.favorite) ...[
+                  ProductThumb(api: widget.api, product: p, size: 38),
+                  if (widget.canPin)
+                    // Visible pin button: no right-click needed.
+                    IconButton(
+                      tooltip: widget.favorite
+                          ? 'Retirer des favoris'
+                          : 'Ajouter aux favoris (affiché en premier)',
+                      visualDensity: VisualDensity.compact,
+                      iconSize: 18,
+                      onPressed: widget.onSecondaryTap,
+                      icon: Icon(
+                          widget.favorite
+                              ? Icons.push_pin_rounded
+                              : Icons.push_pin_outlined,
+                          color: widget.favorite ? T.warn : T.ghost),
+                    )
+                  else if (widget.favorite) ...[
                     const SizedBox(width: 4),
-                    const Icon(Icons.push_pin_rounded, size: 11, color: T.warn),
+                    const Icon(Icons.push_pin_rounded, size: 16, color: T.warn),
                   ],
                   const Spacer(),
                   if (p.promoActive) ...[
@@ -2044,9 +2158,13 @@ class _ProductTileState extends State<_ProductTile> {
                       fg: T.dangerDark,
                     )
                   else if (!p.isService)
-                    Text(
-                      fmtQty(widget.stockMilli),
-                      style: T.monoSmall.copyWith(fontSize: 10),
+                    Flexible(
+                      child: Text(
+                        'Stock ${fmtQty(widget.stockMilli)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: T.monoSmall.copyWith(fontSize: 13),
+                      ),
                     ),
                 ],
               ),
@@ -2057,32 +2175,36 @@ class _ProductTileState extends State<_ProductTile> {
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   fontFamily: T.sans,
-                  fontSize: 12.5,
+                  fontSize: 14.5,
                   fontWeight: FontWeight.w700,
                   height: 1.2,
                   color: T.ink,
                 ),
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 5),
               Row(
                 children: [
-                  Text(
-                    fmtDA(p.effectivePriceTTC),
-                    style: T.monoBody.copyWith(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: p.promoActive ? T.warnDark : T.mintDark,
+                  Flexible(
+                    child: Text(
+                      fmtDA(p.effectivePriceTTC),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: T.monoBody.copyWith(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: p.promoActive ? T.warnDark : T.mintDark,
+                      ),
                     ),
                   ),
                   if (p.promoActive) ...[
                     const SizedBox(width: 6),
-                    Expanded(
+                    Flexible(
                       child: Text(
                         fmtDA(p.priceRetail),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: T.monoSmall.copyWith(
-                          fontSize: 10,
+                          fontSize: 13,
                           decoration: TextDecoration.lineThrough,
                         ),
                       ),
@@ -2130,10 +2252,10 @@ class _CartRowState extends State<_CartRow> {
       onExit: (_) => setState(() => _hover = false),
       child: Container(
         color: _hover ? T.bg : Colors.transparent,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
         child: Row(
           children: [
-            ProductThumb(api: widget.api, product: line.product, size: 32),
+            ProductThumb(api: widget.api, product: line.product, size: 34),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
@@ -2141,12 +2263,13 @@ class _CartRowState extends State<_CartRow> {
                 children: [
                   Text(
                     line.product.name,
-                    maxLines: 1,
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       fontFamily: T.sans,
-                      fontSize: 12.5,
+                      fontSize: 15,
                       fontWeight: FontWeight.w700,
+                      height: 1.2,
                       color: T.ink,
                     ),
                   ),
@@ -2158,14 +2281,14 @@ class _CartRowState extends State<_CartRow> {
                     '${weighed ? ' kg' : ''}'
                     '${line.discountPct > 0 ? '  · -${line.discountPct ~/ 100}%' : ''}'
                     '${line.product.promoActive ? '  · promo' : ''}',
-                    style: T.monoSmall.copyWith(fontSize: 10.5),
+                    style: T.monoSmall.copyWith(fontSize: 14),
                   ),
                 ],
               ),
             ),
             // Stepper pill
             Container(
-              height: 28,
+              height: 34,
               decoration: BoxDecoration(
                 color: T.bg,
                 borderRadius: BorderRadius.circular(999),
@@ -2177,16 +2300,19 @@ class _CartRowState extends State<_CartRow> {
                     icon: Icons.remove,
                     onTap: () => widget.onDelta(line, weighed ? -100 : -1000),
                   ),
-                  InkWell(
-                    onTap: widget.onEditQty,
-                    child: SizedBox(
-                      width: 40,
-                      child: Text(
-                        fmtQty(line.qtyMilli),
-                        textAlign: TextAlign.center,
-                        style: T.monoBody.copyWith(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
+                  Tooltip(
+                    message: 'Changer la quantité',
+                    child: InkWell(
+                      onTap: widget.onEditQty,
+                      child: SizedBox(
+                        width: 44,
+                        child: Text(
+                          fmtQty(line.qtyMilli),
+                          textAlign: TextAlign.center,
+                          style: T.monoBody.copyWith(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
                     ),
@@ -2200,24 +2326,34 @@ class _CartRowState extends State<_CartRow> {
             ),
             const SizedBox(width: 10),
             SizedBox(
-              width: 78,
-              child: Text(
-                fmtDA(line.lineTTC(widget.priceLevel)),
-                textAlign: TextAlign.end,
-                style: T.monoBody.copyWith(
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w600,
+              width: 96,
+              child: FittedBox(
+                alignment: AlignmentDirectional.centerEnd,
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  fmtDA(line.lineTTC(widget.priceLevel)),
+                  textAlign: TextAlign.end,
+                  style: T.monoBody.copyWith(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ),
+            // Always visible (not only on hover): remove this line.
             SizedBox(
-              width: 24,
-              child: _hover
-                  ? InkWell(
-                      onTap: widget.onRemove,
-                      child: const Icon(Icons.close, size: 14, color: T.faint),
-                    )
-                  : null,
+              width: 32,
+              child: IconButton(
+                onPressed: widget.onRemove,
+                tooltip: 'Retirer du ticket (Suppr)',
+                padding: EdgeInsets.zero,
+                visualDensity: VisualDensity.compact,
+                icon: Icon(
+                  Icons.close,
+                  size: 18,
+                  color: _hover ? T.dangerDark : T.faint,
+                ),
+              ),
             ),
           ],
         ),
@@ -2246,7 +2382,7 @@ class _CatChip extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(999),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           decoration: BoxDecoration(
             color: selected ? T.ink : T.surface,
             borderRadius: BorderRadius.circular(999),
@@ -2256,14 +2392,14 @@ class _CatChip extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               if (icon != null) ...[
-                Icon(icon, size: 12, color: selected ? Colors.white : T.warn),
-                const SizedBox(width: 4),
+                Icon(icon, size: 14, color: selected ? Colors.white : T.warn),
+                const SizedBox(width: 5),
               ],
               Text(
                 label,
                 style: TextStyle(
                   fontFamily: T.sans,
-                  fontSize: 12,
+                  fontSize: 14,
                   fontWeight: FontWeight.w700,
                   color: selected ? Colors.white : T.muted,
                 ),
@@ -2574,6 +2710,7 @@ class _ReturnDialogState extends State<_ReturnDialog> {
                       ),
                     ),
                   IconButton(
+                    tooltip: 'Fermer (Échap)',
                     onPressed: () => Navigator.of(context).pop(),
                     icon: const Icon(Icons.close, size: 18, color: T.muted),
                   ),
@@ -2610,7 +2747,7 @@ class _ReturnDialogState extends State<_ReturnDialog> {
                                 children: [
                                   Text(
                                     doc.number ?? '',
-                                    style: T.monoBody.copyWith(fontSize: 12),
+                                    style: T.monoBody.copyWith(fontSize: 13),
                                   ),
                                   const SizedBox(width: 12),
                                   Expanded(
@@ -2675,7 +2812,7 @@ class _ReturnDialogState extends State<_ReturnDialog> {
                                 ),
                                 Text(
                                   fmtQty(_selectedQty[l.id ?? ''] ?? 0),
-                                  style: T.monoBody.copyWith(fontSize: 12),
+                                  style: T.monoBody.copyWith(fontSize: 13),
                                 ),
                                 _StepBtn(
                                   icon: Icons.add,
@@ -2698,7 +2835,7 @@ class _ReturnDialogState extends State<_ReturnDialog> {
                                 child: Text(
                                   fmtDA(l.lineTTC),
                                   textAlign: TextAlign.end,
-                                  style: T.monoBody.copyWith(fontSize: 12),
+                                  style: T.monoBody.copyWith(fontSize: 13),
                                 ),
                               ),
                             ],
@@ -2745,7 +2882,11 @@ class _StepBtn extends StatelessWidget {
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(999),
-      child: SizedBox(width: 28, child: Icon(icon, size: 13, color: T.muted)),
+      child: SizedBox(
+        width: 32,
+        height: 32,
+        child: Icon(icon, size: 17, color: T.ink),
+      ),
     );
   }
 }
@@ -2762,11 +2903,15 @@ class _TotalRow extends StatelessWidget {
       child: Row(
         children: [
           Expanded(
-            child: Text(label, style: T.bodyMuted.copyWith(fontSize: 12)),
+            child: Text(label, style: T.bodyMuted.copyWith(fontSize: 15)),
           ),
           Text(
             fmtDA(amount),
-            style: T.monoBody.copyWith(fontSize: 12, color: T.muted),
+            style: T.monoBody.copyWith(
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+              color: T.ink2,
+            ),
           ),
         ],
       ),
@@ -2794,27 +2939,33 @@ class _PayChoice extends StatelessWidget {
         borderRadius: BorderRadius.circular(T.rInner),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 120),
-          height: 52,
+          height: 48,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
           decoration: BoxDecoration(
             color: selected ? T.mintTint : T.surface,
             borderRadius: BorderRadius.circular(T.rInner),
             border: Border.all(
-              color: selected ? T.mintDeep : T.border,
-              width: selected ? 1.4 : 1,
+              color: selected ? T.mintDeep : T.border3,
+              width: selected ? 2 : 1,
             ),
           ),
-          child: Column(
+          child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 16, color: selected ? T.mintDark : T.faint),
-              const SizedBox(height: 3),
-              Text(
-                label,
-                style: TextStyle(
-                  fontFamily: T.sans,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  color: selected ? T.mintDark : T.muted,
+              Icon(icon, size: 20, color: selected ? T.mintDark : T.muted),
+              const SizedBox(width: 7),
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontFamily: T.sans,
+                    fontSize: 14,
+                    height: 1.1,
+                    fontWeight: FontWeight.w700,
+                    color: selected ? T.mintDark : T.ink,
+                  ),
                 ),
               ),
             ],
@@ -2875,9 +3026,9 @@ class _OpenCaisseDialogState extends State<_OpenCaisseDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const MicroLabel('Ouverture de caisse'),
+              const Text('Ouvrir la caisse', style: T.h2),
               const SizedBox(height: 14),
-              const MicroLabel('Fond de caisse (DA)'),
+              const Text('Fond de caisse (DA)', style: T.label),
               const SizedBox(height: 6),
               Container(
                 height: 56,
@@ -2900,9 +3051,14 @@ class _OpenCaisseDialogState extends State<_OpenCaisseDialog> {
                   ),
                 ),
               ),
+              const SizedBox(height: 6),
+              Text(
+                'L’argent déjà dans le tiroir avant la première vente.',
+                style: T.small,
+              ),
               if (_error != null) ...[
                 const SizedBox(height: 8),
-                Text(_error!, style: T.small.copyWith(color: T.dangerDark)),
+                FieldError(_error!),
               ],
               const SizedBox(height: 16),
               Row(
@@ -2912,7 +3068,7 @@ class _OpenCaisseDialogState extends State<_OpenCaisseDialog> {
                       onPressed: () => Navigator.of(context).pop(),
                       child: Text(
                         'Annuler',
-                        style: T.small.copyWith(color: T.muted),
+                        style: T.body.copyWith(color: T.muted),
                       ),
                     ),
                   ),
@@ -3018,7 +3174,7 @@ class _ReportDialogState extends State<_ReportDialog> {
         child: Row(
           children: [
             Expanded(
-              child: Text(label, style: T.bodyMuted.copyWith(fontSize: 12.5)),
+              child: Text(label, style: T.bodyMuted.copyWith(fontSize: 13.5)),
             ),
             Text(
               fmtDA(amount),
@@ -3081,7 +3237,7 @@ class _ReportDialogState extends State<_ReportDialog> {
                     if (r.cashIn > 0) _row('Encaissements espèces', r.cashIn),
                     if (r.cashOut > 0)
                       _row(
-                        'Règlements espèces',
+                        'Paiements sortis en espèces',
                         -r.cashOut,
                         color: T.dangerDark,
                       ),
@@ -3157,7 +3313,7 @@ class _ReportDialogState extends State<_ReportDialog> {
                                       : _ecart > 0
                                       ? 'Excédent'
                                       : 'Manquant',
-                                  style: T.bodyMuted.copyWith(fontSize: 12.5),
+                                  style: T.bodyMuted.copyWith(fontSize: 13.5),
                                 ),
                               ),
                               Text(
@@ -3468,7 +3624,7 @@ class _GiftSellDialogState extends State<_GiftSellDialog> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const MicroLabel('Vendre une carte cadeau'),
+                    const Text('Vendre une carte cadeau', style: T.h2),
                     const SizedBox(height: 14),
                     const MicroLabel('Montant (DA)'),
                     const SizedBox(height: 6),
@@ -3624,7 +3780,7 @@ class _GiftRedeemDialogState extends State<_GiftRedeemDialog> {
                 children: [
                   const Icon(Icons.card_giftcard, size: 18, color: T.mintDeep),
                   const SizedBox(width: 8),
-                  const Expanded(child: MicroLabel('Payer par carte cadeau')),
+                  const Expanded(child: Text('Payer par carte cadeau', style: T.h2)),
                   Text(
                     fmtDA(widget.total),
                     style: T.monoBody.copyWith(fontWeight: FontWeight.w600),
@@ -3632,7 +3788,7 @@ class _GiftRedeemDialogState extends State<_GiftRedeemDialog> {
                 ],
               ),
               const SizedBox(height: 14),
-              const MicroLabel('Code de la carte'),
+              const Text('Code de la carte', style: T.label),
               const SizedBox(height: 6),
               Container(
                 height: 50,
@@ -3672,7 +3828,7 @@ class _GiftRedeemDialogState extends State<_GiftRedeemDialog> {
                       Expanded(
                         child: Text(
                           'Solde disponible',
-                          style: T.bodyMuted.copyWith(fontSize: 12.5),
+                          style: T.bodyMuted.copyWith(fontSize: 13.5),
                         ),
                       ),
                       Text(
@@ -3785,7 +3941,7 @@ class _CashDialogState extends State<_CashDialog> {
                     color: T.mintDeep,
                   ),
                   const SizedBox(width: 8),
-                  const Expanded(child: MicroLabel('Paiement en espèces')),
+                  const Expanded(child: Text('Paiement en espèces', style: T.h2)),
                   Text(
                     fmtDA(widget.total),
                     style: T.monoBody.copyWith(fontWeight: FontWeight.w600),
@@ -3846,7 +4002,7 @@ class _CashDialogState extends State<_CashDialog> {
                           fmtDA(s),
                           style: T.monoSmall.copyWith(
                             color: T.ink,
-                            fontSize: 11,
+                            fontSize: 12.5,
                           ),
                         ),
                       ),
@@ -3868,7 +4024,7 @@ class _CashDialogState extends State<_CashDialog> {
                     Expanded(
                       child: Text(
                         'À rendre',
-                        style: T.bodyMuted.copyWith(fontSize: 12.5),
+                        style: T.bodyMuted.copyWith(fontSize: 13.5),
                       ),
                     ),
                     Text(

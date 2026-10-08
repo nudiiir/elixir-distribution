@@ -199,7 +199,7 @@ class _GlobalSearchState extends State<GlobalSearch> {
         'STOCK_TRANSFER' => 'Transfert',
         'INVENTORY_COUNT' => 'Inventaire',
         'PAYMENT_IN' => 'Encaissement',
-        'PAYMENT_OUT' => 'Règlement',
+        'PAYMENT_OUT' => 'Paiement fournisseur',
         _ => t,
       };
 
@@ -252,7 +252,7 @@ class _GlobalSearchState extends State<GlobalSearch> {
                       Padding(
                         padding: const EdgeInsets.fromLTRB(14, 6, 14, 6),
                         child: Text('↑ ↓ pour choisir · Entrée pour ouvrir · Échap pour fermer',
-                            style: T.small.copyWith(fontSize: 11)),
+                            style: T.small.copyWith(fontSize: 12.5)),
                       ),
                     ],
                   ),
@@ -307,7 +307,7 @@ class _GlobalSearchState extends State<GlobalSearch> {
               Text(title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: T.body.copyWith(fontSize: 13, fontWeight: FontWeight.w600)),
+                  style: T.body.copyWith(fontSize: 14, fontWeight: FontWeight.w600)),
               Text(sub, maxLines: 1, overflow: TextOverflow.ellipsis, style: T.small),
             ]),
           ),
@@ -365,7 +365,7 @@ class _GlobalSearchState extends State<GlobalSearch> {
                         borderRadius: BorderRadius.circular(5),
                         border: Border.all(color: T.border),
                       ),
-                      child: Text('Ctrl+K', style: T.label.copyWith(fontSize: 9)),
+                      child: Text('Ctrl+K', style: T.label.copyWith(fontSize: 11.5)),
                     ),
                   ),
                 ),

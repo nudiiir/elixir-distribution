@@ -11,9 +11,11 @@ abstract final class T {
   // Ink
   static const ink = Color(0xFF0F1113);
   static const ink2 = Color(0xFF141414);
-  static const muted = Color(0xFF5D6462);
-  static const faint = Color(0xFF9AA19E);
-  static const ghost = Color(0xFFB0B5B2);
+  // Readability first: every text colour passes 4.5:1 on white except
+  // `ghost`, kept for placeholders and disabled items only.
+  static const muted = Color(0xFF4D5452);
+  static const faint = Color(0xFF666E6B);
+  static const ghost = Color(0xFF9AA19E);
 
   // Borders
   static const border = Color(0xFFE9E8E4);
@@ -44,36 +46,38 @@ abstract final class T {
   static const mono = 'IBMPlexMono';
 
   // ---- Text styles ----
+  // Minimum readable sizes on screen: body 14.5, secondary 13, labels 13.
+  // Never go below 12 in the UI (print/PDF code has its own sizes).
   static const h1 = TextStyle(
-      fontFamily: sans, fontSize: 22, fontWeight: FontWeight.w800,
+      fontFamily: sans, fontSize: 24, fontWeight: FontWeight.w800,
       color: ink, height: 1.15, letterSpacing: -0.4);
   static const h2 = TextStyle(
-      fontFamily: sans, fontSize: 16, fontWeight: FontWeight.w700,
+      fontFamily: sans, fontSize: 17, fontWeight: FontWeight.w700,
       color: ink, letterSpacing: -0.2);
   static const body = TextStyle(
-      fontFamily: sans, fontSize: 13.5, fontWeight: FontWeight.w500,
+      fontFamily: sans, fontSize: 14.5, fontWeight: FontWeight.w500,
       color: ink, height: 1.35);
   static const bodyMuted = TextStyle(
-      fontFamily: sans, fontSize: 13, fontWeight: FontWeight.w500,
+      fontFamily: sans, fontSize: 14, fontWeight: FontWeight.w500,
       color: muted, height: 1.35);
   static const small = TextStyle(
-      fontFamily: sans, fontSize: 12, fontWeight: FontWeight.w500,
+      fontFamily: sans, fontSize: 13, fontWeight: FontWeight.w500,
       color: faint);
 
-  /// Uppercase, letter-spaced micro label — the signature Elixir chip label.
+  /// Field / column / section label: plain words, normal case, readable.
   static const label = TextStyle(
-      fontFamily: mono, fontSize: 10, fontWeight: FontWeight.w600,
-      color: faint, letterSpacing: 1.2);
+      fontFamily: sans, fontSize: 13, fontWeight: FontWeight.w600,
+      color: muted, letterSpacing: 0);
 
   /// Money & codes.
   static const monoBig = TextStyle(
-      fontFamily: mono, fontSize: 24, fontWeight: FontWeight.w600,
+      fontFamily: mono, fontSize: 26, fontWeight: FontWeight.w600,
       color: ink, letterSpacing: -0.5);
   static const monoBody = TextStyle(
-      fontFamily: mono, fontSize: 13, fontWeight: FontWeight.w500, color: ink);
+      fontFamily: mono, fontSize: 14, fontWeight: FontWeight.w500, color: ink);
   static const monoSmall = TextStyle(
-      fontFamily: mono, fontSize: 11.5, fontWeight: FontWeight.w400,
-      color: faint);
+      fontFamily: mono, fontSize: 13, fontWeight: FontWeight.w400,
+      color: muted);
 
   static ThemeData theme() => ThemeData(
         useMaterial3: true,
@@ -92,7 +96,7 @@ abstract final class T {
             borderRadius: BorderRadius.circular(8),
           ),
           textStyle: const TextStyle(
-              fontFamily: sans, fontSize: 12, color: Colors.white),
+              fontFamily: sans, fontSize: 13, color: Colors.white),
         ),
       );
 }

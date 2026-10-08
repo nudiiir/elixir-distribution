@@ -127,7 +127,7 @@ Future<void> showShortcutsSheet(BuildContext context) {
                             border: Border.all(color: T.border),
                           ),
                           child: Text(s.keys,
-                              style: T.monoBody.copyWith(fontSize: 12)),
+                              style: T.monoBody.copyWith(fontSize: 13)),
                         ),
                       ]),
                     ),

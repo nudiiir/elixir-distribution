@@ -9,6 +9,7 @@ import '../../theme/tokens.dart';
 import '../../util/prefs.dart';
 import '../../widgets/doc_editor.dart';
 import '../../widgets/doc_list.dart';
+import '../../widgets/list_toolbar.dart';
 import '../../widgets/product_thumb.dart';
 import '../../widgets/ui.dart';
 
@@ -57,6 +58,152 @@ Future<bool> openStockDocument(
 // Dépôt
 // ---------------------------------------------------------------------------
 
+/// The « Dépôt » filter of a stock list (null when the shop has one depot).
+FilterField<String>? depotFilter({
+  required List<Warehouse> warehouses,
+  required String? value,
+  required ValueChanged<String?> onChanged,
+  String label = 'Dépôt',
+}) {
+  if (warehouses.length <= 1) return null;
+  return FilterField<String>(
+    label: label,
+    value: warehouses.any((w) => w.id == value) ? value : null,
+    allLabel: 'Tous les dépôts',
+    options: [for (final w in warehouses) (w.id, w.name)],
+    onChanged: onChanged,
+  );
+}
+
+/// The « Période » filter of a stock list: presets + « Choisir les dates… ».
+FilterField<String> periodFilter(
+  BuildContext context, {
+  required StockPeriod period,
+  required ValueChanged<StockPeriod> onChanged,
+}) {
+  Future<void> custom() async {
+    final now = DateTime.now();
+    final r = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(now.year + 1, 12, 31),
+      initialDateRange: period.from != null && period.to != null
+          ? DateTimeRange(start: period.from!, end: period.to!)
+          : null,
+      helpText: 'Période',
+      saveText: 'Appliquer',
+    );
+    if (r != null) onChanged(StockPeriod('custom', r.start, r.end));
+  }
+
+  return FilterField<String>(
+    label: 'Période',
+    value: period.key == 'all' ? null : period.key,
+    allLabel: 'Toute la période',
+    options: [
+      for (final (k, l) in StockPeriod.presets)
+        if (k != 'all') (k, l),
+      ('custom', period.key == 'custom' ? period.label : 'Choisir les dates…'),
+    ],
+    onChanged: (k) {
+      if (k == 'custom') {
+        custom();
+      } else {
+        onChanged(StockPeriod.preset(k ?? 'all'));
+      }
+    },
+  );
+}
+
+/// A labelled filter slot that opens a picker (« Produit : Choisir… »),
+/// same look as [FilterField], for [ListToolbar.panel].
+class PickerFilter extends StatelessWidget {
+  const PickerFilter({
+    super.key,
+    required this.label,
+    required this.value,
+    required this.placeholder,
+    required this.onPick,
+    this.onClear,
+    this.width = 260,
+  });
+  final String label;
+  final String? value;
+  final String placeholder;
+  final VoidCallback onPick;
+  final VoidCallback? onClear;
+  final double width;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: width,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        MicroLabel(label),
+        const SizedBox(height: 5),
+        InkWell(
+          onTap: onPick,
+          borderRadius: BorderRadius.circular(T.rInner),
+          child: Container(
+            height: 40,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            decoration: BoxDecoration(
+              color: T.surface,
+              borderRadius: BorderRadius.circular(T.rInner),
+              border: Border.all(color: value == null ? T.border : T.mintDeep),
+            ),
+            child: Row(children: [
+              const Icon(Icons.search_rounded, size: 17, color: T.muted),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(value ?? placeholder,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: T.body.copyWith(
+                        fontSize: 14, color: value == null ? T.muted : T.ink)),
+              ),
+              if (value != null && onClear != null)
+                IconButton(
+                  tooltip: 'Retirer ce filtre',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: onClear,
+                  icon: const Icon(Icons.close_rounded, size: 17, color: T.muted),
+                ),
+            ]),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+/// « Actualiser » with its word (rule: no icon-only buttons).
+class RefreshButton extends StatelessWidget {
+  const RefreshButton({super.key, required this.onPressed, this.label = 'Actualiser'});
+  final VoidCallback onPressed;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsetsDirectional.only(start: 8),
+      child: SizedBox(
+        height: 40,
+        child: TextButton.icon(
+          style: TextButton.styleFrom(
+            foregroundColor: T.muted,
+            textStyle: const TextStyle(
+                fontFamily: T.sans, fontSize: 14, fontWeight: FontWeight.w600),
+          ),
+          onPressed: onPressed,
+          icon: const Icon(Icons.refresh_rounded, size: 18),
+          label: Text(label),
+        ),
+      ),
+    );
+  }
+}
+
 class DepotDropdown extends StatelessWidget {
   const DepotDropdown({
     super.key,
@@ -75,8 +222,7 @@ class DepotDropdown extends StatelessWidget {
     if (warehouses.length <= 1 && allowAll) return const SizedBox.shrink();
     final v = warehouses.any((w) => w.id == value) ? value : null;
     return Container(
-      height: 36,
-      margin: const EdgeInsetsDirectional.only(start: 8),
+      height: 42,
       padding: const EdgeInsets.symmetric(horizontal: 10),
       decoration: BoxDecoration(
         color: T.surface,
@@ -86,8 +232,9 @@ class DepotDropdown extends StatelessWidget {
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String?>(
           value: v,
-          style: T.body.copyWith(fontSize: 13),
-          icon: const Icon(Icons.expand_more, size: 16, color: T.faint),
+          isExpanded: true,
+          style: T.body.copyWith(fontSize: 14),
+          icon: const Icon(Icons.expand_more, size: 18, color: T.faint),
           items: [
             if (allowAll)
               const DropdownMenuItem<String?>(
@@ -139,30 +286,36 @@ class _KpiCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final card = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
       decoration: BoxDecoration(
         color: T.surface,
         borderRadius: BorderRadius.circular(T.rInner),
         border: Border.all(color: T.border),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        MicroLabel(kpi.label),
+        Text(kpi.label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: T.label.copyWith(fontSize: 13)),
         const SizedBox(height: 6),
         loading
-            ? const SkeletonBar(width: 90, height: 14)
-            : Text(kpi.value,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: T.monoBody.copyWith(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                    color: kpi.tone ?? T.ink)),
+            ? const SkeletonBar(width: 110, height: 20)
+            : FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: AlignmentDirectional.centerStart,
+                child: Text(kpi.value,
+                    maxLines: 1,
+                    style: T.monoBody.copyWith(
+                        fontSize: 21,
+                        fontWeight: FontWeight.w700,
+                        color: kpi.tone ?? T.ink)),
+              ),
         if (kpi.hint != null) ...[
-          const SizedBox(height: 2),
+          const SizedBox(height: 3),
           Text(kpi.hint!,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: T.small.copyWith(fontSize: 11)),
+              style: T.small),
         ],
       ]),
     );
@@ -274,15 +427,15 @@ class PeriodButton extends StatelessWidget {
           CheckedPopupMenuItem<String>(
             value: k,
             checked: period.key == k,
-            height: 34,
-            child: Text(l, style: T.body.copyWith(fontSize: 13)),
+            height: 40,
+            child: Text(l, style: T.body.copyWith(fontSize: 14)),
           ),
         const PopupMenuDivider(),
         CheckedPopupMenuItem<String>(
           value: 'custom',
           checked: period.key == 'custom',
-          height: 34,
-          child: Text('Personnalisé…', style: T.body.copyWith(fontSize: 13)),
+          height: 40,
+          child: Text('Personnalisé…', style: T.body.copyWith(fontSize: 14)),
         ),
       ],
       onSelected: (k) {
@@ -293,7 +446,7 @@ class PeriodButton extends StatelessWidget {
         }
       },
       child: Container(
-        height: 32,
+        height: 36,
         margin: const EdgeInsetsDirectional.only(end: 6),
         padding: const EdgeInsets.symmetric(horizontal: 12),
         decoration: BoxDecoration(
@@ -306,7 +459,7 @@ class PeriodButton extends StatelessWidget {
           const SizedBox(width: 6),
           Text(period.label,
               style: T.small.copyWith(
-                  fontSize: 12.5, fontWeight: FontWeight.w600, color: T.ink)),
+                  fontSize: 13.5, fontWeight: FontWeight.w600, color: T.ink)),
           const Icon(Icons.expand_more_rounded, size: 16, color: T.muted),
         ]),
       ),
@@ -449,7 +602,7 @@ class _ProductPickerState extends State<_ProductPicker> {
                               child: Container(
                                 color: i == _cursor ? T.mintTint : null,
                                 padding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 7),
+                                    horizontal: 8, vertical: 9),
                                 child: Row(children: [
                                   ProductThumb(api: widget.api, product: p, size: 28),
                                   const SizedBox(width: 10),

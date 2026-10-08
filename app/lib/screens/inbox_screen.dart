@@ -6,6 +6,7 @@ import '../api/client.dart';
 import '../api/cloud.dart';
 import '../api/models.dart';
 import '../theme/tokens.dart';
+import '../util/feedback.dart';
 import '../widgets/ui.dart';
 
 /// Factures scannées — supplier invoices photographed on a phone land here and
@@ -111,20 +112,20 @@ class _InboxScreenState extends State<InboxScreen> {
                   ),
                   child: Text('${_items.length} en attente',
                       style: T.label
-                          .copyWith(color: T.mintDark, fontSize: 9.5)),
+                          .copyWith(color: T.mintDark, fontSize: 13)),
                 ),
               ),
             const Spacer(),
-            IconButton(
+            TextButton.icon(
               onPressed: _load,
-              icon: const Icon(Icons.refresh, size: 18, color: T.muted),
-              tooltip: 'Actualiser',
+              icon: const Icon(Icons.refresh, size: 18),
+              label: const Text('Actualiser'),
             ),
           ]),
           const SizedBox(height: 6),
           Text(
               'Photographiez une facture fournisseur depuis le téléphone : '
-              'elle arrive ici, prête à devenir une réception.',
+              'elle arrive ici, prête à devenir un bon de réception.',
               style: T.bodyMuted),
           const SizedBox(height: 16),
           Expanded(
@@ -134,19 +135,24 @@ class _InboxScreenState extends State<InboxScreen> {
                       icon: Icons.cloud_off,
                       text: 'Services cloud non configurés.\n'
                           'Renseignez-les dans Paramètres → Services cloud.',
+                      actions: [('Vérifier à nouveau', _load)],
                     ),
                   )
                 : _error != null
                     ? Card14(
                         child: EmptyState(
                             icon: Icons.error_outline,
-                            text: 'Impossible de lire les scans\n$_error'))
+                            text: 'Impossible de lire les scans\n$_error',
+                            actions: [('Réessayer', _load)]))
                     : Card14(
                         padding: EdgeInsets.zero,
                         child: _items.isEmpty && !_loading
-                            ? const EmptyState(
+                            ? EmptyState(
                                 icon: Icons.inbox_outlined,
-                                text: 'Aucun scan en attente.')
+                                text: 'Aucun scan en attente.\n'
+                                    'Ouvrez l’application Elixir sur le téléphone, '
+                                    'photographiez la facture : elle arrivera ici.',
+                                actions: [('Actualiser', _load)])
                             : ListView.separated(
                                 itemCount: _items.length,
                                 separatorBuilder: (_, _) => const Divider(),
@@ -471,11 +477,11 @@ class _ScanDetailDialogState extends State<_ScanDetailDialog> {
           const Icon(Icons.check_circle, color: T.mint, size: 18),
           const SizedBox(width: 10),
           Text(
-              'Réception brouillon créée · ${draft.lines.length} lignes'
+              'Bon de réception brouillon créé · ${draft.lines.length} lignes'
               '${_lastCreatedCount > 0 ? ' · $_lastCreatedCount produit(s) ajouté(s) au catalogue' : ''}'
               ' — à vérifier puis valider dans Achats',
               style: const TextStyle(
-                  fontFamily: T.sans, fontSize: 13, color: Colors.white)),
+                  fontFamily: T.sans, fontSize: 14, color: Colors.white)),
         ]),
       ));
     } catch (e) {
@@ -559,6 +565,7 @@ class _ScanDetailDialogState extends State<_ScanDetailDialog> {
                       ),
                     ),
                     IconButton(
+                      tooltip: 'Fermer (Échap)',
                       onPressed: () => Navigator.of(context).pop(false),
                       icon: const Icon(Icons.close, size: 18, color: T.muted),
                     ),
@@ -572,13 +579,13 @@ class _ScanDetailDialogState extends State<_ScanDetailDialog> {
                     SizedBox(width: 10),
                     Expanded(flex: 4, child: MicroLabel('Produit du catalogue')),
                     SizedBox(width: 10),
-                    SizedBox(width: 74, child: MicroLabel('Qté')),
+                    SizedBox(width: 74, child: MicroLabel('Quantité')),
                     SizedBox(width: 10),
                     SizedBox(
-                        width: 104,
+                        width: 124,
                         child: Align(
                             alignment: AlignmentDirectional.centerEnd,
-                            child: MicroLabel('Coût HT'))),
+                            child: MicroLabel('Prix d’achat HT'))),
                     SizedBox(width: 30),
                   ]),
                 ),
@@ -609,7 +616,7 @@ class _ScanDetailDialogState extends State<_ScanDetailDialog> {
                                             'exp. ${l.expiry}',
                                         ].join(' · '),
                                         style: T.monoSmall
-                                            .copyWith(fontSize: 10)),
+                                            .copyWith(fontSize: 12)),
                                   ),
                               ],
                             ),
@@ -646,7 +653,7 @@ class _ScanDetailDialogState extends State<_ScanDetailDialog> {
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
                                         style: T.small.copyWith(
-                                            fontSize: 11.5,
+                                            fontSize: 13,
                                             fontWeight: FontWeight.w700,
                                             color: l.product != null
                                                 ? T.mintDark
@@ -667,7 +674,7 @@ class _ScanDetailDialogState extends State<_ScanDetailDialog> {
                                   controller: l.qty, mono: true)),
                           const SizedBox(width: 10),
                           SizedBox(
-                              width: 104,
+                              width: 124,
                               child: _CellField(
                                   controller: l.price,
                                   mono: true,
@@ -697,10 +704,7 @@ class _ScanDetailDialogState extends State<_ScanDetailDialog> {
                   padding: const EdgeInsets.all(16),
                   child: Row(children: [
                     if (_error != null)
-                      Expanded(
-                        child: Text(_error!,
-                            style: T.small.copyWith(color: T.dangerDark)),
-                      )
+                      Expanded(child: FieldError(_error!))
                     else
                       Expanded(
                         child: MicroLabel(
@@ -709,14 +713,14 @@ class _ScanDetailDialogState extends State<_ScanDetailDialog> {
                       ),
                     TextButton(
                       onPressed: _busy ? null : _discard,
-                      child: Text('Ignorer',
-                          style: T.small.copyWith(color: T.dangerDark)),
+                      child: Text('Ignorer ce scan',
+                          style: T.body.copyWith(color: T.dangerDark)),
                     ),
                     const SizedBox(width: 8),
                     SizedBox(
-                      width: 210,
+                      width: 250,
                       child: PrimaryButton(
-                        label: _busy ? '…' : 'Créer la réception',
+                        label: _busy ? '…' : 'Créer le bon de réception',
                         onPressed: _busy ? null : _createDraft,
                       ),
                     ),
@@ -748,7 +752,7 @@ class _CellField extends StatelessWidget {
       child: TextField(
         controller: controller,
         textAlign: alignEnd ? TextAlign.end : TextAlign.start,
-        style: (mono ? T.monoBody : T.body).copyWith(fontSize: 12.5),
+        style: (mono ? T.monoBody : T.body).copyWith(fontSize: 13.5),
         decoration: const InputDecoration(
           isDense: true,
           border: InputBorder.none,
@@ -822,6 +826,7 @@ class _ProductPickDialogState extends State<_ProductPickDialog> {
                   const Expanded(
                       child: Text('Associer un produit', style: T.h2)),
                   IconButton(
+                    tooltip: 'Fermer (Échap)',
                     onPressed: () => Navigator.of(context).pop(),
                     icon: const Icon(Icons.close, size: 18, color: T.muted),
                   ),
@@ -865,7 +870,13 @@ class _ProductPickDialogState extends State<_ProductPickDialog> {
                           icon: Icons.search_off_rounded,
                           text: _loading
                               ? 'Chargement…'
-                              : 'Aucun produit ne correspond.')
+                              : 'Aucun produit ne correspond.',
+                          actions: _loading
+                              ? const []
+                              : [
+                                  ('+ Créer comme nouveau produit',
+                                      () => Navigator.of(context).pop('new')),
+                                ])
                       : ListView.separated(
                           itemCount: _results.length,
                           separatorBuilder: (_, _) => const Divider(),
@@ -886,12 +897,11 @@ class _ProductPickDialogState extends State<_ProductPickDialog> {
                                             maxLines: 1,
                                             overflow:
                                                 TextOverflow.ellipsis,
-                                            style: T.body.copyWith(
-                                                fontSize: 12.5)),
+                                            style: T.body),
                                         if (p.barcode != null)
                                           Text(p.barcode!,
-                                              style: T.monoSmall.copyWith(
-                                                  fontSize: 10)),
+                                              style: T.monoSmall),
+
                                       ],
                                     ),
                                   ),
@@ -941,7 +951,7 @@ class _QuickChoice extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: T.small.copyWith(
-                    fontSize: 11, fontWeight: FontWeight.w700, color: color)),
+                    fontSize: 12.5, fontWeight: FontWeight.w700, color: color)),
           ),
         ]),
       ),

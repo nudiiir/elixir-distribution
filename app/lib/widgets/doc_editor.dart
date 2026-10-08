@@ -7,11 +7,14 @@ import 'package:flutter/services.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
+import '../screens/documents/doc_detail_page.dart' show DocDetailPage;
 import '../theme/tokens.dart';
 import '../util/features.dart';
 import '../util/feedback.dart';
 import '../util/file_dialog.dart';
 import '../util/gs1.dart';
+import 'app_page.dart';
+import 'doc_list.dart' show docModuleLabel;
 import 'ui.dart';
 
 /// Configuration of the DocumentEditor archetype for one document type.
@@ -71,7 +74,7 @@ const purchaseOrderConfig = DocEditorConfig(
 // pas d'historique d'achat, pas de comparaison de prix, pas de compte.
 const purchaseReceiptConfig = DocEditorConfig(
     docType: 'PURCHASE_RECEIPT',
-    title: 'Réception fournisseur',
+    title: 'Bon de réception',
     partnerKind: 'supplier',
     partnerRequired: true,
     isPurchase: true);
@@ -272,6 +275,10 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
     super.initState();
     _docId = widget.existing?.id;
     _init();
+    // The page frame also autofocuses (for Échap): the scanner field wins.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _searchFocus.requestFocus();
+    });
   }
 
   Future<void> _init() async {
@@ -622,7 +629,7 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
       _searchFocus.requestFocus();
       if (!mounted) return;
       showToast(context,
-          'GS1 : ${p.name} — lot ${gs1.lot ?? '—'}, DLC ${gs1.expiry ?? '—'}',
+          'Code GS1 : ${p.name} — lot ${gs1.lot ?? '—'}, péremption ${gs1.expiry ?? '—'}',
           kind: ToastKind.info);
     } catch (_) {}
   }
@@ -937,10 +944,18 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
             ? await widget.api.createDraft(payload)
             : await widget.api.updateDraft(_docId!, payload);
         _docId = draft.id;
+        // Next step offered by the toast: open the saved document (not when
+        // we came from its own page — that page reloads by itself).
+        if (!mounted) return;
+        final nav = Navigator.of(context);
+        final offerOpen = widget.existing == null;
+        void openSaved(String id) => nav.push(MaterialPageRoute<bool>(
+            builder: (_) => DocDetailPage(api: widget.api, docId: id)));
         if (!post) {
           if (!mounted) return;
-          final nav = Navigator.of(context);
-          showToast(context, 'Brouillon enregistré');
+          showToast(context, 'Brouillon enregistré',
+              actionLabel: offerOpen ? 'Ouvrir' : null,
+              onAction: offerOpen ? () => openSaved(draft.id) : null);
           nav.pop(true);
           return;
         }
@@ -954,10 +969,12 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
           showToast(
               context,
               cfg.isTransfer
-                  ? '${posted.number}  ·  ${_lines.length} lignes transférées'
-                  : '${posted.number}  ·  ${fmtDA(posted.totalTTC)}'
-                      '${changed.isEmpty ? '' : '\nPrix de vente mis à jour : ${changed.join(', ')}'}');
-          Navigator.of(context).pop(true);
+                  ? '${posted.number} validé  ·  ${_lines.length} lignes transférées'
+                  : '${posted.number} validé  ·  ${fmtDA(posted.totalTTC)}'
+                      '${changed.isEmpty ? '' : '\nPrix de vente mis à jour : ${changed.join(', ')}'}',
+              actionLabel: offerOpen ? 'Ouvrir' : null,
+              onAction: offerOpen ? () => openSaved(posted.id) : null);
+          nav.pop(true);
           return;
         } on ApiException catch (e) {
           // Les acceptations explicites de la spec : courte durée de vie et
@@ -965,9 +982,9 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
           if (!mounted) return;
           if (e.message.contains('durée de vie') && !acceptShort) {
             final ok = await confirmAction(context,
-                title: 'Durée de vie insuffisante',
+                title: 'Date de péremption trop proche',
                 message: e.message,
-                confirmLabel: 'Accepter le lot court');
+                confirmLabel: 'Accepter ce lot quand même');
             if (ok) {
               acceptShort = true;
               continue;
@@ -976,9 +993,9 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
           }
           if (e.message.contains('sur-réception') && !acceptOver) {
             final ok = await confirmAction(context,
-                title: 'Sur-réception',
+                title: 'Plus de marchandise que commandé',
                 message: e.message,
-                confirmLabel: 'Accepter la sur-réception');
+                confirmLabel: 'Accepter quand même');
             if (ok) {
               acceptOver = true;
               continue;
@@ -1118,7 +1135,7 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
               Expanded(
                   child: Text(a.name,
                       overflow: TextOverflow.ellipsis,
-                      style: T.body.copyWith(fontSize: 13))),
+                      style: T.body.copyWith(fontSize: 14))),
               Text(fmtFileSize(a.size), style: T.monoSmall),
             ]),
           ),
@@ -1133,7 +1150,7 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
                 _docId == null
                     ? 'Ajouter un fichier (enregistre le brouillon)'
                     : 'Ajouter un fichier…',
-                style: T.body.copyWith(fontSize: 13)),
+                style: T.body.copyWith(fontSize: 14)),
           ]),
         ),
       ],
@@ -1221,8 +1238,8 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
         isDense: true,
         isExpanded: true,
         style: T.body,
-        hint: Text('— choisir —', style: T.bodyMuted.copyWith(color: T.ghost)),
-        icon: const Icon(Icons.expand_more, size: 15, color: T.faint),
+        hint: Text('Choisir…', style: T.bodyMuted),
+        icon: const Icon(Icons.expand_more, size: 18, color: T.faint),
         items: [
           for (final w in _warehouses)
             DropdownMenuItem(
@@ -1259,60 +1276,60 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
         cfg.partnerKind == 'supplier' ? 'Fournisseur' : 'Client';
     final partnerNeeded = cfg.partnerRequired ||
         (cfg.hasPaymentMethod && _paymentMethod == 'credit');
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Wrap(
+      spacing: 14,
+      runSpacing: 14,
       children: [
         _HeaderField(
           label: 'Date',
-          child: InkWell(
-            onTap: _pickDate,
+          required: true,
+          width: 170,
+          onTap: _pickDate,
+          child: Row(children: [
+            const Icon(Icons.calendar_today_outlined, size: 16, color: T.faint),
+            const SizedBox(width: 8),
+            Text(_frDate(_date), style: T.monoBody),
+          ]),
+        ),
+        if (!cfg.isTransfer)
+          _HeaderField(
+            label: partnerLabel,
+            required: partnerNeeded,
+            width: 320,
+            error: _errors['partner'],
+            onTap: _pickPartner,
             child: Row(children: [
-              const Icon(Icons.calendar_today_outlined,
-                  size: 14, color: T.faint),
+              Icon(
+                  cfg.partnerKind == 'supplier'
+                      ? Icons.local_shipping_outlined
+                      : Icons.person_outline,
+                  size: 17,
+                  color: T.faint),
               const SizedBox(width: 8),
-              Text(_frDate(_date), style: T.monoBody),
+              Expanded(
+                child: Text(
+                    _partner?.name ??
+                        (cfg.partnerKind == 'supplier'
+                            ? 'Choisir un fournisseur…'
+                            : 'Choisir un client…'),
+                    overflow: TextOverflow.ellipsis,
+                    style: _partner == null ? T.bodyMuted : T.body),
+              ),
+              if (_partner != null)
+                Tooltip(
+                  message: 'Retirer',
+                  child: InkWell(
+                    onTap: () => setState(() => _partner = null),
+                    child: const Icon(Icons.close, size: 17, color: T.faint),
+                  ),
+                ),
             ]),
           ),
-        ),
-        if (!cfg.isTransfer) ...[
-          const SizedBox(width: 12),
+        if (cfg.needsWarehouse)
           _HeaderField(
-            label: partnerLabel + (partnerNeeded ? ' *' : ''),
-            flex: 2,
-            error: _errors['partner'],
-            child: InkWell(
-              onTap: _pickPartner,
-              child: Row(children: [
-                Icon(
-                    cfg.partnerKind == 'supplier'
-                        ? Icons.local_shipping_outlined
-                        : Icons.person_outline,
-                    size: 15,
-                    color: T.faint),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(_partner?.name ?? '— aucun —',
-                      overflow: TextOverflow.ellipsis,
-                      style: _partner == null
-                          ? T.bodyMuted.copyWith(color: T.ghost)
-                          : T.body),
-                ),
-                if (_partner != null)
-                  Tooltip(
-                    message: 'Retirer',
-                    child: InkWell(
-                      onTap: () => setState(() => _partner = null),
-                      child: const Icon(Icons.close, size: 14, color: T.faint),
-                    ),
-                  ),
-              ]),
-            ),
-          ),
-        ],
-        if (cfg.needsWarehouse) ...[
-          const SizedBox(width: 12),
-          _HeaderField(
-            label: cfg.isTransfer ? 'Dépôt source *' : 'Dépôt',
+            label: cfg.isTransfer ? 'Dépôt de départ' : 'Dépôt',
+            required: true,
+            width: 220,
             error: _errors['warehouse'],
             child: _warehouseDropdown(_warehouseId, (v) {
               setState(() {
@@ -1322,11 +1339,11 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
               if (cfg.isReception) _loadStockNow();
             }),
           ),
-        ],
-        if (cfg.isTransfer) ...[
-          const SizedBox(width: 12),
+        if (cfg.isTransfer)
           _HeaderField(
-            label: 'Dépôt de destination *',
+            label: 'Dépôt d’arrivée',
+            required: true,
+            width: 220,
             error: _errors['dest'],
             child: _warehouseDropdown(
               _destWarehouseId,
@@ -1337,41 +1354,40 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
               exclude: _warehouseId,
             ),
           ),
-        ],
-        if (cfg.isPurchase &&
-            (cfg.isReception || cfg.isSupplierInvoice)) ...[
-          const SizedBox(width: 12),
+        if (cfg.isPurchase && (cfg.isReception || cfg.isSupplierInvoice))
           _HeaderField(
-            label: cfg.isReception ? 'N° BL fournisseur' : 'N° facture *',
+            label: cfg.isReception
+                ? 'N° du bon de livraison fournisseur'
+                : 'N° de la facture fournisseur',
+            required: cfg.isSupplierInvoice,
+            width: 260,
             error: _errors['supplierRef'],
             child: _plainField(
-                _supplierRefCtrl, cfg.isReception ? 'BL-…' : 'FAC-…',
+                _supplierRefCtrl, cfg.isReception ? 'Ex. BL-1234' : 'Ex. FAC-1234',
                 onChanged: (_) {
               if (_errors.containsKey('supplierRef')) {
                 setState(() => _errors = {..._errors}..remove('supplierRef'));
               }
             }),
           ),
-        ],
-        if (cfg.isReception) ...[
-          const SizedBox(width: 12),
+        if (cfg.isReception)
           _HeaderField(
-            label: 'Frais (transport…)',
+            label: 'Frais (transport…) en DA',
+            width: 200,
             child: _plainField(_freightCtrl, '0,00',
                 onChanged: (_) => setState(() {})),
           ),
-        ],
-        if (cfg.hasPaymentMethod) ...[
-          const SizedBox(width: 12),
+        if (cfg.hasPaymentMethod)
           _HeaderField(
-            label: 'Règlement',
+            label: 'Paiement',
+            width: 190,
             child: DropdownButtonHideUnderline(
               child: DropdownButton<String>(
                 value: _paymentMethod,
                 isDense: true,
                 isExpanded: true,
                 style: T.body,
-                icon: const Icon(Icons.expand_more, size: 15, color: T.faint),
+                icon: const Icon(Icons.expand_more, size: 18, color: T.faint),
                 items: const [
                   DropdownMenuItem(value: 'cash', child: Text('Espèces')),
                   DropdownMenuItem(value: 'credit', child: Text('Crédit')),
@@ -1383,32 +1399,23 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
               ),
             ),
           ),
-        ],
         if (_hasDueDate) ...[
-          const SizedBox(width: 12),
-          SizedBox(
-            width: 104,
-            child: _HeaderFieldBox(
-              label: 'Échéance (jours)',
-              child: _plainField(_termCtrl, '30',
-                  onChanged: _onTermChanged,
-                  keyboard: TextInputType.number),
-            ),
+          _HeaderField(
+            label: 'Délai de paiement (jours)',
+            width: 190,
+            child: _plainField(_termCtrl, '30',
+                onChanged: _onTermChanged, keyboard: TextInputType.number),
           ),
-          const SizedBox(width: 12),
           _HeaderField(
             label: 'Échéance',
-            child: InkWell(
-              onTap: _pickDueDate,
-              child: Row(children: [
-                const Icon(Icons.event_outlined, size: 14, color: T.faint),
-                const SizedBox(width: 8),
-                Text(_dueDate == null ? '— aucune —' : _frDate(_dueDate!),
-                    style: _dueDate == null
-                        ? T.bodyMuted.copyWith(color: T.ghost)
-                        : T.monoBody),
-              ]),
-            ),
+            width: 170,
+            onTap: _pickDueDate,
+            child: Row(children: [
+              const Icon(Icons.event_outlined, size: 16, color: T.faint),
+              const SizedBox(width: 8),
+              Text(_dueDate == null ? 'Aucune' : _frDate(_dueDate!),
+                  style: _dueDate == null ? T.bodyMuted : T.monoBody),
+            ]),
           ),
         ],
       ],
@@ -1421,39 +1428,40 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
         alignment: AlignmentDirectional.centerStart,
         child: TextButton.icon(
           onPressed: () => setState(() => _showNotes = true),
-          icon: const Icon(Icons.notes_rounded, size: 15, color: T.muted),
-          label: Text('Notes', style: T.small.copyWith(color: T.muted)),
+          icon: const Icon(Icons.notes_rounded, size: 18, color: T.muted),
+          label: Text('Ajouter une note',
+              style: T.body.copyWith(color: T.muted, fontWeight: FontWeight.w600)),
         ),
       );
     }
     Widget box(String label, TextEditingController c, String hint) => Expanded(
-          child: _HeaderFieldBox(
+          child: _HeaderField(
             label: label,
-            height: 64,
+            height: 70,
             child: TextField(
               controller: c,
               maxLines: 2,
-              style: T.body.copyWith(fontSize: 13),
+              style: T.body.copyWith(fontSize: 14),
               decoration: InputDecoration(
                 isDense: true,
                 border: InputBorder.none,
                 hintText: hint,
-                hintStyle: T.small.copyWith(color: T.ghost),
+                hintStyle: T.bodyMuted.copyWith(color: T.ghost),
                 contentPadding: EdgeInsets.zero,
               ),
             ),
           ),
         );
     return Padding(
-      padding: const EdgeInsets.only(top: 10),
-      child: Row(children: [
+      padding: const EdgeInsets.only(top: 12),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         if (!cfg.isTransfer) ...[
-          box('Note (imprimée)', _notesCtrl,
+          box('Note imprimée sur le document', _notesCtrl,
               'Conditions, référence client… — figure sur le PDF'),
-          const SizedBox(width: 12),
+          const SizedBox(width: 14),
         ],
-        box('Note interne', _internalNotesCtrl,
-            'Jamais imprimée — visible seulement ici'),
+        box('Note interne (jamais imprimée)', _internalNotesCtrl,
+            'Visible seulement dans le logiciel'),
       ]),
     );
   }
@@ -1462,41 +1470,42 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
     if (cfg.isTransfer) {
       return const Row(children: [
         Expanded(flex: 5, child: MicroLabel('Produit')),
-        SizedBox(width: 120, child: MicroLabel('Quantité')),
-        SizedBox(width: 34),
+        SizedBox(width: 130, child: MicroLabel('Quantité')),
+        SizedBox(width: _W.del),
       ]);
     }
     if (cfg.isReception) {
       return const Row(children: [
         Expanded(flex: 4, child: MicroLabel('Produit')),
-        SizedBox(width: 92, child: MicroLabel('Unité')),
-        SizedBox(width: 70, child: MicroLabel('Qté')),
-        SizedBox(width: 70, child: MicroLabel('Gratuit')),
-        SizedBox(width: 100, child: MicroLabel('Coût HT')),
-        SizedBox(width: 62, child: MicroLabel('Rem. %')),
-        SizedBox(width: 64, child: MicroLabel('TVA')),
+        SizedBox(width: _W.rUnit, child: MicroLabel('Unité')),
+        SizedBox(width: _W.rQty, child: MicroLabel('Quantité')),
+        SizedBox(width: _W.rFree, child: MicroLabel('Gratuit')),
+        SizedBox(width: _W.rPrice, child: MicroLabel('Prix d’achat HT')),
+        SizedBox(width: _W.rDisc, child: MicroLabel('Remise %')),
+        SizedBox(width: _W.rVat, child: MicroLabel('TVA')),
         SizedBox(
-            width: 104,
+            width: _W.rTotal,
             child: Align(
                 alignment: AlignmentDirectional.centerEnd,
                 child: MicroLabel('Total TTC'))),
-        SizedBox(width: 34),
+        SizedBox(width: _W.del),
       ]);
     }
     return Row(children: [
       const Expanded(flex: 5, child: MicroLabel('Produit')),
-      const SizedBox(width: 86, child: MicroLabel('Qté')),
+      const SizedBox(width: _W.qty, child: MicroLabel('Quantité')),
       SizedBox(
-          width: 110,
-          child: MicroLabel(cfg.isPurchase ? 'Coût HT' : 'PU HT')),
-      const SizedBox(width: 70, child: MicroLabel('Rem. %')),
-      const SizedBox(width: 70, child: MicroLabel('TVA')),
+          width: _W.price,
+          child: MicroLabel(
+              cfg.isPurchase ? 'Prix d’achat HT' : 'Prix unitaire HT')),
+      const SizedBox(width: _W.disc, child: MicroLabel('Remise %')),
+      const SizedBox(width: _W.vat, child: MicroLabel('TVA')),
       const SizedBox(
-          width: 110,
+          width: _W.total,
           child: Align(
               alignment: AlignmentDirectional.centerEnd,
               child: MicroLabel('Total TTC'))),
-      const SizedBox(width: 34),
+      const SizedBox(width: _W.del),
     ]);
   }
 
@@ -1535,9 +1544,21 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
     return _LineRow(line: l, onChanged: changed, onRemove: () => _removeLine(i));
   }
 
+  /// Sticky bottom bar: line count and live totals (the actions are in the
+  /// page header, always visible).
   Widget _totalsBar() {
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: _editorMaxWidth),
+        child: _totalsCard(),
+      ),
+    );
+  }
+
+  Widget _totalsCard() {
     return Container(
-      margin: const EdgeInsets.fromLTRB(24, 12, 24, 16),
+      margin: const EdgeInsets.fromLTRB(28, 0, 28, 16),
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
       decoration: BoxDecoration(
         color: T.surface,
@@ -1562,39 +1583,19 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
             const SizedBox(width: 10),
             Text(fmtQty(_totalQty), style: T.monoBig),
           ] else ...[
-            _Total('HT', _totalHT),
+            _Total('Total HT', _totalHT),
             _Total('TVA', _totalVAT),
-            if (_timbre > 0) _Total('Timbre', _timbre),
-            const SizedBox(width: 22),
-            Text(fmtDA(_totalTTC), style: T.monoBig),
+            if (_timbre > 0) _Total('Droit de timbre', _timbre),
+            const SizedBox(width: 26),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const MicroLabel('Total TTC'),
+                Text(fmtDA(_totalTTC), style: T.monoBig),
+              ],
+            ),
           ],
-          const SizedBox(width: 24),
-          SizedBox(
-            width: 140,
-            height: 42,
-            child: OutlinedButton(
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: T.border3),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(T.rInner)),
-              ),
-              onPressed: _busy ? null : () => _save(post: false),
-              child: const Text('Enregistrer',
-                  style: TextStyle(
-                      fontFamily: T.sans,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: T.muted)),
-            ),
-          ),
-          const SizedBox(width: 8),
-          SizedBox(
-            width: 150,
-            child: PrimaryButton(
-              label: _busy ? 'Validation…' : 'Valider',
-              onPressed: _busy ? null : () => _save(post: true),
-            ),
-          ),
         ],
       ),
     );
@@ -1604,10 +1605,14 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
   Widget build(BuildContext context) {
     final subtitle = _refDocNumber != null
         ? (widget.receiveFrom != null
-            ? 'Réception de $_refDocNumber'
-            : 'Depuis $_refDocNumber')
+            ? 'Réception de la commande $_refDocNumber'
+            : 'Créé depuis $_refDocNumber')
         : widget.existing?.number ??
-            (_docId != null ? 'Brouillon' : 'Nouveau document');
+            (_docId != null ? 'Brouillon enregistré' : 'Nouveau document — pas encore enregistré');
+    final editing = widget.existing != null;
+    final title = editing
+        ? 'Modifier : ${cfg.title.toLowerCase()}'
+        : (_newTitles[cfg.docType] ?? cfg.title);
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
@@ -1615,73 +1620,58 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
       },
       child: CallbackShortcuts(
         bindings: {
-          const SingleActivator(LogicalKeyboardKey.escape): _maybeLeave,
           const SingleActivator(LogicalKeyboardKey.keyS, control: true): () {
             if (!_busy) _save(post: false);
           },
         },
-        child: Scaffold(
-          backgroundColor: T.bg,
+        child: AppPage(
+          crumbs: [
+            Crumb(docModuleLabel(cfg.docType), _busy ? null : _maybeLeave),
+            Crumb(editing ? (widget.existing!.number ?? 'Brouillon') : title),
+          ],
+          title: title,
+          subtitle: Text(subtitle, style: T.bodyMuted),
+          onBack: _maybeLeave,
+          scroll: false,
+          maxWidth: _editorMaxWidth - 56,
+          actions: [
+            Builder(
+              builder: (btnCtx) => PageAction(
+                label: _attachments.isEmpty
+                    ? 'Pièces jointes'
+                    : 'Pièces jointes (${_attachments.length})',
+                icon: Icons.attach_file_rounded,
+                onPressed: _busy ? null : () => _attachmentsMenu(btnCtx),
+              ),
+            ),
+            PageAction(
+              label: 'Enregistrer le brouillon',
+              icon: Icons.save_outlined,
+              onPressed: _busy ? null : () => _save(post: false),
+            ),
+            PageAction(
+              label: _busy ? 'Validation…' : 'Valider',
+              icon: Icons.task_alt_rounded,
+              primary: true,
+              onPressed: _busy ? null : () => _save(post: true),
+            ),
+          ],
+          bottomBar: _totalsBar(),
           body: Column(
             children: [
-              // ---- Top bar ----
-              Container(
-                color: T.surface,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-                child: Row(
-                  children: [
-                    IconButton(
-                      tooltip: 'Retour (Échap)',
-                      onPressed: _busy ? null : _maybeLeave,
-                      icon: const Icon(Icons.arrow_back,
-                          size: 20, color: T.muted),
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(cfg.title, style: T.h2),
-                          Text(subtitle, style: T.monoSmall),
-                        ],
-                      ),
-                    ),
-                    Builder(
-                      builder: (btnCtx) => Tooltip(
-                        message: _attachments.isEmpty
-                            ? 'Pièces jointes'
-                            : '${_attachments.length} pièce(s) jointe(s)',
-                        child: TextButton.icon(
-                          onPressed:
-                              _busy ? null : () => _attachmentsMenu(btnCtx),
-                          icon: const Icon(Icons.attach_file_rounded,
-                              size: 17, color: T.muted),
-                          label: Text(
-                              _attachments.isEmpty
-                                  ? 'Joindre'
-                                  : '${_attachments.length}',
-                              style: T.small.copyWith(
-                                  color: T.muted,
-                                  fontWeight: FontWeight.w700)),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const Divider(),
               // ---- Header fields ----
               Padding(
-                padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
-                child: Column(children: [
-                  _headerFields(),
-                  _notesSection(),
-                ]),
+                padding: const EdgeInsets.only(top: 4),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _headerFields(),
+                      _notesSection(),
+                    ]),
               ),
               // ---- Add product ----
               Padding(
-                padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
+                padding: const EdgeInsets.only(top: 10),
                 child: Column(
                   children: [
                     Row(children: [
@@ -1703,22 +1693,27 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
                       ),
                       if (!cfg.isTransfer) ...[
                         const SizedBox(width: 8),
-                        SizedBox(
-                          height: 42,
-                          child: OutlinedButton.icon(
-                            style: OutlinedButton.styleFrom(
-                              side: const BorderSide(color: T.border),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius:
-                                      BorderRadius.circular(T.rInner)),
+                        Tooltip(
+                          message:
+                              'Service, transport, frais… sans produit ni stock',
+                          child: SizedBox(
+                            height: 44,
+                            child: OutlinedButton.icon(
+                              style: OutlinedButton.styleFrom(
+                                side: const BorderSide(color: T.border3),
+                                backgroundColor: T.surface,
+                                shape: RoundedRectangleBorder(
+                                    borderRadius:
+                                        BorderRadius.circular(T.rInner)),
+                              ),
+                              onPressed: _addFreeLine,
+                              icon: const Icon(Icons.add_rounded,
+                                  size: 18, color: T.ink),
+                              label: Text('Ligne libre',
+                                  style: T.body.copyWith(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w700)),
                             ),
-                            onPressed: _addFreeLine,
-                            icon: const Icon(Icons.add_rounded,
-                                size: 16, color: T.muted),
-                            label: Text('Ligne libre',
-                                style: T.small.copyWith(
-                                    color: T.ink,
-                                    fontWeight: FontWeight.w600)),
                           ),
                         ),
                       ],
@@ -1764,7 +1759,7 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
               // ---- Lines ----
               Expanded(
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+                  padding: const EdgeInsets.fromLTRB(0, 12, 0, 12),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -1819,14 +1814,45 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
                   ),
                 ),
               ),
-              // ---- Sticky totals + actions ----
-              _totalsBar(),
             ],
           ),
         ),
       ),
     );
   }
+}
+
+/// Width of the editor frame (the totals bar follows it).
+const double _editorMaxWidth = 1456;
+
+/// Title of a new document per type (« Ventes / Nouvelle facture »).
+const _newTitles = {
+  'SALE_INVOICE': 'Nouvelle facture',
+  'QUOTE': 'Nouveau devis',
+  'DELIVERY_NOTE': 'Nouveau bon de livraison',
+  'SALE_CREDIT_NOTE': 'Nouvel avoir client',
+  'PURCHASE_ORDER': 'Nouveau bon de commande',
+  'PURCHASE_RECEIPT': 'Nouveau bon de réception',
+  'PURCHASE_INVOICE': 'Nouvelle facture fournisseur',
+  'PURCHASE_CREDIT_NOTE': 'Nouvel avoir fournisseur',
+  'STOCK_TRANSFER': 'Nouveau transfert de stock',
+};
+
+/// Column widths of the line table (header and rows share them).
+abstract final class _W {
+  static const qty = 96.0;
+  static const price = 136.0;
+  static const disc = 90.0;
+  static const vat = 80.0;
+  static const total = 130.0;
+  static const del = 40.0;
+  static const rUnit = 110.0;
+  static const rQty = 90.0;
+  static const rFree = 84.0;
+  static const rPrice = 130.0;
+  static const rDisc = 90.0;
+  static const rVat = 76.0;
+  static const rTotal = 124.0;
 }
 
 /// Human file size (« 1,2 Mo »).
@@ -1856,64 +1882,71 @@ Future<void> openAttachment(BuildContext context, ApiClient api, String docId,
   }
 }
 
-/// Labelled box of the header row (fixed height), with an optional error
-/// shown under it and an outlined red border.
+/// Header field laid out plainly: the label ABOVE (red « * » when required),
+/// a 44 px box, the error under it (red border too).
 class _HeaderField extends StatelessWidget {
-  const _HeaderField(
-      {required this.label, required this.child, this.error, this.flex = 1});
+  const _HeaderField({
+    required this.label,
+    required this.child,
+    this.error,
+    this.required = false,
+    this.width,
+    this.height = 44,
+    this.onTap,
+  });
   final String label;
   final Widget child;
   final String? error;
-  final int flex;
-
-  @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      flex: flex,
-      child: _HeaderFieldBox(label: label, error: error, child: child),
-    );
-  }
-}
-
-class _HeaderFieldBox extends StatelessWidget {
-  const _HeaderFieldBox(
-      {required this.label, required this.child, this.error, this.height = 54});
-  final String label;
-  final Widget child;
-  final String? error;
+  final bool required;
+  final double? width;
   final double height;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
+    final box = Container(
+      height: height,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      alignment: AlignmentDirectional.centerStart,
+      decoration: BoxDecoration(
+        color: T.surface,
+        borderRadius: BorderRadius.circular(T.rInner),
+        border: Border.all(
+            color: error != null ? T.danger : T.border3,
+            width: error != null ? 1.4 : 1),
+      ),
+      child: child,
+    );
+    final col = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Container(
-          height: height,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-          decoration: BoxDecoration(
-            color: T.surface,
-            borderRadius: BorderRadius.circular(T.rInner),
-            border: Border.all(
-                color: error != null ? T.danger : T.border,
-                width: error != null ? 1.4 : 1),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              MicroLabel(label),
-              const SizedBox(height: 3),
-              Expanded(
-                  child: Align(
-                      alignment: AlignmentDirectional.centerStart,
-                      child: child)),
-            ],
-          ),
+        Text.rich(
+          TextSpan(children: [
+            TextSpan(text: label, style: T.label),
+            if (required)
+              const TextSpan(
+                  text: ' *',
+                  style: TextStyle(
+                      fontFamily: T.sans,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      color: T.danger)),
+          ]),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         ),
+        const SizedBox(height: 5),
+        onTap == null
+            ? box
+            : InkWell(
+                onTap: onTap,
+                borderRadius: BorderRadius.circular(T.rInner),
+                child: box),
         FieldError(error),
       ],
     );
+    return width == null ? col : SizedBox(width: width, child: col);
   }
 }
 
@@ -1931,7 +1964,7 @@ class _VatDropdown extends StatelessWidget {
         value: line.vatRate,
         isDense: true,
         style: T.monoSmall.copyWith(color: T.ink),
-        icon: const Icon(Icons.expand_more, size: 13, color: T.faint),
+        icon: const Icon(Icons.expand_more, size: 16, color: T.faint),
         items: [
           for (final r in rates)
             DropdownMenuItem(value: r, child: Text('${r ~/ 100}%')),
@@ -1975,28 +2008,28 @@ class _LineRow extends StatelessWidget {
           ]),
         ),
         SizedBox(
-            width: 86,
+            width: _W.qty,
             child: _CellField(controller: line.qtyCtrl, onChanged: onChanged)),
         SizedBox(
-            width: 110,
+            width: _W.price,
             child:
                 _CellField(controller: line.priceCtrl, onChanged: onChanged)),
         SizedBox(
-            width: 70,
+            width: _W.disc,
             child: _CellField(
                 controller: line.discCtrl, onChanged: onChanged, hint: '0')),
         SizedBox(
-            width: 70, child: _VatDropdown(line: line, onChanged: onChanged)),
+            width: _W.vat, child: _VatDropdown(line: line, onChanged: onChanged)),
         SizedBox(
-          width: 110,
+          width: _W.total,
           child: Text(fmtDA(line.lineTTC),
               textAlign: TextAlign.end, style: T.monoBody),
         ),
         SizedBox(
-          width: 34,
+          width: _W.del,
           child: IconButton(
             onPressed: onRemove,
-            icon: const Icon(Icons.close, size: 15, color: T.faint),
+            icon: const Icon(Icons.close, size: 18, color: T.faint),
             tooltip: 'Supprimer la ligne',
           ),
         ),
@@ -2025,13 +2058,13 @@ class _TransferLineRow extends StatelessWidget {
               style: T.body, maxLines: 1, overflow: TextOverflow.ellipsis),
         ),
         SizedBox(
-            width: 120,
+            width: 130,
             child: _CellField(controller: line.qtyCtrl, onChanged: onChanged)),
         SizedBox(
-          width: 34,
+          width: _W.del,
           child: IconButton(
             onPressed: onRemove,
-            icon: const Icon(Icons.close, size: 15, color: T.faint),
+            icon: const Icon(Icons.close, size: 18, color: T.faint),
             tooltip: 'Supprimer la ligne',
           ),
         ),
@@ -2079,7 +2112,7 @@ class _ReceptionLineRow extends StatelessWidget {
                 style: T.body, maxLines: 1, overflow: TextOverflow.ellipsis),
           ),
           SizedBox(
-            width: 92,
+            width: _W.rUnit,
             child: p != null && p.packagings.isNotEmpty
                 ? DropdownButtonHideUnderline(
                     child: DropdownButton<Packaging?>(
@@ -2105,15 +2138,15 @@ class _ReceptionLineRow extends StatelessWidget {
                 : Text('Pièce', style: T.monoSmall.copyWith(color: T.faint)),
           ),
           SizedBox(
-              width: 70,
+              width: _W.rQty,
               child:
                   _CellField(controller: line.qtyCtrl, onChanged: onChanged)),
           SizedBox(
-              width: 70,
+              width: _W.rFree,
               child: _CellField(
                   controller: line.freeCtrl, onChanged: onChanged, hint: '0')),
           SizedBox(
-            width: 100,
+            width: _W.rPrice,
             child: Row(children: [
               Expanded(
                   child: _CellField(
@@ -2121,7 +2154,7 @@ class _ReceptionLineRow extends StatelessWidget {
               if (variance)
                 Tooltip(
                   message:
-                      'Écart > 15 % vs dernier prix payé (${fmtDA(lastPrice ?? 0)})',
+                      'Différence de plus de 15 % avec le dernier prix payé (${fmtDA(lastPrice ?? 0)})',
                   child: const Padding(
                     padding: EdgeInsetsDirectional.only(end: 6),
                     child: Icon(Icons.warning_amber_rounded,
@@ -2131,21 +2164,21 @@ class _ReceptionLineRow extends StatelessWidget {
             ]),
           ),
           SizedBox(
-              width: 62,
+              width: _W.rDisc,
               child: _CellField(
                   controller: line.discCtrl, onChanged: onChanged, hint: '0')),
           SizedBox(
-              width: 64, child: _VatDropdown(line: line, onChanged: onChanged)),
+              width: _W.rVat, child: _VatDropdown(line: line, onChanged: onChanged)),
           SizedBox(
-            width: 104,
+            width: _W.rTotal,
             child: Text(fmtDA(line.lineTTC),
                 textAlign: TextAlign.end, style: T.monoBody),
           ),
           SizedBox(
-            width: 34,
+            width: _W.del,
             child: IconButton(
               onPressed: onRemove,
-              icon: const Icon(Icons.close, size: 15, color: T.faint),
+              icon: const Icon(Icons.close, size: 18, color: T.faint),
               tooltip: 'Supprimer la ligne',
             ),
           ),
@@ -2155,10 +2188,10 @@ class _ReceptionLineRow extends StatelessWidget {
           const SizedBox(width: 12),
           // Lot
           SizedBox(
-            width: 140,
+            width: 150,
             child: Row(children: [
               Icon(Icons.qr_code_2_rounded,
-                  size: 13, color: needsLot ? T.warnDark : T.ghost),
+                  size: 16, color: needsLot ? T.warnDark : T.faint),
               const SizedBox(width: 4),
               Expanded(
                 child: _CellField(
@@ -2168,12 +2201,12 @@ class _ReceptionLineRow extends StatelessWidget {
               ),
             ]),
           ),
-          // DLC
+          // Date de péremption
           InkWell(
             onTap: onPickExpiry,
             child: Container(
-              height: 30,
-              padding: const EdgeInsets.symmetric(horizontal: 9),
+              height: 36,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
               margin: const EdgeInsetsDirectional.only(end: 8),
               decoration: BoxDecoration(
                 color: T.bg,
@@ -2186,31 +2219,34 @@ class _ReceptionLineRow extends StatelessWidget {
                         : T.border2),
               ),
               child: Row(children: [
-                const Icon(Icons.event_outlined, size: 13, color: T.faint),
-                const SizedBox(width: 5),
+                const Icon(Icons.event_outlined, size: 16, color: T.faint),
+                const SizedBox(width: 6),
                 Text(
                     line.expiryDate == null || line.expiryDate!.isEmpty
-                        ? (needsExpiry ? 'DLC *' : 'DLC')
-                        : line.expiryDate!,
-                    style: T.monoSmall.copyWith(
-                        color: line.expiryDate == null ? T.ghost : T.ink)),
+                        ? (needsExpiry ? 'Péremption *' : 'Péremption')
+                        : 'Péremption ${line.expiryDate!}',
+                    style: T.small.copyWith(
+                        color: line.expiryDate == null ? T.muted : T.ink)),
               ]),
             ),
           ),
-          if (line.baseUnits > 0 && line.effectiveCost != null) ...[
-            MintChip(
-                '${fmtQty(line.baseUnits)} u. à ${fmtDA(margin.newCmup ?? line.effectiveCost!)}',
-                color: T.cream,
-                fg: T.faint),
-            const SizedBox(width: 8),
-          ],
+          if (line.baseUnits > 0 && line.effectiveCost != null)
+            Flexible(
+              child: Tooltip(
+                message: 'Unités qui entrent en stock et nouveau coût moyen',
+                child: MintChip(
+                    '${fmtQty(line.baseUnits)} unités · coût moyen ${fmtDA(margin.newCmup ?? line.effectiveCost!)}',
+                    color: T.cream,
+                    fg: T.muted),
+              ),
+            ),
           const Spacer(),
           // Prix de vente TTC — pré-rempli, jamais vide ; s'applique à TOUT le
           // stock de ce produit dans ce dépôt (logique un-seul-prix).
-          const MicroLabel('PV TTC'),
-          const SizedBox(width: 6),
+          const MicroLabel('Prix de vente TTC'),
+          const SizedBox(width: 8),
           SizedBox(
-              width: 96,
+              width: 110,
               child:
                   _CellField(controller: line.saleCtrl, onChanged: onChanged)),
           if (suggested != null && suggested != line.salePrice)
@@ -2222,24 +2258,24 @@ class _ReceptionLineRow extends StatelessWidget {
                   onChanged();
                 },
                 child: Container(
-                  height: 26,
+                  height: 32,
                   padding: const EdgeInsets.symmetric(horizontal: 8),
                   margin: const EdgeInsetsDirectional.only(end: 8),
                   decoration: BoxDecoration(
                     color: T.bg,
                     borderRadius: BorderRadius.circular(7),
-                    border: Border.all(color: T.border2),
+                    border: Border.all(color: T.border3),
                   ),
                   alignment: Alignment.center,
-                  child: Text('≈ ${fmtDA(suggested!)}',
-                      style: T.monoSmall.copyWith(color: T.ghost)),
+                  child: Text('Suggéré ${fmtDA(suggested!)}',
+                      style: T.monoSmall),
                 ),
               ),
             ),
           SizedBox(
-            width: 92,
+            width: 120,
             child: m == null
-                ? Text('—', style: T.monoSmall.copyWith(color: T.ghost))
+                ? Text('—', style: T.monoSmall)
                 : MintChip(
                     'Marge ${(m / 100).toStringAsFixed(1).replaceAll('.', ',')} %',
                     color: m < 0
@@ -2270,7 +2306,7 @@ class _CellField extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 32,
+      height: 38,
       margin: const EdgeInsetsDirectional.only(end: 8),
       decoration: BoxDecoration(
         color: T.bg,
@@ -2280,7 +2316,7 @@ class _CellField extends StatelessWidget {
       child: TextField(
         controller: controller,
         onChanged: (_) => onChanged(),
-        style: T.monoBody.copyWith(fontSize: 12.5),
+        style: T.monoBody.copyWith(fontSize: 14),
         textAlign: TextAlign.center,
         decoration: InputDecoration(
           isDense: true,

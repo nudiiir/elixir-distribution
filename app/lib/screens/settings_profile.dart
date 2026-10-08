@@ -143,7 +143,7 @@ class _DefaultsCardState extends State<DefaultsCard> {
           if (err == null)
             Padding(
               padding: const EdgeInsets.only(top: 4),
-              child: Text(help, style: T.small.copyWith(fontSize: 11)),
+              child: Text(help, style: T.small.copyWith(fontSize: 12.5)),
             ),
         ]),
       );

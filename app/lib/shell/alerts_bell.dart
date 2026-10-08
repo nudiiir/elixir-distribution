@@ -54,7 +54,7 @@ class AlertsBell extends StatelessWidget {
             ),
             const SizedBox(width: 6),
             Text(online ? 'Serveur connecté' : 'Serveur hors ligne',
-                style: T.small.copyWith(fontSize: 11)),
+                style: T.small.copyWith(fontSize: 12.5)),
           ]),
         ),
         if (items.isEmpty)
@@ -80,13 +80,13 @@ class AlertsBell extends StatelessWidget {
                 Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(a.title,
-                        style: T.body.copyWith(fontSize: 13, fontWeight: FontWeight.w600)),
+                        style: T.body.copyWith(fontSize: 14, fontWeight: FontWeight.w600)),
                     if (a.examples.isNotEmpty)
                       Text(
                         a.examples.join(' · ') + (a.count > a.examples.length ? ' …' : ''),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: T.small.copyWith(fontSize: 11.5),
+                        style: T.small.copyWith(fontSize: 13),
                       ),
                   ]),
                 ),
@@ -131,7 +131,7 @@ class AlertsBell extends StatelessWidget {
               child: Text('$count',
                   style: const TextStyle(
                       fontFamily: T.mono,
-                      fontSize: 9,
+                      fontSize: 11,
                       fontWeight: FontWeight.w700,
                       color: Colors.white)),
             ),

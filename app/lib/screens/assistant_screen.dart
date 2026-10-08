@@ -324,7 +324,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
                         Text(
                             'Posez une question sur votre stock, vos ventes\nou le fonctionnement du logiciel.',
                             textAlign: TextAlign.center,
-                            style: T.bodyMuted.copyWith(fontSize: 13.5)),
+                            style: T.bodyMuted.copyWith(fontSize: 14.5)),
                         const SizedBox(height: 24),
                         Wrap(
                           alignment: WrapAlignment.center,
@@ -353,7 +353,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
                                   child: Text(s,
                                       style: const TextStyle(
                                           fontFamily: T.sans,
-                                          fontSize: 12.5,
+                                          fontSize: 13.5,
                                           fontWeight: FontWeight.w600,
                                           color: T.muted)),
                                 ),
@@ -403,25 +403,30 @@ class _AssistantScreenState extends State<AssistantScreen> {
                       focusNode: _focus,
                       autofocus: true,
                       onSubmitted: _send,
-                      style: T.body.copyWith(fontSize: 14),
+                      style: T.body.copyWith(fontSize: 15),
                       decoration: InputDecoration(
                         border: InputBorder.none,
                         hintText: 'Écrivez votre question…',
                         hintStyle: T.bodyMuted
-                            .copyWith(color: T.ghost, fontSize: 14),
+                            .copyWith(color: T.ghost, fontSize: 15),
                       ),
                     ),
                   ),
-                  InkWell(
-                    onTap: () => _send(_ctrl.text),
-                    borderRadius: BorderRadius.circular(999),
-                    child: Container(
-                      width: 38,
-                      height: 38,
-                      decoration: const BoxDecoration(
-                          color: T.mint, shape: BoxShape.circle),
-                      child: const Icon(Icons.arrow_upward_rounded,
-                          size: 20, color: T.ink),
+                  SizedBox(
+                    height: 40,
+                    child: FilledButton.icon(
+                      onPressed: () => _send(_ctrl.text),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: T.mint,
+                        foregroundColor: T.ink,
+                        shape: const StadiumBorder(),
+                        textStyle: const TextStyle(
+                            fontFamily: T.sans,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700),
+                      ),
+                      icon: const Icon(Icons.arrow_upward_rounded, size: 18),
+                      label: const Text('Envoyer'),
                     ),
                   ),
                 ]),
@@ -434,7 +439,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
             padding: const EdgeInsets.only(bottom: 10),
             child: Text(
                 "L'assistant peut se tromper — vérifiez les informations importantes.",
-                style: T.small.copyWith(fontSize: 10.5, color: T.ghost)),
+                style: T.small),
           )
         else
           const SizedBox(height: 10),
@@ -457,11 +462,11 @@ class _AssistantScreenState extends State<AssistantScreen> {
               ),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
                 const Icon(Icons.add_comment_outlined,
-                    size: 14, color: T.mintDark),
+                    size: 16, color: T.mintDark),
                 const SizedBox(width: 6),
                 Text('Nouvelle conversation',
                     style: T.small.copyWith(
-                        fontSize: 11,
+                        fontSize: 13.5,
                         color: T.mintDark,
                         fontWeight: FontWeight.w700)),
               ]),
@@ -514,7 +519,7 @@ class _Bubble extends StatelessWidget {
                 Text(msg.text,
                     style: TextStyle(
                       fontFamily: T.sans,
-                      fontSize: 13.5,
+                      fontSize: 14.5,
                       height: 1.45,
                       fontWeight: FontWeight.w500,
                       color: msg.isUser ? Colors.white : T.ink,
@@ -543,7 +548,7 @@ class _Bubble extends StatelessWidget {
                                       const BoxConstraints(maxWidth: 260),
                                   child: Text(label,
                                       style: T.small.copyWith(
-                                          fontSize: 12, color: T.muted),
+                                          fontSize: 13, color: T.muted),
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis),
                                 ),
@@ -551,7 +556,7 @@ class _Bubble extends StatelessWidget {
                                 const Spacer(),
                                 Text(value,
                                     style: T.monoBody.copyWith(
-                                        fontSize: 12,
+                                        fontSize: 13,
                                         fontWeight: FontWeight.w600)),
                               ],
                             ),
@@ -578,7 +583,7 @@ const _toolLabels = {
   'list_documents': 'Lecture des documents…',
   'get_document_detail': 'Ouverture du document…',
   'get_customer_credits': 'Lecture des crédits clients…',
-  'search_partners': 'Recherche du partenaire…',
+  'search_partners': 'Recherche du client / fournisseur…',
   'get_caisse_state': 'État de la caisse…',
 };
 
@@ -643,7 +648,7 @@ class _TypingBubbleState extends State<_TypingBubble>
                   if (widget.tool.isNotEmpty) ...[
                     const SizedBox(width: 10),
                     Text(_toolLabels[widget.tool] ?? 'Consultation…',
-                        style: T.small.copyWith(fontSize: 11.5)),
+                        style: T.small.copyWith(fontSize: 13)),
                   ],
                 ],
               ),
@@ -806,7 +811,7 @@ class _Brain {
     final levels = await api.stockLevels();
     final total = levels.fold(0, (s, l) => s + l.valuation);
     return _Msg.bot('Votre stock actuel :', rows: [
-      ('Valeur totale (CUMP)', fmtDA(total)),
+      ('Valeur totale (coût moyen)', fmtDA(total)),
       ('Références', '${levels.length}'),
       ('En rupture', '${levels.where((l) => l.qtyMilli <= 0).length}'),
     ]);
@@ -859,7 +864,7 @@ class _Brain {
   Future<_Msg> _partnerBalance(String name) async {
     final partners = await api.partners(q: name, limit: 5);
     if (partners.isEmpty) {
-      return _Msg.bot('Aucun partenaire trouvé pour « $name ».');
+      return _Msg.bot('Aucun client ni fournisseur trouvé pour « $name ».');
     }
     final p = partners.first;
     final text = p.balance == 0
@@ -878,7 +883,7 @@ class _Brain {
       return _Msg.bot(
           'Pour créer une facture : ouvrez le module Ventes → « Nouvelle '
           'facture ». Ajoutez les produits (scanner ou recherche), choisissez '
-          'le client et le mode de règlement, puis « Valider » — le numéro '
+          'le client et le mode de paiement, puis « Valider » — le numéro '
           'légal est attribué automatiquement. En espèces, le timbre fiscal '
           'est calculé tout seul.');
     }
@@ -886,8 +891,8 @@ class _Brain {
       return _Msg.bot(
           'Pour ajouter un produit : module Produits → « Nouveau produit ». '
           'Renseignez la désignation, le code-barres, la TVA et les prix. '
-          'Le stock entre ensuite via une réception fournisseur (module '
-          'Achats).');
+          'Le stock entre ensuite via un bon de réception (module '
+          'Achats → « Nouveau bon de réception »).');
     }
     if (q.contains('timbre')) {
       return _Msg.bot(
@@ -901,7 +906,8 @@ class _Brain {
       return _Msg.bot(
           'Pour vendre à crédit : à la Caisse, choisissez le client (« Client '
           'de passage » → sélectionnez-le), puis le mode « Crédit ». Le '
-          'montant s’ajoute à son solde, visible dans Partenaires, où vous '
+          'montant s’ajoute à son solde, visible dans Clients et fournisseurs, où vous '
+
           'pouvez aussi encaisser un remboursement.');
     }
     return _Msg.bot(

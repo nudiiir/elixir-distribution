@@ -22,6 +22,7 @@ import '../screens/settings_screen.dart';
 import '../screens/stock_screen.dart';
 import '../screens/webstore_screen.dart';
 import '../theme/tokens.dart';
+import '../util/commands.dart';
 import '../util/config.dart';
 import '../util/features.dart';
 import '../util/prefs.dart';
@@ -31,15 +32,14 @@ import '../util/updater.dart';
 import '../widgets/doc_editor.dart';
 import '../widgets/doc_list.dart' show showDocDetailDialog;
 import '../widgets/fiche_produit.dart' show showFicheProduit;
-import '../screens/product_page.dart' show openProductPage;
-import '../screens/stock/inventory_page.dart' show openInventoryPage;
+import '../screens/partners/partner_pages.dart' show openPartnerDetail;
 import 'alerts_bell.dart';
 import 'global_search.dart';
 import '../widgets/ui.dart';
 
 class _Module {
   const _Module(this.key, this.icon, this.title, this.group,
-      {String? perm, this.feature})
+      {String? perm, this.feature, this.subs = const []})
       : perm = perm ?? key;
   final String key; // which screen to build
   final String perm; // permission that reveals it (defaults to key)
@@ -47,7 +47,48 @@ class _Module {
   final String title;
   final String group; // sidebar section
   final String? feature; // Profil du magasin switch that hides it
+
+  /// Sub-items: (label, command sent to the screen, optional feature).
+  final List<(String, String, String?)> subs;
 }
+
+const _productSubs = [
+  ('Liste des produits', 'list', null),
+  ('Nouveau produit', 'new', null),
+  ('Catégories', 'categories', null),
+  ('Étiquettes', 'labels', null),
+  ('Importer des produits', 'import', null),
+];
+const _stockSubs = [
+  ('Niveaux de stock', 'tab:levels', null),
+  ('Mouvements', 'tab:ledger', null),
+  ('Inventaire', 'inventory', null),
+  ('Transferts', 'tab:transfers', null),
+  ('À commander', 'tab:reorder', null),
+  ('Dates de péremption', 'tab:lots', 'feature_lots'),
+  ('Ajustements', 'tab:adjustments', null),
+];
+const _salesSubs = [
+  ('Toutes les ventes', 'list', null),
+  ('Nouvelle facture', 'new:SALE_INVOICE', null),
+  ('Tickets de caisse', 'type:SALE_TICKET', null),
+  ('Devis', 'type:QUOTE', null),
+  ('Bons de livraison', 'type:DELIVERY_NOTE', null),
+  ('Avoirs clients', 'type:SALE_CREDIT_NOTE', null),
+];
+const _purchaseSubs = [
+  ('Tous les achats', 'list', null),
+  ('Nouveau bon de réception', 'new:PURCHASE_RECEIPT', null),
+  ('Bons de commande', 'type:PURCHASE_ORDER', null),
+  ('Factures fournisseurs', 'type:PURCHASE_INVOICE', null),
+  ('Avoirs fournisseurs', 'type:PURCHASE_CREDIT_NOTE', null),
+];
+const _partnerSubs = [
+  ('Clients', 'kind:customer', null),
+  ('Fournisseurs', 'kind:supplier', null),
+  ('Nouveau client', 'new:customer', null),
+  ('Nouveau fournisseur', 'new:supplier', null),
+];
 
 /// Sidebar order, in six groups. Modules not ready yet (Livraison) are not
 /// listed at all rather than shown greyed out.
@@ -57,15 +98,18 @@ const _allModules = [
       perm: 'reports'),
   _Module('assistant', Icons.auto_awesome_outlined, 'Assistant', 'Accueil'),
   _Module('pos', Icons.point_of_sale_rounded, 'Caisse', 'Vente'),
-  _Module('sales', Icons.receipt_long_outlined, 'Ventes', 'Vente'),
+  _Module('sales', Icons.receipt_long_outlined, 'Ventes', 'Vente', subs: _salesSubs),
   _Module('webstore', Icons.storefront_outlined, 'Boutique en ligne', 'Vente',
       feature: 'feature_webstore'),
-  _Module('purchases', Icons.local_shipping_outlined, 'Achats', 'Achat'),
+  _Module('purchases', Icons.local_shipping_outlined, 'Achats', 'Achat',
+      subs: _purchaseSubs),
   _Module('inbox', Icons.document_scanner_outlined, 'Factures scannées',
       'Achat', perm: 'purchases'),
-  _Module('products', Icons.category_outlined, 'Produits', 'Stock'),
-  _Module('stock', Icons.inventory_2_outlined, 'Stock', 'Stock'),
-  _Module('partners', Icons.people_alt_outlined, 'Clients et fournisseurs', 'Tiers'),
+  _Module('products', Icons.category_outlined, 'Produits', 'Stock',
+      subs: _productSubs),
+  _Module('stock', Icons.inventory_2_outlined, 'Stock', 'Stock', subs: _stockSubs),
+  _Module('partners', Icons.people_alt_outlined, 'Clients et fournisseurs', 'Tiers',
+      subs: _partnerSubs),
   _Module('sav', Icons.build_outlined, 'Réparations', 'Tiers',
       feature: 'feature_repairs'),
   _Module('reports', Icons.query_stats_rounded, 'Rapports', 'Pilotage'),
@@ -115,7 +159,7 @@ class _AppShellState extends State<AppShell> {
       m.feature == null || Features.instance.flag(m.feature!);
 
   final _searchFocus = FocusNode(debugLabel: 'global-search');
-  final _newMenuKey = GlobalKey<PopupMenuButtonState<String>>();
+  final _newMenuKey = GlobalKey<PopupMenuButtonState<int>>();
   List<AlertItem> _alerts = const [];
   Timer? _alertsTimer;
 
@@ -300,12 +344,43 @@ class _AppShellState extends State<AppShell> {
     } catch (_) {}
   }
 
-  void goTo(String key) {
+  /// Each module has its own navigator: detail / edit pages open INSIDE the
+  /// content area, so the menu and the top bar stay visible.
+  late final Map<String, GlobalKey<NavigatorState>> _navKeys = {
+    for (final m in _visible) m.key: GlobalKey<NavigatorState>(debugLabel: 'nav-${m.key}'),
+  };
+
+  /// One command channel per module (sidebar sub-items, « + Nouveau »…).
+  late final Map<String, ScreenCommand> _commands = {
+    for (final m in _visible) m.key: ScreenCommand(),
+  };
+
+  /// Last sub-item used per module, to highlight it in the menu.
+  final Map<String, String> _activeSub = {};
+
+  /// Opens a module (back on its list page) and optionally sends it a
+  /// command such as `new` or `tab:ledger`.
+  void goTo(String key, {String? command}) {
     final i = _visible.indexWhere((m) => m.key == key);
-    if (i >= 0 && _shown(_visible[i])) {
-      setState(() => _index = i);
-      _beat();
-    }
+    if (i < 0 || !_shown(_visible[i])) return;
+    setState(() {
+      _index = i;
+      if (command != null) {
+        _activeSub[key] = command;
+      } else {
+        _activeSub.remove(key);
+      }
+    });
+    _navKeys[key]?.currentState?.popUntil((r) => r.isFirst);
+    if (command != null) _commands[key]?.send(command);
+    _beat();
+  }
+
+  /// Pushes a page inside a module's own navigator (after switching to it).
+  Future<V?> _pushIn<V>(String key, Route<V> route) async {
+    goTo(key);
+    await Future<void>.delayed(Duration.zero);
+    return _navKeys[key]?.currentState?.push(route);
   }
 
   bool _canOpen(String key) =>
@@ -318,21 +393,56 @@ class _AppShellState extends State<AppShell> {
     _globalSearch.clear();
   }
 
-  void _openHit(SearchHit h) {
+  /// « Bien démarrer » checklist buttons → the module, on the right task.
+  void _openFromChecklist(String key) => switch (key) {
+        'products' => goTo('products', command: 'new'),
+        'partners' => goTo('partners', command: 'new:supplier'),
+        'purchases' => goTo('purchases', command: 'new:PURCHASE_RECEIPT'),
+        _ => goTo(key),
+      };
+
+  /// Context of a module's navigator, so pages open inside that module.
+  BuildContext? _moduleContext(String key) => _navKeys[key]?.currentContext;
+
+  Future<void> _openHit(SearchHit h) async {
     switch (h.kind) {
       case 'product':
-        showFicheProduit(context, widget.api, h.product!.id,
-            canCost: user.can('view_cost'));
+        goTo('products');
+        await Future<void>.delayed(Duration.zero);
+        final c = _moduleContext('products');
+        if (c != null && c.mounted) {
+          showFicheProduit(c, widget.api, h.product!.id, canCost: user.can('view_cost'));
+        }
       case 'partner':
-        goTo('partners');
+        goTo('partners',
+            command: h.partner!.kind == 'supplier' ? 'kind:supplier' : 'kind:customer');
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        final c = _moduleContext('partners');
+        if (c != null && c.mounted) openPartnerDetail(c, widget.api, h.partner!);
       default:
-        showDocDetailDialog(context, widget.api, h.doc!.id);
+        final d = h.doc!;
+        final module = d.docType.startsWith('PURCHASE')
+            ? 'purchases'
+            : (d.docType.startsWith('STOCK') || d.docType == 'INVENTORY_COUNT')
+                ? 'stock'
+                : 'sales';
+        goTo(_canOpen(module) ? module : 'sales');
+        await Future<void>.delayed(Duration.zero);
+        final c = _moduleContext(_canOpen(module) ? module : 'sales');
+        if (c != null && c.mounted) showDocDetailDialog(c, widget.api, d.id);
     }
   }
 
   Future<void> _openEditor(DocEditorConfig config) async {
-    await Navigator.of(context).push(MaterialPageRoute(
-        builder: (_) => DocEditorScreen(api: widget.api, config: config)));
+    final module = config.docType.startsWith('PURCHASE')
+        ? 'purchases'
+        : config.docType.startsWith('STOCK')
+            ? 'stock'
+            : 'sales';
+    await _pushIn(
+        _canOpen(module) ? module : _visible[_index].key,
+        MaterialPageRoute(
+            builder: (_) => DocEditorScreen(api: widget.api, config: config)));
   }
 
   /// « + Nouveau » : the documents people create most, from any screen.
@@ -341,55 +451,33 @@ class _AppShellState extends State<AppShell> {
           ('Vente au comptoir', Icons.point_of_sale_rounded, 'F2', () => goTo('pos')),
         if (_canOpen('sales')) ...[
           ('Facture de vente', Icons.receipt_long_outlined, '',
-              () => _openEditor(saleInvoiceConfig)),
+              () => goTo('sales', command: 'new:SALE_INVOICE')),
           ('Devis', Icons.request_quote_outlined, '', () => _openEditor(quoteConfig)),
           ('Bon de livraison', Icons.local_shipping_outlined, '',
               () => _openEditor(deliveryNoteConfig)),
         ],
         if (_canOpen('purchases')) ...[
-          ('Réception fournisseur', Icons.move_to_inbox_outlined, '',
-              () => _openEditor(purchaseReceiptConfig)),
+          ('Bon de réception', Icons.move_to_inbox_outlined, '',
+              () => goTo('purchases', command: 'new:PURCHASE_RECEIPT')),
           ('Bon de commande', Icons.shopping_cart_checkout_outlined, '',
               () => _openEditor(purchaseOrderConfig)),
         ],
         if (_canOpen('stock')) ...[
           ('Transfert de stock', Icons.swap_horiz_rounded, '',
               () => _openEditor(stockTransferConfig)),
-          ('Inventaire', Icons.fact_check_outlined, '', _newInventory),
+          ('Inventaire', Icons.fact_check_outlined, '',
+              () => goTo('stock', command: 'inventory')),
         ],
         if (_canOpen('products'))
           ('Produit', Icons.category_outlined, '',
-              () => openProductPage(context,
-                  api: widget.api, showCost: user.can('view_cost'))),
+              () => goTo('products', command: 'new')),
         if (_canOpen('partners')) ...[
           ('Client', Icons.person_add_alt_outlined, '',
-              () => _newPartner('customer')),
+              () => goTo('partners', command: 'new:customer')),
           ('Fournisseur', Icons.store_mall_directory_outlined, '',
-              () => _newPartner('supplier')),
+              () => goTo('partners', command: 'new:supplier')),
         ],
       ];
-
-  Future<void> _newInventory() async {
-    try {
-      final whs = await widget.api.warehouses();
-      if (!mounted) return;
-      await openInventoryPage(context,
-          api: widget.api, warehouses: whs, viewCost: user.can('view_cost'));
-    } on ApiException catch (e) {
-      if (mounted) showToast(context, e.message, kind: ToastKind.error);
-    }
-  }
-
-  Future<void> _newPartner(String kind) async {
-    final p = await showDialog<Partner>(
-      context: context,
-      builder: (_) => PartnerQuickCreateDialog(api: widget.api, kind: kind),
-    );
-    if (p != null && mounted) {
-      showToast(context, '${p.name} ajouté.',
-          actionLabel: 'Ouvrir', onAction: () => goTo('partners'));
-    }
-  }
 
   Future<void> _logout() async {
     CaisseSession? open;
@@ -420,6 +508,7 @@ class _AppShellState extends State<AppShell> {
         'dashboard' => AnalyticsDashboardScreen(
             api: widget.api,
             session: widget.session,
+            onOpenModule: _openFromChecklist,
             onEdit: (r) {
               _explorerRequest.value = ExplorerRequest(report: r);
               goTo('explorer');
@@ -439,15 +528,18 @@ class _AppShellState extends State<AppShell> {
             user: user,
             cashierName:
                 user.fullName.isEmpty ? user.username : user.fullName),
-        'sales' => SalesScreen(api: widget.api),
-        'purchases' => PurchasesScreen(api: widget.api),
+        'sales' => SalesScreen(api: widget.api, command: _commands['sales']),
+        'purchases' =>
+            PurchasesScreen(api: widget.api, command: _commands['purchases']),
         'inbox' => InboxScreen(api: widget.api),
-        'stock' => StockScreen(api: widget.api, session: widget.session),
+        'stock' => StockScreen(
+            api: widget.api, session: widget.session, command: _commands['stock']),
         'products' => ProductsScreen(
             api: widget.api,
             session: widget.session,
-            searchRequest: _productsQuery),
-        'partners' => PartnersScreen(api: widget.api),
+            searchRequest: _productsQuery,
+            command: _commands['products']),
+        'partners' => PartnersScreen(api: widget.api, command: _commands['partners']),
         'sav' => SavScreen(api: widget.api),
         'webstore' => WebstoreScreen(api: widget.api),
         'reports' => ReportsScreen(api: widget.api, session: widget.session),
@@ -517,7 +609,7 @@ class _AppShellState extends State<AppShell> {
                                     style: T.body.copyWith(fontSize: 13))),
                             if (entries[i].$3.isNotEmpty)
                               Text(entries[i].$3,
-                                  style: T.label.copyWith(fontSize: 9.5)),
+                                  style: T.label.copyWith(fontSize: 12)),
                           ]),
                         ),
                     ],
@@ -534,7 +626,7 @@ class _AppShellState extends State<AppShell> {
                         Text('Nouveau',
                             style: TextStyle(
                                 fontFamily: T.sans,
-                                fontSize: 13,
+                                fontSize: 14,
                                 fontWeight: FontWeight.w700,
                                 color: Colors.white)),
                       ]),
@@ -583,7 +675,10 @@ class _AppShellState extends State<AppShell> {
                   index: _index,
                   collapsed: _collapsed,
                   showHelp: user.can('assistant'),
-                  onSelect: (i) => setState(() => _index = i),
+                  activeSub: _activeSub,
+                  onSelect: (i) => goTo(_visible[i].key,
+                      command: _visible[i].subs.isEmpty ? null : _visible[i].subs.first.$2),
+                  onSub: (i, command) => goTo(_visible[i].key, command: command),
                   onAssistant: () => goTo('assistant'),
                 ),
                 Expanded(
@@ -591,7 +686,14 @@ class _AppShellState extends State<AppShell> {
                     children: [
                       IndexedStack(
                         index: _index,
-                        children: [for (final m in _visible) _screenFor(m)],
+                        children: [
+                          for (final m in _visible)
+                            Navigator(
+                              key: _navKeys[m.key],
+                              onGenerateRoute: (_) => MaterialPageRoute(
+                                  builder: (_) => _screenFor(m)),
+                            ),
+                        ],
                       ),
                       PositionedDirectional(
                         end: 0,
@@ -666,7 +768,7 @@ class _TopBar extends StatelessWidget {
               const Text('ELIXIR',
                   style: TextStyle(
                       fontFamily: T.sans,
-                      fontSize: 13,
+                      fontSize: 14,
                       fontWeight: FontWeight.w800,
                       letterSpacing: 2.4,
                       color: T.ink)),
@@ -740,11 +842,11 @@ class _TopBar extends StatelessWidget {
                       user.fullName.isEmpty ? user.username : user.fullName,
                       style: const TextStyle(
                           fontFamily: T.sans,
-                          fontSize: 13,
+                          fontSize: 14,
                           fontWeight: FontWeight.w700,
                           color: T.ink)),
                   Text(user.roleLabel,
-                      style: T.small.copyWith(fontSize: 11)),
+                      style: T.small.copyWith(fontSize: 12.5)),
                 ],
               ),
               const SizedBox(width: 4),
@@ -835,7 +937,9 @@ class _Sidebar extends StatefulWidget {
     required this.index,
     required this.collapsed,
     required this.showHelp,
+    required this.activeSub,
     required this.onSelect,
+    required this.onSub,
     required this.onAssistant,
   });
   final List<_Module> modules;
@@ -843,7 +947,9 @@ class _Sidebar extends StatefulWidget {
   final int index;
   final bool collapsed;
   final bool showHelp;
+  final Map<String, String> activeSub;
   final ValueChanged<int> onSelect;
+  final void Function(int index, String command) onSub;
   final VoidCallback onAssistant;
 
   @override
@@ -859,14 +965,61 @@ class _SidebarState extends State<_Sidebar> {
     UiPrefs.instance.set('shell', 'folded_groups', _folded.toList());
   }
 
+  /// The module row, followed (when it is the open module) by its tasks.
   Widget _item(int i) {
+    final item = widget.modules[i];
+    final selected = i == widget.index;
+    final subs = [
+      for (final s in item.subs)
+        if (s.$3 == null || Features.instance.flag(s.$3!)) s,
+    ];
+    if (!selected || widget.collapsed || subs.isEmpty) return _moduleRow(i);
+    final active = widget.activeSub[item.key] ?? subs.first.$2;
+    return Column(children: [
+      _moduleRow(i),
+      for (final s in subs)
+        InkWell(
+          onTap: () => widget.onSub(i, s.$2),
+          child: Container(
+            height: 36,
+            padding: const EdgeInsetsDirectional.only(start: 46, end: 10),
+            alignment: AlignmentDirectional.centerStart,
+            child: Row(children: [
+              Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  color: active == s.$2 ? T.mint : T.border3,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(s.$1,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontFamily: T.sans,
+                      fontSize: 13.5,
+                      fontWeight: active == s.$2 ? FontWeight.w700 : FontWeight.w500,
+                      color: active == s.$2 ? T.ink : T.muted,
+                    )),
+              ),
+            ]),
+          ),
+        ),
+      const SizedBox(height: 4),
+    ]);
+  }
+
+  Widget _moduleRow(int i) {
     final item = widget.modules[i];
     final selected = i == widget.index;
     final color = selected ? T.mintDeep : T.muted;
     return InkWell(
       onTap: () => widget.onSelect(i),
       child: Container(
-        height: 40,
+        height: 42,
         color: selected ? T.mintTint : Colors.transparent,
         child: Row(children: [
           Container(width: 3, color: selected ? T.mint : Colors.transparent),
@@ -887,7 +1040,7 @@ class _SidebarState extends State<_Sidebar> {
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontFamily: T.sans,
-                          fontSize: 13,
+                          fontSize: 14,
                           fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
                           color: color,
                         ),
@@ -967,13 +1120,13 @@ class _SidebarState extends State<_Sidebar> {
                   child: Text("Besoin d'aide ?",
                       style: TextStyle(
                           fontFamily: T.sans,
-                          fontSize: 12.5,
+                          fontSize: 13.5,
                           fontWeight: FontWeight.w800,
                           color: T.ink)),
                 ),
                 TextButton(
                   onPressed: widget.onAssistant,
-                  child: const Text('Assistant', style: TextStyle(fontSize: 12)),
+                  child: const Text('Assistant', style: TextStyle(fontSize: 13)),
                 ),
               ]),
             ),

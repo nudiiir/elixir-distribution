@@ -154,7 +154,7 @@ class Bars extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   Text(data[i].$1,
-                      style: T.monoSmall.copyWith(fontSize: 9.5),
+                      style: T.monoSmall.copyWith(fontSize: 12),
                       maxLines: 1,
                       overflow: TextOverflow.clip),
                 ],

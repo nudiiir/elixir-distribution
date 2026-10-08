@@ -133,7 +133,7 @@ class FilterPill extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(999),
         child: Container(
-          height: 32,
+          height: 36,
           padding: const EdgeInsets.symmetric(horizontal: 12),
           decoration: BoxDecoration(
             color: active ? T.ink : T.surface,
@@ -147,7 +147,7 @@ class FilterPill extends StatelessWidget {
             ],
             Text(label,
                 style: T.small.copyWith(
-                    fontSize: 12.5,
+                    fontSize: 13.5,
                     fontWeight: FontWeight.w600,
                     color: active ? Colors.white : T.ink)),
             if (count != null && count! > 0) ...[
@@ -160,7 +160,7 @@ class FilterPill extends StatelessWidget {
                 ),
                 child: Text('$count',
                     style: T.label.copyWith(
-                        fontSize: 9.5, color: active ? Colors.white : T.muted)),
+                        fontSize: 12, color: active ? Colors.white : T.muted)),
               ),
             ],
           ]),
@@ -216,7 +216,7 @@ class ListToolbar extends StatefulWidget {
 }
 
 class _ListToolbarState extends State<ListToolbar> {
-  late bool _open = widget.initiallyOpen;
+
 
   @override
   Widget build(BuildContext context) {
@@ -240,36 +240,23 @@ class _ListToolbarState extends State<ListToolbar> {
             child: Row(children: widget.quickFilters),
           ),
         ),
-        if (widget.panel != null)
-          Padding(
-            padding: const EdgeInsetsDirectional.only(start: 6),
-            child: FilterPill(
-              label: 'Filtres',
-              icon: Icons.tune_rounded,
-              active: _open,
-              count: widget.active.length,
-              onTap: () => setState(() => _open = !_open),
-            ),
-          ),
         ...widget.trailing,
       ]),
-      AnimatedSize(
-        duration: const Duration(milliseconds: 160),
-        alignment: Alignment.topCenter,
-        child: _open && widget.panel != null
-            ? Padding(
-                padding: const EdgeInsets.only(top: 10),
-                child: Card14(child: widget.panel!),
-              )
-            : const SizedBox(width: double.infinity),
-      ),
+      // The filters are ALWAYS visible, one row of labelled dropdowns — never
+      // hidden behind a button.
+      if (widget.panel != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 12),
+          child: widget.panel!,
+        ),
       if (widget.active.isNotEmpty)
         Padding(
-          padding: const EdgeInsets.only(top: 8),
-          child: Wrap(spacing: 6, runSpacing: 6, children: [
+          padding: const EdgeInsets.only(top: 10),
+          child: Wrap(spacing: 6, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+            Text('Filtres actifs :', style: T.small.copyWith(color: T.muted)),
             for (final f in widget.active)
               InputChip(
-                label: Text(f.label, style: T.small.copyWith(color: T.ink, fontSize: 12)),
+                label: Text(f.label, style: T.small.copyWith(color: T.ink, fontSize: 13)),
                 onDeleted: f.onRemove,
                 deleteIconColor: T.muted,
                 backgroundColor: T.mintTint,
@@ -280,7 +267,7 @@ class _ListToolbarState extends State<ListToolbar> {
             if (widget.onClearAll != null && widget.active.length > 1)
               TextButton(
                 onPressed: widget.onClearAll,
-                child: const Text('Tout effacer', style: TextStyle(fontSize: 12)),
+                child: const Text('Effacer les filtres', style: TextStyle(fontSize: 13)),
               ),
           ]),
         ),
@@ -326,7 +313,7 @@ class FilterField<V> extends StatelessWidget {
         MicroLabel(label),
         const SizedBox(height: 5),
         Container(
-          height: 38,
+          height: 40,
           padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
             color: T.surface,

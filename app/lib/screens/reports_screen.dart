@@ -262,7 +262,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 sortKey: (r) => _sortLabel(r),
                 exportValue: _labelFor,
                 cell: (_, r) => Text(_labelFor(r),
-                    style: T.body.copyWith(fontSize: 12.5),
+                    style: T.body.copyWith(fontSize: 13.5),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis),
               ),
@@ -298,7 +298,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 sortKey: (r) => r.totalTTC,
                 exportValue: (r) => r.totalTTC / 100,
                 cell: (_, r) => Text(fmtDA(r.totalTTC),
-                    style: T.monoBody.copyWith(fontSize: 12)),
+                    style: T.monoBody.copyWith(fontSize: 13)),
               ),
               if (showMargin)
                 ColumnSpec<BreakdownRow>(
@@ -364,7 +364,7 @@ class _SumCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Expanded(
       child: Container(
-        height: 84,
+        height: 92,
         padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
         decoration: BoxDecoration(
           color: T.surface,
@@ -377,14 +377,14 @@ class _SumCard extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style:
-                  T.label.copyWith(color: accent ?? T.mintDeep, fontSize: 9)),
+                  T.label.copyWith(color: accent ?? T.mintDeep, fontSize: 13)),
           const Spacer(),
           Text(loading ? '—' : value,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                   fontFamily: T.sans,
-                  fontSize: 17,
+                  fontSize: 21,
                   fontWeight: FontWeight.w800,
                   letterSpacing: -0.3,
                   color: T.ink)),
@@ -415,7 +415,7 @@ class _Pill extends StatelessWidget {
         child: Text(label,
             style: TextStyle(
               fontFamily: T.sans,
-              fontSize: 12,
+              fontSize: 13,
               fontWeight: FontWeight.w700,
               color: selected ? Colors.white : T.muted,
             )),

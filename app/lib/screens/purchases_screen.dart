@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
+import '../util/commands.dart';
 import '../widgets/doc_editor.dart';
 import '../widgets/doc_list.dart';
 import '../widgets/list_toolbar.dart';
@@ -21,9 +22,12 @@ DocEditorConfig? purchaseEditorFor(String docType) => switch (docType) {
       _ => saleEditorFor(docType),
     };
 
+/// Achats. Menu commands: `list` · `new:PURCHASE_RECEIPT` ·
+/// `type:PURCHASE_ORDER` · `type:PURCHASE_INVOICE` · `type:PURCHASE_CREDIT_NOTE`.
 class PurchasesScreen extends StatefulWidget {
-  const PurchasesScreen({super.key, required this.api});
+  const PurchasesScreen({super.key, required this.api, this.command});
   final ApiClient api;
+  final ScreenCommand? command;
 
   @override
   State<PurchasesScreen> createState() => _PurchasesScreenState();
@@ -37,6 +41,38 @@ class _PurchasesScreenState extends State<PurchasesScreen> {
   void initState() {
     super.initState();
     _loadPartners();
+    widget.command?.addListener(_onCommand);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _onCommand());
+  }
+
+  @override
+  void didUpdateWidget(PurchasesScreen old) {
+    super.didUpdateWidget(old);
+    if (old.command != widget.command) {
+      old.command?.removeListener(_onCommand);
+      widget.command?.addListener(_onCommand);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.command?.removeListener(_onCommand);
+    super.dispose();
+  }
+
+  void _onCommand() {
+    final cmd = widget.command?.value;
+    if (cmd == null || !mounted) return;
+    widget.command!.done();
+    if (!popToModuleRoot(context)) return;
+    if (cmd == 'list') {
+      _listKey.currentState?.setType(null);
+    } else if (cmd.startsWith('type:')) {
+      _listKey.currentState?.setType(cmd.substring(5));
+    } else if (cmd.startsWith('new:')) {
+      final cfg = purchaseEditorFor(cmd.substring(4));
+      if (cfg != null) _newDoc(cfg);
+    }
   }
 
   Future<void> _loadPartners() async {
@@ -67,15 +103,16 @@ class _PurchasesScreenState extends State<PurchasesScreen> {
         children: [
           PageHeader(
             title: 'Achats',
-            primaryLabel: 'Nouvelle réception',
+            primaryLabel: 'Nouveau bon de réception',
             primaryIcon: Icons.move_to_inbox_outlined,
             onPrimary: () => _newDoc(purchaseReceiptConfig),
             more: [
-              MenuEntry('Bon de commande', Icons.shopping_cart_outlined,
+              MenuEntry('Nouveau bon de commande', Icons.shopping_cart_outlined,
                   () => _newDoc(purchaseOrderConfig)),
-              MenuEntry('Facture fournisseur', Icons.receipt_outlined,
+              MenuEntry('Nouvelle facture fournisseur', Icons.receipt_outlined,
                   () => _newDoc(purchaseInvoiceConfig)),
-              MenuEntry('Avoir fournisseur', Icons.assignment_return_outlined,
+              MenuEntry('Nouvel avoir fournisseur',
+                  Icons.assignment_return_outlined,
                   () => _newDoc(purchaseCreditNoteConfig)),
             ],
           ),
@@ -85,6 +122,11 @@ class _PurchasesScreenState extends State<PurchasesScreen> {
               key: _listKey,
               api: widget.api,
               allTypes: _purchaseTypes,
+              quickTypes: const [
+                'PURCHASE_RECEIPT',
+                'PURCHASE_ORDER',
+                'PURCHASE_INVOICE'
+              ],
               partnerNames: _partnerNames,
               partnerKind: 'supplier',
               editorFor: purchaseEditorFor,
@@ -92,8 +134,9 @@ class _PurchasesScreenState extends State<PurchasesScreen> {
               exportTitle: 'Achats',
               prefsKey: 'purchases',
               emptyActions: [
-                ('Bon de commande', () => _newDoc(purchaseOrderConfig)),
-                ('Nouvelle réception', () => _newDoc(purchaseReceiptConfig)),
+                ('Nouveau bon de commande', () => _newDoc(purchaseOrderConfig)),
+                ('Nouveau bon de réception',
+                    () => _newDoc(purchaseReceiptConfig)),
               ],
             ),
           ),

@@ -549,7 +549,7 @@ const _permLabels = [
   ('purchases', 'Achats'),
   ('stock', 'Stock'),
   ('products', 'Produits'),
-  ('partners', 'Partenaires'),
+  ('partners', 'Clients et fournisseurs'),
   ('sav', 'Réparations'),
   ('webstore', 'Boutique en ligne'),
   ('reports', 'Rapports'),
@@ -681,7 +681,7 @@ class _UserFormDialogState extends State<_UserFormDialog> {
                         label: Text(label,
                             style: TextStyle(
                                 fontFamily: T.sans,
-                                fontSize: 12,
+                                fontSize: 13,
                                 fontWeight: FontWeight.w700,
                                 color: _role == value
                                     ? T.mintDark
@@ -715,7 +715,7 @@ class _UserFormDialogState extends State<_UserFormDialog> {
                         label: Text(label,
                             style: TextStyle(
                                 fontFamily: T.sans,
-                                fontSize: 12,
+                                fontSize: 13,
                                 fontWeight: FontWeight.w600,
                                 color: (_perms[key] ?? false)
                                     ? T.mintDark
@@ -747,7 +747,7 @@ class _UserFormDialogState extends State<_UserFormDialog> {
                               ? T.mintDeep
                               : T.faint),
                       const SizedBox(width: 8),
-                      Text("Peut voir les prix d'achat, CUMP et marges",
+                      Text("Peut voir les prix d'achat, le coût moyen et les marges",
                           style: T.bodyMuted),
                     ]),
                   ),
@@ -948,7 +948,7 @@ class _AuditDialogState extends State<_AuditDialog> {
                                                   .replaceFirst('T', '  ')
                                               : e.createdAt,
                                           style: T.monoSmall
-                                              .copyWith(fontSize: 10.5)),
+                                              .copyWith(fontSize: 12)),
                                     ),
                                     SizedBox(
                                       width: 140,
@@ -958,7 +958,7 @@ class _AuditDialogState extends State<_AuditDialog> {
                                     Expanded(
                                       child: Text(e.detail ?? '',
                                           style: T.body
-                                              .copyWith(fontSize: 12.5)),
+                                              .copyWith(fontSize: 13.5)),
                                     ),
                                   ]),
                             );

@@ -350,14 +350,19 @@ class _TemplateList extends StatelessWidget {
         const Divider(),
         Expanded(
           child: templates.isEmpty
-              ? const EmptyState(
-                  icon: Icons.space_dashboard_outlined, text: 'Aucun modèle')
+              ? EmptyState(
+                  icon: Icons.space_dashboard_outlined,
+                  text: 'Aucun modèle.\nCréez votre première étiquette ou facture.',
+                  actions: [
+                    if (onCreate != null) ('Nouveau modèle', onCreate!),
+                  ])
               : ListView(padding: const EdgeInsets.symmetric(vertical: 6), children: [
                   for (final kind in ['label', 'invoice', 'warranty'])
                     if (byKind[kind] != null) ...[
                       Padding(
                         padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
-                        child: Text(_kindLabels[kind]!.toUpperCase(),
+                        child: Text(_kindLabels[kind]!,
+
                             style: T.label),
                       ),
                       for (final t in byKind[kind]!)
@@ -378,7 +383,7 @@ class _TemplateList extends StatelessWidget {
                               const SizedBox(width: 9),
                               Expanded(
                                 child: Text(t.name,
-                                    style: T.body.copyWith(fontSize: 12.5),
+                                    style: T.body.copyWith(fontSize: 13.5),
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis),
                               ),
@@ -424,26 +429,43 @@ class _EditorToolbar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Widget addBtn(String type, IconData icon, String tip) => Tooltip(
-          message: tip,
-          child: InkWell(
-            onTap: () => onAdd(type),
-            borderRadius: BorderRadius.circular(8),
-            child: Container(
-              width: 34,
-              height: 34,
-              alignment: Alignment.center,
-              child: Icon(icon, size: 17, color: T.muted),
+    // Labelled « Ajouter » buttons: icon + word, never an icon alone.
+    Widget addBtn(String type, IconData icon, String label) => Padding(
+          padding: const EdgeInsetsDirectional.only(end: 6),
+          child: OutlinedButton.icon(
+            onPressed: () => onAdd(type),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: T.ink,
+              side: const BorderSide(color: T.border3),
+              minimumSize: const Size(0, 36),
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(T.rInner)),
+              textStyle: const TextStyle(
+                  fontFamily: T.sans,
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w600),
             ),
+            icon: Icon(icon, size: 17, color: T.muted),
+            label: Text(label),
           ),
         );
 
+    final small = TextButton.styleFrom(
+      foregroundColor: T.ink,
+      textStyle: const TextStyle(
+          fontFamily: T.sans, fontSize: 13.5, fontWeight: FontWeight.w700),
+    );
+
     return Container(
-      height: 52,
       color: T.surface,
-      padding: const EdgeInsets.symmetric(horizontal: 14),
-      child: Row(children: [
-        Text(template.name, style: T.h2),
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        Flexible(
+          child: Text(template.name,
+              style: T.h2, maxLines: 1, overflow: TextOverflow.ellipsis),
+        ),
         const SizedBox(width: 8),
         MintChip(_kindLabels[template.kind] ?? template.kind,
             color: T.mintTint, fg: T.mintDark),
@@ -451,39 +473,34 @@ class _EditorToolbar extends StatelessWidget {
           const SizedBox(width: 6),
           const MintChip('modifié', color: T.cream, fg: T.warnDark),
         ],
-        const SizedBox(width: 18),
-        Container(width: 1, height: 24, color: T.border),
-        const SizedBox(width: 8),
-        addBtn('text', Icons.title_rounded, 'Ajouter du texte'),
-        addBtn('field', Icons.data_object_rounded, 'Ajouter un champ (donnée)'),
-        addBtn('barcode', Icons.qr_code_2_rounded, 'Ajouter le code-barres'),
-        addBtn('line', Icons.horizontal_rule_rounded, 'Ajouter une ligne'),
-        addBtn('rect', Icons.crop_din_rounded, 'Ajouter un cadre'),
-        if (showTable)
-          addBtn('table', Icons.table_rows_outlined, 'Tableau des articles'),
         const Spacer(),
-        IconButton(
-          tooltip: template.isDefault
-              ? 'Modèle par défaut'
-              : 'Utiliser à l\'impression',
-          onPressed: template.isDefault ? null : onDefault,
-          icon: Icon(
-              template.isDefault
-                  ? Icons.star_rounded
-                  : Icons.star_outline_rounded,
-              size: 19,
-              color: template.isDefault ? T.warn : T.muted),
-        ),
-        IconButton(
-          tooltip: 'Supprimer le modèle',
+        if (template.isDefault)
+          const Padding(
+            padding: EdgeInsetsDirectional.only(end: 8),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.star_rounded, size: 18, color: T.warn),
+              SizedBox(width: 4),
+              Text('Modèle par défaut', style: T.small),
+            ]),
+          )
+        else
+          TextButton.icon(
+            style: small,
+            onPressed: onDefault,
+            icon: const Icon(Icons.star_outline_rounded, size: 18),
+            label: const Text('Utiliser par défaut'),
+          ),
+        TextButton.icon(
+          style: small.copyWith(
+              foregroundColor: const WidgetStatePropertyAll(T.dangerDark)),
           onPressed: onDelete,
-          icon: const Icon(Icons.delete_outline_rounded,
-              size: 18, color: T.muted),
+          icon: const Icon(Icons.delete_outline_rounded, size: 18),
+          label: const Text('Supprimer'),
         ),
         const SizedBox(width: 6),
         SizedBox(
-          width: 104,
-          height: 36,
+          width: 110,
+          height: 38,
           child: OutlinedButton(
             onPressed: busy ? null : onPreview,
             style: OutlinedButton.styleFrom(
@@ -493,16 +510,31 @@ class _EditorToolbar extends StatelessWidget {
             ),
             child: Text('Aperçu PDF',
                 style: T.small.copyWith(
-                    color: T.ink, fontWeight: FontWeight.w700)),
+                    fontSize: 13.5, color: T.ink, fontWeight: FontWeight.w700)),
           ),
         ),
         const SizedBox(width: 8),
         SizedBox(
-          width: 120,
+          width: 130,
           child: PrimaryButton(
               label: busy ? '…' : 'Enregistrer',
               onPressed: busy || !dirty ? null : onSave),
         ),
+      ]),
+      const SizedBox(height: 8),
+      Wrap(runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+        const Padding(
+          padding: EdgeInsetsDirectional.only(end: 8),
+          child: Text('Ajouter :', style: T.label),
+        ),
+        addBtn('text', Icons.title_rounded, 'Texte'),
+        addBtn('field', Icons.data_object_rounded, 'Champ (donnée)'),
+        addBtn('barcode', Icons.qr_code_2_rounded, 'Code-barres'),
+        addBtn('line', Icons.horizontal_rule_rounded, 'Ligne'),
+        addBtn('rect', Icons.crop_din_rounded, 'Cadre'),
+        if (showTable)
+          addBtn('table', Icons.table_rows_outlined, 'Tableau des articles'),
+      ]),
       ]),
     );
   }
@@ -574,21 +606,23 @@ class _Canvas extends StatelessWidget {
             child: Row(mainAxisSize: MainAxisSize.min, children: [
               IconButton(
                 visualDensity: VisualDensity.compact,
+                tooltip: 'Zoom arrière',
                 onPressed: () =>
                     onZoom((scale / 1.25).clamp(0.5, 12.0)),
                 icon: const Icon(Icons.remove, size: 14, color: T.muted),
               ),
               Text('${(scale * 100 / 3.7795).round()}%',
-                  style: T.monoSmall.copyWith(fontSize: 10.5)),
+                  style: T.monoSmall.copyWith(fontSize: 12)),
               IconButton(
                 visualDensity: VisualDensity.compact,
+                tooltip: 'Zoom avant',
                 onPressed: () =>
                     onZoom((scale * 1.25).clamp(0.5, 12.0)),
                 icon: const Icon(Icons.add, size: 14, color: T.muted),
               ),
               IconButton(
                 visualDensity: VisualDensity.compact,
-                tooltip: 'Ajuster',
+                tooltip: 'Ajuster à la fenêtre',
                 onPressed: () => onZoom(0),
                 icon: const Icon(Icons.fit_screen_outlined,
                     size: 14, color: T.muted),
@@ -952,7 +986,7 @@ class _PropertiesPanelState extends State<_PropertiesPanel> {
         onChanged: (v) => widget.onRename(v, t.lang),
       ),
       const SizedBox(height: 10),
-      const MicroLabel('LANGUE'),
+      const MicroLabel('Langue'),
       const SizedBox(height: 6),
       Wrap(spacing: 6, children: [
         for (final (code, label) in [('fr', 'Français'), ('ar', 'العربية')])
@@ -960,7 +994,7 @@ class _PropertiesPanelState extends State<_PropertiesPanel> {
             label: Text(label,
                 style: TextStyle(
                     fontFamily: code == 'ar' ? 'IBMPlexSansArabic' : T.sans,
-                    fontSize: 12,
+                    fontSize: 13,
                     fontWeight: FontWeight.w600,
                     color: t.lang == code ? T.mintDark : T.muted)),
             selected: t.lang == code,
@@ -1005,7 +1039,7 @@ class _PropertiesPanelState extends State<_PropertiesPanel> {
           'glissez pour le déplacer, tirez les poignées pour le '
           'redimensionner. La barre d\'outils ajoute du texte, des champs '
           'de données, le code-barres…',
-          style: T.small.copyWith(fontSize: 11, height: 1.45),
+          style: T.small.copyWith(fontSize: 12.5, height: 1.45),
         ),
       ),
     ];
@@ -1017,27 +1051,38 @@ class _PropertiesPanelState extends State<_PropertiesPanel> {
     return [
       Row(children: [
         Expanded(
-          child: MicroLabel(switch (el.type) {
-            'text' => 'TEXTE',
-            'field' => 'CHAMP DE DONNÉES',
-            'barcode' => 'CODE-BARRES',
-            'line' => 'LIGNE',
-            'rect' => 'CADRE',
-            _ => 'TABLEAU DES ARTICLES',
-          }),
+          child: Text(switch (el.type) {
+            'text' => 'Texte',
+            'field' => 'Champ de données',
+            'barcode' => 'Code-barres',
+            'line' => 'Ligne',
+            'rect' => 'Cadre',
+            _ => 'Tableau des articles',
+          }, style: T.h2.copyWith(fontSize: 15)),
         ),
-        IconButton(
-          visualDensity: VisualDensity.compact,
-          tooltip: 'Dupliquer',
+        TextButton.icon(
+          style: TextButton.styleFrom(
+              foregroundColor: T.ink,
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              textStyle: const TextStyle(
+                  fontFamily: T.sans,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700)),
           onPressed: widget.onDuplicateElement,
-          icon: const Icon(Icons.copy_rounded, size: 15, color: T.muted),
+          icon: const Icon(Icons.copy_rounded, size: 16),
+          label: const Text('Dupliquer'),
         ),
-        IconButton(
-          visualDensity: VisualDensity.compact,
-          tooltip: 'Supprimer l\'élément',
+        TextButton.icon(
+          style: TextButton.styleFrom(
+              foregroundColor: T.dangerDark,
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              textStyle: const TextStyle(
+                  fontFamily: T.sans,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700)),
           onPressed: widget.onDeleteElement,
-          icon: const Icon(Icons.delete_outline_rounded,
-              size: 16, color: T.dangerDark),
+          icon: const Icon(Icons.delete_outline_rounded, size: 16),
+          label: const Text('Supprimer'),
         ),
       ]),
       const SizedBox(height: 8),
@@ -1054,7 +1099,7 @@ class _PropertiesPanelState extends State<_PropertiesPanel> {
         const SizedBox(height: 10),
       ],
       if (el.type == 'field') ...[
-        const MicroLabel('DONNÉE AFFICHÉE'),
+        const MicroLabel('Donnée affichée'),
         const SizedBox(height: 4),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -1074,7 +1119,7 @@ class _PropertiesPanelState extends State<_PropertiesPanel> {
                   DropdownMenuItem(
                       value: f.key,
                       child: Text(f.value,
-                          style: T.body.copyWith(fontSize: 12.5))),
+                          style: T.body.copyWith(fontSize: 13.5))),
               ],
               onChanged: (v) {
                 if (v != null) {
@@ -1129,7 +1174,7 @@ class _PropertiesPanelState extends State<_PropertiesPanel> {
       ]),
       if (el.type == 'text' || el.type == 'field' || el.type == 'table') ...[
         const SizedBox(height: 10),
-        const MicroLabel('TYPOGRAPHIE'),
+        const MicroLabel('Typographie'),
         const SizedBox(height: 6),
         Row(children: [
           Expanded(
@@ -1168,7 +1213,7 @@ class _PropertiesPanelState extends State<_PropertiesPanel> {
               }),
         ]),
         const SizedBox(height: 8),
-        const MicroLabel('ALIGNEMENT'),
+        const MicroLabel('Alignement'),
         const SizedBox(height: 6),
         Row(children: [
           for (final (a, icon) in [
@@ -1261,7 +1306,7 @@ class _TextPropState extends State<_TextProp> {
   @override
   Widget build(BuildContext context) {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      MicroLabel(widget.label.toUpperCase()),
+      MicroLabel(widget.label),
       const SizedBox(height: 4),
       Container(
         decoration: BoxDecoration(
@@ -1272,7 +1317,7 @@ class _TextPropState extends State<_TextProp> {
         child: TextField(
           controller: _ctrl,
           maxLines: widget.multiline ? 4 : 1,
-          style: T.body.copyWith(fontSize: 12.5),
+          style: T.body.copyWith(fontSize: 13.5),
           onChanged: (v) {
             _last = v;
             widget.onChanged(v);
@@ -1331,7 +1376,7 @@ class _NumPropState extends State<_NumProp> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        MicroLabel(widget.label.toUpperCase()),
+        MicroLabel(widget.label),
         const SizedBox(height: 4),
         Container(
           height: 32,
@@ -1343,7 +1388,7 @@ class _NumPropState extends State<_NumProp> {
           child: TextField(
             controller: _ctrl,
             focusNode: _focus,
-            style: T.monoBody.copyWith(fontSize: 12),
+            style: T.monoBody.copyWith(fontSize: 13),
             onChanged: (_) => _commit(),
             onSubmitted: (_) => _commit(),
             decoration: const InputDecoration(
@@ -1429,7 +1474,7 @@ class _NewTemplateDialogState extends State<_NewTemplateDialog> {
             children: [
               const Text('Nouveau modèle', style: T.h2),
               const SizedBox(height: 14),
-              const MicroLabel('TYPE DE DOCUMENT'),
+              const MicroLabel('Type de document'),
               const SizedBox(height: 6),
               Row(children: [
                 for (final k in ['label', 'invoice', 'warranty'])
@@ -1461,7 +1506,7 @@ class _NewTemplateDialogState extends State<_NewTemplateDialog> {
                   ),
               ]),
               const SizedBox(height: 12),
-              const MicroLabel('LANGUE'),
+              const MicroLabel('Langue'),
               const SizedBox(height: 6),
               Wrap(spacing: 6, children: [
                 for (final (code, label) in [('fr', 'Français'), ('ar', 'العربية')])
@@ -1470,7 +1515,7 @@ class _NewTemplateDialogState extends State<_NewTemplateDialog> {
                         style: TextStyle(
                             fontFamily:
                                 code == 'ar' ? 'IBMPlexSansArabic' : T.sans,
-                            fontSize: 12,
+                            fontSize: 13,
                             fontWeight: FontWeight.w600,
                             color: _lang == code ? T.mintDark : T.muted)),
                     selected: _lang == code,

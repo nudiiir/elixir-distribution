@@ -144,7 +144,7 @@ class FieldError extends StatelessWidget {
         const SizedBox(width: 4),
         Flexible(
           child: Text(text!,
-              style: T.small.copyWith(color: T.dangerDark, fontSize: 11.5)),
+              style: T.small.copyWith(color: T.dangerDark, fontSize: 13)),
         ),
       ]),
     );

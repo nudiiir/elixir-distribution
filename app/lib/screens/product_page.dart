@@ -7,14 +7,17 @@ import '../theme/tokens.dart';
 import '../util/features.dart';
 import '../util/feedback.dart';
 import '../util/shortcuts.dart';
+import '../widgets/app_page.dart';
 import '../widgets/fiche_produit.dart'
     show pasteProductPhoto, pickProductPhoto, printProductLabels;
 import '../widgets/product_thumb.dart';
 import '../widgets/ui.dart';
 
-/// Opens the full product page (création ET modification), pushed like the
-/// document editor. [template] pre-fills a new product (« Dupliquer ») —
-/// never its barcodes. Returns true when anything was saved.
+/// Opens the full product page (création ET modification), pushed in the
+/// current navigator (inside the module, menu still visible). [template]
+/// pre-fills a new product (« Dupliquer ») — never its barcodes. Returns
+/// true when anything was saved, false when left without saving, null when
+/// closed from outside (breadcrumb « Produits », menu command).
 Future<bool?> openProductPage(
   BuildContext context, {
   required ApiClient api,
@@ -23,7 +26,23 @@ Future<bool?> openProductPage(
   required bool showCost,
   List<String> brands = const [],
 }) {
-  return Navigator.of(context).push<bool>(MaterialPageRoute(
+  return _push(Navigator.of(context),
+      api: api,
+      existing: existing,
+      template: template,
+      showCost: showCost,
+      brands: brands);
+}
+
+Future<bool?> _push(
+  NavigatorState nav, {
+  required ApiClient api,
+  Product? existing,
+  Product? template,
+  required bool showCost,
+  List<String> brands = const [],
+}) {
+  return nav.push<bool>(MaterialPageRoute(
     builder: (_) => ProductPage(
       api: api,
       existing: existing,
@@ -32,6 +51,28 @@ Future<bool?> openProductPage(
       brands: brands,
     ),
   ));
+}
+
+/// Product pages currently open with unsaved changes.
+final Set<_ProductPageState> _dirtyPages = {};
+
+/// Called before closing the product pages from outside (menu command,
+/// breadcrumb): asks once when one of them has unsaved changes. True = go
+/// ahead (the changes are dropped).
+Future<bool> confirmLeaveProductPages(BuildContext context) async {
+  final dirty = _dirtyPages.where((s) => s.mounted && s._dirty).toList();
+  if (dirty.isEmpty) return true;
+  final ok = await confirmAction(context,
+      title: 'Quitter sans enregistrer ?',
+      message: 'Les modifications du produit en cours seront perdues.',
+      confirmLabel: 'Quitter',
+      danger: true);
+  if (!ok) return false;
+  for (final s in dirty) {
+    s._dirty = false;
+  }
+  _dirtyPages.clear();
+  return true;
 }
 
 class ProductPage extends StatefulWidget {
@@ -179,11 +220,22 @@ class _ProductPageState extends State<ProductPage> {
   final Map<String, String> _errors = {};
   final _keys = <String, GlobalKey>{};
   final _focus = <String, FocusNode>{};
-  final _scroll = ScrollController();
-  bool _dirty = false;
+  bool _isDirty = false;
+  bool get _dirty => _isDirty;
+  set _dirty(bool v) {
+    _isDirty = v;
+    v ? _dirtyPages.add(this) : _dirtyPages.remove(this);
+  }
+
   bool _busy = false;
   bool _savedAny = false;
   bool _generating = false;
+
+  /// « Options avancées » (nom arabe, codes-barres en plus, emballages,
+  /// n° de série) — open from the start when the product uses them.
+  late bool _advanced = (_src?.nameAr ?? '').isNotEmpty ||
+      (widget.existing?.barcodesEx.isNotEmpty ?? false) ||
+      (_src?.packagings.isNotEmpty ?? false);
 
   GlobalKey _k(String id) => _keys.putIfAbsent(id, GlobalKey.new);
   FocusNode _fn(String id) => _focus.putIfAbsent(id, FocusNode.new);
@@ -219,7 +271,7 @@ class _ProductPageState extends State<ProductPage> {
       f.dispose();
     }
     _brandFocus.dispose();
-    _scroll.dispose();
+    _dirtyPages.remove(this);
     super.dispose();
   }
 
@@ -564,7 +616,7 @@ class _ProductPageState extends State<ProductPage> {
 
   Map<String, String> _validate() {
     final e = <String, String>{};
-    if (_name.text.trim().isEmpty) e['name'] = 'La désignation est obligatoire.';
+    if (_name.text.trim().isEmpty) e['name'] = 'Le nom du produit est obligatoire.';
     final retail = parseDA(_retail.text);
     if (_retail.text.trim().isNotEmpty && retail == null) {
       e['retail'] = 'Montant invalide.';
@@ -616,7 +668,7 @@ class _ProductPageState extends State<ProductPage> {
         final f = parseQty(k.factor.text) ?? 0;
         if (k.name.text.trim().isEmpty || f <= 1000) {
           e['packs'] =
-              'Chaque conditionnement exige un nom et un nombre d’unités supérieur à 1.';
+              'Chaque emballage exige un nom et un nombre d’unités supérieur à 1.';
           break;
         }
       }
@@ -641,7 +693,8 @@ class _ProductPageState extends State<ProductPage> {
 
   static const _errorOrder = [
     'barcode', 'name', 'purchase', 'margin', 'retail', 'wholesale',
-    'initialQty', 'minStock', 'packs', 'variants', 'warranty', 'promo',
+    'initialQty', 'minStock', 'variants', 'warranty', 'promo',
+    'barcodesEx', 'packs',
   ];
 
   void _focusFirstError() {
@@ -715,6 +768,7 @@ class _ProductPageState extends State<ProductPage> {
       _errors
         ..clear()
         ..addAll(errs);
+      if (errs.containsKey('packs')) _advanced = true;
     });
     if (errs.isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _focusFirstError());
@@ -784,16 +838,24 @@ class _ProductPageState extends State<ProductPage> {
       }
       if (!mounted) return;
       final parts = [
-        _isEdit ? 'Produit enregistré' : 'Produit créé',
-        if (created > 0) '$created déclinaison${created > 1 ? 's' : ''}',
+        _isEdit ? 'Produit « ${saved.name} » enregistré' : 'Produit « ${saved.name} » créé',
+        if (created > 0) '$created variante${created > 1 ? 's' : ''}',
       ];
       final problems = [...photoErrors, ...variantErrors];
+      // Next step offered by the toast: another product.
+      final nav = Navigator.of(context);
+      final api = widget.api, showCost = widget.showCost, brands = _brands;
+      final offerNew = !andNew && problems.isEmpty;
       showToast(
           context,
           problems.isEmpty
               ? parts.join(' · ')
               : '${parts.join(' · ')} — ${problems.join(' ; ')}',
-          kind: problems.isEmpty ? ToastKind.success : ToastKind.warning);
+          kind: problems.isEmpty ? ToastKind.success : ToastKind.warning,
+          actionLabel: offerNew ? 'Nouveau produit' : null,
+          onAction: offerNew
+              ? () => _push(nav, api: api, showCost: showCost, brands: brands)
+              : null);
       if (andNew) {
         _resetForNew();
       } else if (problems.isEmpty) {
@@ -813,9 +875,10 @@ class _ProductPageState extends State<ProductPage> {
       final m = e.message;
       setState(() {
         if (m.contains('code-barres')) {
-          _errors[m.contains(_barcode.text.trim()) && _barcode.text.trim().isNotEmpty
-              ? 'barcode'
-              : 'barcodesEx'] = m;
+          final main =
+              m.contains(_barcode.text.trim()) && _barcode.text.trim().isNotEmpty;
+          _errors[main ? 'barcode' : 'barcodesEx'] = m;
+          if (!main) _advanced = true;
         } else if (m.contains("prix d'achat")) {
           _errors['purchase'] = m;
         } else {
@@ -869,304 +932,251 @@ class _ProductPageState extends State<ProductPage> {
       _dirty = false;
     });
     _fn('barcode').requestFocus();
-    if (_scroll.hasClients) _scroll.jumpTo(0);
+    final ctx = _keys['barcode']?.currentContext;
+    if (ctx != null) Scrollable.ensureVisible(ctx);
   }
 
+  Future<bool> _confirmDiscard() async {
+    if (!_dirty) return true;
+    return confirmAction(context,
+        title: 'Quitter sans enregistrer ?',
+        message: 'Les modifications de ce produit seront perdues.',
+        confirmLabel: 'Quitter',
+        danger: true);
+  }
+
+  /// « Annuler », « Retour », Échap.
   Future<void> _close() async {
-    if (_dirty) {
-      final ok = await confirmAction(context,
-          title: 'Quitter sans enregistrer ?',
-          message: 'Les modifications de ce produit seront perdues.',
-          confirmLabel: 'Quitter',
-          danger: true);
-      if (!ok) return;
-    }
+    if (!await _confirmDiscard()) return;
     _dirty = false;
     if (mounted) Navigator.of(context).pop(_savedAny);
   }
 
+  /// Breadcrumb « Produits » : back to the list itself.
+  Future<void> _closeToList() async {
+    if (!await _confirmDiscard()) return;
+    _dirty = false;
+    if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
+  }
+
   // ---------------------------------------------------------------- build
+
+  String get _title => _isEdit
+      ? _existing!.name
+      : widget.template != null
+          ? 'Dupliquer « ${widget.template!.name} »'
+          : 'Nouveau produit';
 
   @override
   Widget build(BuildContext context) {
+    final service = _kind == 'service';
     return PopScope(
       canPop: !_dirty,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) _close();
       },
       child: CallbackShortcuts(
-        bindings: {
-          ...bindingsFor({
-            AppShortcuts.submit: () => _save(),
-            AppShortcuts.saveAndNew: () => _save(andNew: true),
-          }),
-          const SingleActivator(LogicalKeyboardKey.escape): _close,
-        },
-        child: Scaffold(
-          backgroundColor: T.bg,
-          body: Column(children: [
-            _topBar(),
-            const Divider(height: 1),
-            Expanded(
-              child: LayoutBuilder(builder: (context, c) {
-                final wide = c.maxWidth >= 980;
-                final left = Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: _leftSections());
-                final right = Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: _rightSections());
-                return SingleChildScrollView(
-                  controller: _scroll,
-                  padding: const EdgeInsets.fromLTRB(24, 20, 24, 40),
-                  child: Center(
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 1200),
-                      child: wide
-                          ? Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Expanded(child: left),
-                                const SizedBox(width: 18),
-                                SizedBox(width: 340, child: right),
-                              ])
-                          : Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [left, right]),
+        bindings: bindingsFor({
+          AppShortcuts.submit: () => _save(),
+          AppShortcuts.saveAndNew: () => _save(andNew: true),
+        }),
+        child: AppPage(
+          maxWidth: 860,
+          onBack: _close,
+          crumbs: [
+            Crumb('Produits', _closeToList),
+            if (_isEdit) ...[
+              Crumb(_existing!.name, _close),
+              const Crumb('Modifier'),
+            ] else
+              Crumb(widget.template != null ? 'Dupliquer' : 'Nouveau produit'),
+          ],
+          title: _title,
+          subtitle: Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text(
+                  _isEdit
+                      ? (_existing!.variantLabel != null
+                          ? 'Variante « ${_existing!.variantLabel} »'
+                          : 'Modification du produit')
+                      : 'Scannez le code-barres, puis complétez les champs. Les champs marqués * sont obligatoires.',
+                  style: T.bodyMuted),
+              if (_dirty)
+                const MintChip('Modifications non enregistrées',
+                    color: T.warnTint, fg: T.warnDark),
+            ],
+          ),
+          actions: [
+            Flexible(
+              child: Wrap(
+                alignment: WrapAlignment.end,
+                runSpacing: 8,
+                children: [
+                  if (_isEdit)
+                    PageAction(
+                      label: 'Étiquettes',
+                      icon: Icons.qr_code_2_rounded,
+                      onPressed: () =>
+                          printProductLabels(context, widget.api, [_existing!]),
                     ),
+                  PageAction(label: 'Annuler', onPressed: _close),
+                  PageAction(
+                    label: 'Enregistrer et nouveau',
+                    onPressed: _busy ? null : () => _save(andNew: true),
                   ),
-                );
-              }),
+                  PageAction(
+                    label: _busy ? 'Enregistrement…' : 'Enregistrer',
+                    icon: Icons.check_rounded,
+                    primary: true,
+                    onPressed: _busy ? null : () => _save(),
+                  ),
+                ],
+              ),
             ),
-          ]),
+          ],
+          body: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (_errors['form'] != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: T.dangerTint,
+                      borderRadius: BorderRadius.circular(T.rInner),
+                      border: Border.all(color: T.danger.withValues(alpha: 0.4)),
+                    ),
+                    child: FieldError(_errors['form']),
+                  ),
+                ),
+              _identity(),
+              _prices(),
+              _classement(),
+              if (!service) _stock(),
+              if (!service) _tracking(),
+              if (_f.webstore) _webstore(),
+              _warrantyPromo(),
+              _advancedSection(),
+              Text('Raccourcis : Ctrl+Entrée = Enregistrer · Ctrl+Maj+Entrée = Enregistrer et nouveau · Échap = Retour',
+                  style: T.small),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _topBar() {
-    final title = _isEdit
-        ? _existing!.name
-        : widget.template != null
-            ? 'Dupliquer « ${widget.template!.name} »'
-            : 'Nouveau produit';
-    return Container(
-      color: T.surface,
-      padding: const EdgeInsets.fromLTRB(12, 10, 20, 10),
-      child: Row(children: [
-        IconButton(
-          tooltip: 'Fermer (Échap)',
-          onPressed: _close,
-          icon: const Icon(Icons.arrow_back_rounded, size: 20, color: T.ink),
-        ),
-        const SizedBox(width: 6),
-        Flexible(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(title, style: T.h2, overflow: TextOverflow.ellipsis),
-              Text(
-                  _isEdit
-                      ? (_existing!.variantLabel != null
-                          ? 'Déclinaison · ${_existing!.variantLabel}'
-                          : 'Modification du produit')
-                      : 'Scannez le code-barres puis complétez',
-                  style: T.small.copyWith(fontSize: 11.5)),
-            ],
-          ),
-        ),
-        if (_dirty)
-          const Padding(
-            padding: EdgeInsetsDirectional.only(start: 10),
-            child: MintChip('non enregistré', color: T.warnTint, fg: T.warnDark),
-          ),
-        const Spacer(),
-        if (_isEdit)
-          Padding(
-            padding: const EdgeInsetsDirectional.only(end: 8),
-            child: IconButton(
-              tooltip: 'Imprimer des étiquettes',
-              onPressed: () =>
-                  printProductLabels(context, widget.api, [_existing!]),
-              icon: const Icon(Icons.qr_code_2_rounded, size: 18, color: T.muted),
-            ),
-          ),
-        TextButton(
-          onPressed: _close,
-          child: Text('Fermer', style: T.body.copyWith(color: T.muted)),
-        ),
-        const SizedBox(width: 8),
-        Tooltip(
-          message: 'Ctrl+Maj+Entrée',
-          child: OutlinedButton(
-            onPressed: _busy ? null : () => _save(andNew: true),
-            style: OutlinedButton.styleFrom(
-              minimumSize: const Size(0, 40),
-              side: const BorderSide(color: T.border3),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(T.rInner)),
-            ),
-            child: Text('Enregistrer et nouveau',
-                style: T.body.copyWith(fontWeight: FontWeight.w700)),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Tooltip(
-          message: 'Ctrl+Entrée',
-          child: SizedBox(
-            width: 150,
-            child: PrimaryButton(
-              label: _busy ? '…' : 'Enregistrer',
-              onPressed: _busy ? null : () => _save(),
+  /// A short field (price, quantity) does not stretch across the page.
+  Widget _short(Widget child, {double width = 340}) => Align(
+        alignment: AlignmentDirectional.centerStart,
+        child: SizedBox(width: width, child: child),
+      );
+
+  /// Two short fields side by side (the only two-column layout of the form).
+  Widget _pair(Widget a, Widget b) => Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(child: a),
+          const SizedBox(width: 16),
+          Expanded(child: b),
+        ],
+      );
+
+  // ---------------------------------------------------------------- Identité
+
+  Widget _identity() {
+    return PageSection(
+      title: 'Identité',
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        _PField(
+          fieldKey: _k('barcode'),
+          focusNode: _fn('barcode'),
+          label: 'Code-barres',
+          helper:
+              'Scannez le code-barres du produit. Il n’en a pas ? Cliquez sur « Générer ».',
+          controller: _barcode,
+          mono: true,
+          autofocus: !_isEdit,
+          error: _errors['barcode'],
+          onChanged: (_) {
+            _errors.remove('barcode');
+            _touch();
+          },
+          onSubmitted: (_) => _fn('name').requestFocus(),
+          trailing: Padding(
+            padding: const EdgeInsetsDirectional.only(end: 4),
+            child: TextButton.icon(
+              onPressed: _generating ? null : _generateBarcode,
+              icon: Icon(
+                  _generating
+                      ? Icons.hourglass_top_rounded
+                      : Icons.auto_fix_high_rounded,
+                  size: 16),
+              label: const Text('Générer'),
             ),
           ),
         ),
+        _PField(
+          fieldKey: _k('name'),
+          focusNode: _fn('name'),
+          label: 'Nom du produit',
+          required: true,
+          hint: 'Ex. Coca-Cola 1 L, Samsung Galaxy A15 128 Go…',
+          controller: _name,
+          error: _errors['name'],
+          onChanged: (_) {
+            _errors.remove('name');
+            _touch();
+            setState(() {});
+          },
+        ),
+        if (_f.services || _kind == 'service') _typeField(),
+        const SizedBox(height: 4),
+        _photoBlock(),
       ]),
     );
   }
 
-  // ---------------------------------------------------------------- left
-
-  List<Widget> _leftSections() {
-    final service = _kind == 'service';
-    return [
-      if (_errors['form'] != null)
-        Padding(
-          padding: const EdgeInsets.only(bottom: 12),
-          child: Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: T.dangerTint,
-              borderRadius: BorderRadius.circular(T.rInner),
-              border: Border.all(color: T.danger.withValues(alpha: 0.4)),
-            ),
-            child: FieldError(_errors['form']),
-          ),
-        ),
-      _identity(),
-      _prices(),
-      _classement(),
-      if (!service) _stock(),
-      if (!service) _tracking(),
-      if (_f.services || service) _typeSection(),
-    ];
-  }
-
-  Widget _identity() {
-    return _Section(
-      title: 'Identité',
-      children: [
-        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Expanded(
-            flex: 2,
-            child: _PField(
-              fieldKey: _k('barcode'),
-              focusNode: _fn('barcode'),
-              label: 'Code-barres — scannez d’abord',
-              controller: _barcode,
-              mono: true,
-              autofocus: !_isEdit,
-              error: _errors['barcode'],
-              onChanged: (_) {
-                _errors.remove('barcode');
-                _touch();
-              },
-              onSubmitted: (_) => _fn('name').requestFocus(),
-              trailing: Tooltip(
-                message: 'Générer un code-barres interne (produit sans code)',
-                child: InkWell(
-                  onTap: _generating ? null : _generateBarcode,
-                  child: Padding(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                    child: Icon(
-                        _generating
-                            ? Icons.hourglass_top_rounded
-                            : Icons.auto_fix_high_rounded,
-                        size: 16,
-                        color: T.mintDark),
-                  ),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            flex: 3,
-            child: _PField(
-              fieldKey: _k('name'),
-              focusNode: _fn('name'),
-              label: 'Désignation *',
-              controller: _name,
-              error: _errors['name'],
-              onChanged: (_) {
-                _errors.remove('name');
-                _touch();
-                setState(() {});
-              },
-            ),
-          ),
-        ]),
-        _PField(
-          label: 'Désignation arabe',
-          controller: _nameAr,
-          rtl: true,
-          onChanged: (_) => _touch(),
-        ),
-        // ---- Codes-barres supplémentaires ----
-        const SizedBox(height: 4),
-        const MicroLabel('Codes-barres supplémentaires — même stock, même prix'),
+  Widget _typeField() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const _FieldLabel('Type'),
         const SizedBox(height: 6),
-        for (var i = 0; i < _bcodes.length; i++)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 4),
-            child: Row(children: [
-              SizedBox(
-                  width: 160,
-                  child: Text(_bcodes[i].code, style: T.monoSmall)),
-              Expanded(
-                  child: Text(
-                      _bcodes[i].label.isEmpty ? '—' : _bcodes[i].label,
-                      style: T.small)),
-              IconButton(
-                tooltip: 'Retirer ce code',
-                visualDensity: VisualDensity.compact,
-                onPressed: () {
-                  setState(() => _bcodes.removeAt(i));
-                  _touch();
-                },
-                icon: const Icon(Icons.close, size: 14, color: T.faint),
-              ),
-            ]),
-          ),
-        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Expanded(
-              child: _PField(
-                  label: 'Scanner un code…',
-                  controller: _newBcode,
-                  mono: true,
-                  onSubmitted: (_) => _addExtraBarcode())),
-          const SizedBox(width: 8),
-          Expanded(
-              child: _PField(
-                  label: 'Libellé (Pomme…)',
-                  controller: _newBcodeLabel,
-                  onSubmitted: (_) => _addExtraBarcode())),
-          Padding(
-            padding: const EdgeInsets.only(top: 18),
-            child: IconButton(
-              tooltip: 'Ajouter ce code-barres',
-              onPressed: _addExtraBarcode,
-              icon: const Icon(Icons.add_circle_outline,
-                  size: 20, color: T.mintDark),
+        Wrap(spacing: 8, children: [
+          for (final (k, label, icon) in const [
+            ('standard', 'Produit (avec stock)', Icons.inventory_2_outlined),
+            ('service', 'Service (sans stock)', Icons.handyman_outlined),
+          ])
+            ChoiceChip(
+              avatar: Icon(icon,
+                  size: 18, color: _kind == k ? T.mintDark : T.muted),
+              label: Text(label,
+                  style: T.body.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: _kind == k ? T.mintDark : T.ink)),
+              selected: _kind == k,
+              selectedColor: T.mintTint,
+              backgroundColor: T.surface,
+              side: BorderSide(color: _kind == k ? T.mintDeep : T.border),
+              showCheckmark: false,
+              onSelected: (_) {
+                setState(() => _kind = k);
+                _touch();
+              },
             ),
-          ),
         ]),
-        FieldError(_errors['barcodesEx']),
-        const SizedBox(height: 8),
-        _photoBlock(),
-      ],
+        const SizedBox(height: 6),
+        Text(
+            _kind == 'service'
+                ? 'Un service (main-d’œuvre, livraison, pose…) se vend sans stock : aucun mouvement, aucun inventaire.'
+                : 'Un produit a un stock, des mouvements et un coût moyen.',
+            style: T.small),
+      ]),
     );
   }
 
@@ -1216,144 +1226,147 @@ class _ProductPageState extends State<ProductPage> {
       }
     }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      const MicroLabel('Photo'),
+      const _FieldLabel('Photo'),
       const SizedBox(height: 6),
-      Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-        if (tiles.isEmpty)
-          Padding(
-            padding: const EdgeInsetsDirectional.only(end: 12),
-            child: _name.text.trim().isEmpty
-                ? Container(
-                    width: 64,
-                    height: 64,
-                    decoration: BoxDecoration(
-                      color: T.bg,
-                      borderRadius: BorderRadius.circular(T.rInner),
-                      border: Border.all(color: T.border),
-                    ),
-                    child: const Icon(Icons.image_outlined, color: T.ghost),
-                  )
-                : ProductThumb(
-                    api: widget.api,
-                    product: Product.fromJson({'id': '', 'name': _name.text}),
-                    size: 64),
-          )
-        else
-          ...tiles,
-        Wrap(spacing: 8, children: [
-          OutlinedButton.icon(
-            onPressed: _busyPhoto ? null : () => _addPhoto(),
-            icon: Icon(
-                _busyPhoto
-                    ? Icons.hourglass_top_rounded
-                    : Icons.add_photo_alternate_outlined,
-                size: 16),
-            label: const Text('Ajouter une photo'),
-          ),
-          TextButton.icon(
-            onPressed: _busyPhoto ? null : () => _addPhoto(paste: true),
-            icon: const Icon(Icons.content_paste_rounded, size: 16),
-            label: const Text('Coller'),
-          ),
-        ]),
-      ]),
-      const SizedBox(height: 4),
-      Text('JPEG ou PNG, 2 Mo maximum — la première photo est la principale.',
-          style: T.small.copyWith(fontSize: 10.5)),
+      Wrap(
+        spacing: 4,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.end,
+        children: [
+          if (tiles.isEmpty)
+            Padding(
+              padding: const EdgeInsetsDirectional.only(end: 12),
+              child: _name.text.trim().isEmpty
+                  ? Container(
+                      width: 72,
+                      height: 72,
+                      decoration: BoxDecoration(
+                        color: T.bg,
+                        borderRadius: BorderRadius.circular(T.rInner),
+                        border: Border.all(color: T.border),
+                      ),
+                      child: const Icon(Icons.image_outlined, color: T.ghost),
+                    )
+                  : ProductThumb(
+                      api: widget.api,
+                      product: Product.fromJson({'id': '', 'name': _name.text}),
+                      size: 72),
+            )
+          else
+            ...tiles,
+          Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            OutlinedButton.icon(
+              onPressed: _busyPhoto ? null : () => _addPhoto(),
+              icon: Icon(
+                  _busyPhoto
+                      ? Icons.hourglass_top_rounded
+                      : Icons.add_photo_alternate_outlined,
+                  size: 18),
+              label: const Text('Ajouter une photo'),
+            ),
+            const SizedBox(height: 4),
+            TextButton.icon(
+              onPressed: _busyPhoto ? null : () => _addPhoto(paste: true),
+              icon: const Icon(Icons.content_paste_rounded, size: 18),
+              label: const Text('Coller une image'),
+            ),
+          ]),
+        ],
+      ),
+      const SizedBox(height: 6),
+      Text('JPEG ou PNG, 2 Mo maximum. La première photo est la photo principale (caisse, liste, boutique).',
+          style: T.small),
     ]);
   }
 
+  // ---------------------------------------------------------------- Prix
+
   Widget _prices() {
-    final unit = _weighed ? ' (DA/kg)' : ' (DA)';
+    final unit = _weighed ? ' (DA le kg)' : ' (DA)';
     final cost = _cost;
     final ttc = parseDA(_retail.text) ?? 0;
     final pvHT = ttc <= 0 ? 0 : roundDiv(ttc * 10000, 10000 + _vat);
     final below = cost > 0 && ttc > 0 && pvHT <= cost;
     final vats = {1900, 900, 0, _f.defaultVat, _vat}.toList();
-    return _Section(
+    final retail = _PField(
+      fieldKey: _k('retail'),
+      focusNode: _fn('retail'),
+      label: 'Prix de vente TTC$unit',
+      required: true,
+      controller: _retail,
+      mono: true,
+      error: _errors['retail'],
+      onChanged: _onRetailChanged,
+    );
+    return PageSection(
       title: 'Prix',
-      children: [
-        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          if (widget.showCost) ...[
-            Expanded(
-              child: _PField(
-                fieldKey: _k('purchase'),
-                focusNode: _fn('purchase'),
-                label: _isEdit ? 'Prix d’achat HT — figé' : 'Prix d’achat HT$unit',
-                controller: _isEdit ? _frozenCost : _purchase,
-                mono: true,
-                enabled: !_isEdit,
-                error: _errors['purchase'],
-                hint: _isEdit ? null : '0,00',
-                onChanged: _onCostChanged,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        if (widget.showCost) ...[
+          _short(_PField(
+            fieldKey: _k('purchase'),
+            focusNode: _fn('purchase'),
+            label: 'Prix d’achat HT$unit',
+            helper: _isEdit
+                ? 'Ne change plus ici : chaque bon de réception met à jour le coût moyen.'
+                : 'Ce que vous payez au fournisseur, hors taxes.',
+            controller: _isEdit ? _frozenCost : _purchase,
+            mono: true,
+            enabled: !_isEdit,
+            error: _errors['purchase'],
+            hint: _isEdit ? null : '0,00',
+            onChanged: _onCostChanged,
+          ), width: 420),
+          _short(
+              _pair(
+                _PField(
+                  fieldKey: _k('margin'),
+                  focusNode: _fn('margin'),
+                  label: 'Marge',
+                  helper: cost > 0
+                      ? 'Tapez la marge : le prix se calcule.'
+                      : 'Saisissez d’abord le prix d’achat.',
+                  controller: _margin,
+                  mono: true,
+                  enabled: cost > 0,
+                  error: _errors['margin'],
+                  suffixText: '%',
+                  onChanged: _onMarginChanged,
+                ),
+                retail,
               ),
-            ),
-            const SizedBox(width: 12),
-            SizedBox(
-              width: 120,
-              child: _PField(
-                fieldKey: _k('margin'),
-                focusNode: _fn('margin'),
-                label: 'Marge %',
-                controller: _margin,
-                mono: true,
-                enabled: cost > 0,
-                error: _errors['margin'],
-                suffixText: '%',
-                onChanged: _onMarginChanged,
-              ),
-            ),
-            const SizedBox(width: 12),
-          ],
-          Expanded(
-            child: _PField(
-              fieldKey: _k('retail'),
-              focusNode: _fn('retail'),
-              label: 'Prix de vente TTC *$unit',
-              controller: _retail,
-              mono: true,
-              error: _errors['retail'],
-              onChanged: _onRetailChanged,
-            ),
-          ),
-        ]),
-        if (widget.showCost && _isEdit)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 6),
-            child: Text(
-                'Le prix d’achat ne change plus ici : les réceptions font vivre le CMUP.',
-                style: T.small.copyWith(fontSize: 11)),
-          ),
+              width: 640),
+        ] else
+          _short(retail, width: 420),
         if (below)
           Padding(
-            padding: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.only(bottom: 12),
             child: Row(children: [
               const Icon(Icons.warning_amber_rounded,
-                  size: 15, color: T.dangerDark),
-              const SizedBox(width: 6),
+                  size: 18, color: T.dangerDark),
+              const SizedBox(width: 8),
               Expanded(
                 child: Text(
                     'Prix de vente HT ${fmtDA(pvHT)} ≤ prix d’achat ${fmtDA(cost)} : vente à perte.',
-                    style: T.small.copyWith(
+                    style: T.body.copyWith(
                         color: T.dangerDark, fontWeight: FontWeight.w600)),
               ),
             ]),
           )
         else if (ttc > 0)
           Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Text('Prix de vente HT : ${fmtDA(pvHT)}',
-                style: T.monoSmall.copyWith(color: T.muted)),
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Text('Soit ${fmtDA(pvHT)} hors taxes',
+                style: T.monoBody.copyWith(color: T.muted)),
           ),
-        const MicroLabel('TVA'),
+        const _FieldLabel('TVA'),
         const SizedBox(height: 6),
-        Wrap(spacing: 6, children: [
+        Wrap(spacing: 8, runSpacing: 6, children: [
           for (final v in vats)
             ChoiceChip(
               label: Text('${(v / 100).toStringAsFixed(v % 100 == 0 ? 0 : 1)} %',
                   style: TextStyle(
                       fontFamily: T.mono,
-                      fontSize: 12,
+                      fontSize: 14,
                       fontWeight: FontWeight.w600,
                       color: _vat == v ? T.mintDark : T.muted)),
               selected: _vat == v,
@@ -1365,74 +1378,72 @@ class _ProductPageState extends State<ProductPage> {
             ),
         ]),
         if (_f.wholesale) ...[
-          const SizedBox(height: 12),
-          SizedBox(
-            width: 260,
-            child: _PField(
-              fieldKey: _k('wholesale'),
-              focusNode: _fn('wholesale'),
-              label: 'Prix demi-gros TTC$unit',
-              hint: 'vide = aucun',
-              controller: _wholesale,
-              mono: true,
-              error: _errors['wholesale'],
-              onChanged: (_) {
-                _errors.remove('wholesale');
-                _touch();
-              },
-            ),
-          ),
+          const SizedBox(height: 14),
+          _short(
+              _PField(
+                fieldKey: _k('wholesale'),
+                focusNode: _fn('wholesale'),
+                label: 'Prix demi-gros TTC$unit',
+                helper: 'Laissez vide si vous ne vendez pas en demi-gros.',
+                controller: _wholesale,
+                mono: true,
+                error: _errors['wholesale'],
+                onChanged: (_) {
+                  _errors.remove('wholesale');
+                  _touch();
+                },
+              ),
+              width: 420),
         ],
-      ],
+      ]),
     );
   }
+
+  // ---------------------------------------------------------------- Classement
 
   Widget _classement() {
     final catValue = _cats.any((c) => c.id == _categoryId) ? _categoryId : null;
     final supValue =
         _suppliers.any((s) => s.id == _supplierId) ? _supplierId : null;
-    return _Section(
+    return PageSection(
       title: 'Classement',
-      children: [
-        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Expanded(
-            child: _Dropdown<String?>(
-              label: 'Catégorie',
-              value: catValue,
-              items: [
-                const DropdownMenuItem<String?>(
-                    value: null, child: Text('Sans catégorie')),
-                for (final c in _cats)
-                  DropdownMenuItem<String?>(value: c.id, child: Text(c.name)),
-                DropdownMenuItem<String?>(
-                    value: _newSentinel,
-                    child: Text('+ Nouvelle catégorie',
-                        style: T.body.copyWith(
-                            color: T.mintDark, fontWeight: FontWeight.w700))),
-              ],
-              onChanged: (v) {
-                if (v == _newSentinel) {
-                  _newCategory();
-                } else {
-                  setState(() => _categoryId = v);
-                  _touch();
-                }
-              },
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(child: _brandField()),
-        ]),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        _Dropdown<String?>(
+          label: 'Catégorie',
+          helper: 'Le rayon du magasin : sert de filtre à la caisse et dans les rapports.',
+          value: catValue,
+          items: [
+            const DropdownMenuItem<String?>(
+                value: null, child: Text('Sans catégorie')),
+            for (final c in _cats)
+              DropdownMenuItem<String?>(value: c.id, child: Text(c.name)),
+            DropdownMenuItem<String?>(
+                value: _newSentinel,
+                child: Text('+ Créer une catégorie',
+                    style: T.body.copyWith(
+                        color: T.mintDark, fontWeight: FontWeight.w700))),
+          ],
+          onChanged: (v) {
+            if (v == _newSentinel) {
+              _newCategory();
+            } else {
+              setState(() => _categoryId = v);
+              _touch();
+            }
+          },
+        ),
+        _brandField(),
         _Dropdown<String?>(
           label: 'Fournisseur habituel',
+          helper: 'Proposé d’office sur les bons de commande et les réceptions.',
           value: supValue,
           items: [
-            const DropdownMenuItem<String?>(value: null, child: Text('— aucun —')),
+            const DropdownMenuItem<String?>(value: null, child: Text('Aucun')),
             for (final s in _suppliers)
               DropdownMenuItem<String?>(value: s.id, child: Text(s.name)),
             DropdownMenuItem<String?>(
                 value: _newSentinel,
-                child: Text('+ Nouveau fournisseur',
+                child: Text('+ Créer un fournisseur',
                     style: T.body.copyWith(
                         color: T.mintDark, fontWeight: FontWeight.w700))),
           ],
@@ -1445,7 +1456,19 @@ class _ProductPageState extends State<ProductPage> {
             }
           },
         ),
-      ],
+        if (_isEdit)
+          _SwitchRow(
+            label: 'Produit actif',
+            subtitle: _active
+                ? 'Vendable à la caisse et visible dans les listes.'
+                : 'Masqué de la caisse et des listes ; l’historique et le stock restent.',
+            value: _active,
+            onChanged: (v) {
+              setState(() => _active = v);
+              _touch();
+            },
+          ),
+      ]),
     );
   }
 
@@ -1476,7 +1499,7 @@ class _ProductPageState extends State<ProductPage> {
         label: 'Marque',
         controller: ctrl,
         focusNode: focus,
-        hint: 'Choisir ou créer…',
+        hint: 'Choisissez dans la liste ou tapez une nouvelle marque',
         onChanged: (_) => _touch(),
         onSubmitted: (_) => onSubmit(),
       ),
@@ -1487,7 +1510,7 @@ class _ProductPageState extends State<ProductPage> {
           color: T.surface,
           borderRadius: BorderRadius.circular(T.rInner),
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 260, maxWidth: 320),
+            constraints: const BoxConstraints(maxHeight: 300, maxWidth: 380),
             child: ListView(
               padding: const EdgeInsets.symmetric(vertical: 4),
               shrinkWrap: true,
@@ -1497,7 +1520,7 @@ class _ProductPageState extends State<ProductPage> {
                     onTap: () => onSelected(o),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 9),
+                          horizontal: 14, vertical: 10),
                       child: o.startsWith(_newSentinel)
                           ? Text('+ Créer « ${o.substring(_newSentinel.length)} »',
                               style: T.body.copyWith(
@@ -1514,134 +1537,63 @@ class _ProductPageState extends State<ProductPage> {
     );
   }
 
+  // ---------------------------------------------------------------- Stock
+
   Widget _stock() {
-    return _Section(
+    final initial = _PField(
+      fieldKey: _k('initialQty'),
+      focusNode: _fn('initialQty'),
+      label: _weighed ? 'Stock initial (kg)' : 'Stock initial',
+      helper: 'La quantité que vous avez en rayon aujourd’hui.',
+      controller: _initialQty,
+      mono: true,
+      error: _errors['initialQty'],
+      onChanged: (_) {
+        _errors.remove('initialQty');
+        _touch();
+        setState(() {});
+      },
+    );
+    final min = _PField(
+      fieldKey: _k('minStock'),
+      focusNode: _fn('minStock'),
+      label: 'Stock minimum (alerte)',
+      helper: 'En dessous, le produit apparaît « Sous le minimum ».',
+      controller: _minStock,
+      mono: true,
+      error: _errors['minStock'],
+      onChanged: (_) {
+        _errors.remove('minStock');
+        _touch();
+      },
+    );
+    return PageSection(
       title: 'Stock',
-      children: [
-        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          if (!_isEdit) ...[
-            Expanded(
-              child: _PField(
-                fieldKey: _k('initialQty'),
-                focusNode: _fn('initialQty'),
-                label: _weighed ? 'Stock initial (kg)' : 'Stock initial',
-                controller: _initialQty,
-                mono: true,
-                error: _errors['initialQty'],
-                onChanged: (_) {
-                  _errors.remove('initialQty');
-                  _touch();
-                  setState(() {});
-                },
-              ),
-            ),
-            const SizedBox(width: 12),
-          ],
-          Expanded(
-            child: _PField(
-              fieldKey: _k('minStock'),
-              focusNode: _fn('minStock'),
-              label: 'Stock minimum (alerte)',
-              controller: _minStock,
-              mono: true,
-              error: _errors['minStock'],
-              onChanged: (_) {
-                _errors.remove('minStock');
-                _touch();
-              },
-            ),
-          ),
-        ]),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        _short(_isEdit ? min : _pair(initial, min), width: _isEdit ? 420 : 640),
         if (!_isEdit && (parseQty(_initialQty.text) ?? 0) > 0)
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: Text(
-                'Le stock initial entre par un document « Stock initial » au prix d’achat — rien ne change le stock hors document.',
-                style: T.small.copyWith(fontSize: 10.5)),
+                'Le stock initial entre par un document « Stock initial » au prix d’achat : le stock ne change jamais sans document.',
+                style: T.small),
           ),
-        if (_f.packagings) ...[
-          _SwitchRow(
-            label: 'Vendu au carton aussi',
-            subtitle: 'Carton, pack, boîte : un code-barres et un nombre d’unités par conditionnement.',
-            value: _soldByPack,
-            onChanged: (v) {
-              setState(() {
-                _soldByPack = v;
-                if (v && _packs.isEmpty) _packs.add(_PackRow());
-                _errors.remove('packs');
-              });
-              _touch();
-            },
-          ),
-          if (_soldByPack)
-            KeyedSubtree(
-              key: _k('packs'),
-              child: Column(children: [
-                for (var i = 0; i < _packs.length; i++)
-                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Expanded(
-                        flex: 3,
-                        child: _PField(
-                            label: 'Conditionnement',
-                            controller: _packs[i].name,
-                            onChanged: (_) => _touch())),
-                    const SizedBox(width: 8),
-                    Expanded(
-                        flex: 2,
-                        child: _PField(
-                            label: 'Unités par pack',
-                            controller: _packs[i].factor,
-                            mono: true,
-                            hint: '24',
-                            onChanged: (_) {
-                              _errors.remove('packs');
-                              _touch();
-                            })),
-                    const SizedBox(width: 8),
-                    Expanded(
-                        flex: 3,
-                        child: _PField(
-                            label: 'Code-barres du pack',
-                            controller: _packs[i].barcode,
-                            mono: true,
-                            onChanged: (_) => _touch())),
-                    Padding(
-                      padding: const EdgeInsets.only(top: 18),
-                      child: IconButton(
-                        tooltip: 'Retirer ce conditionnement',
-                        onPressed: () {
-                          setState(() => _packs.removeAt(i).dispose());
-                          _touch();
-                        },
-                        icon: const Icon(Icons.close, size: 15, color: T.faint),
-                      ),
-                    ),
-                  ]),
-                FieldError(_errors['packs']),
-                Align(
-                  alignment: AlignmentDirectional.centerStart,
-                  child: TextButton.icon(
-                    onPressed: () {
-                      setState(() => _packs.add(_PackRow()));
-                      _touch();
-                    },
-                    icon: const Icon(Icons.add, size: 14),
-                    label: const Text('Ajouter un conditionnement'),
-                  ),
-                ),
-              ]),
-            ),
-        ],
-      ],
+        if (_isEdit)
+          Text(
+              'Le stock ne se modifie pas ici : utilisez « Ajuster le stock » sur la fiche du produit, ou un bon de réception.',
+              style: T.small),
+      ]),
     );
   }
+
+  // ---------------------------------------------------------------- Suivi
 
   Widget _tracking() {
     final children = <Widget>[];
     if (_f.lots) {
       children.add(_SwitchRow(
-        label: 'Lot & DLC',
-        subtitle: 'N° de lot et date de péremption exigés à la réception ; alertes de péremption.',
+        label: 'Lot et date de péremption',
+        subtitle: 'Le n° de lot et la date de péremption sont demandés au bon de réception ; alertes de péremption.',
         value: _lot,
         onChanged: (v) {
           setState(() => _lot = v);
@@ -1663,12 +1615,16 @@ class _ProductPageState extends State<ProductPage> {
           _touch();
         },
       ));
-      if (_serial) children.add(_serialsBlock());
+      if (_serial) {
+        children.add(_reveal(_existing?.trackSerials == true
+            ? 'Les numéros enregistrés sont dans « Options avancées » en bas de la page.'
+            : 'Les numéros se saisissent au bon de réception (ou ici, dans « Options avancées », une fois le produit enregistré).'));
+      }
     }
     if (_f.weighed) {
       children.add(_SwitchRow(
-        label: 'Produit au poids',
-        subtitle: 'Vendu au kg — prix au kilo, quantités décimales, étiquettes de balance.',
+        label: 'Vendu au poids',
+        subtitle: 'Vendu au kg : prix au kilo, quantités décimales, étiquettes de balance.',
         value: _weighed,
         onChanged: (v) {
           setState(() => _weighed = v);
@@ -1677,14 +1633,14 @@ class _ProductPageState extends State<ProductPage> {
       ));
       if (_weighed) {
         children.add(_reveal(
-            'Les prix de cette fiche s’entendent au kilo ; la caisse accepte les codes balance (21/22).'));
+            'Les prix de ce produit s’entendent au kilo ; la caisse accepte les codes balance (21/22).'));
       }
     }
     final canVariants = _f.variants && _existing?.parentProductId == null;
     if (canVariants) {
       children.add(_SwitchRow(
-        label: 'Déclinaisons',
-        subtitle: 'Taille, couleur… chaque combinaison devient un produit avec son code-barres, son prix et son stock.',
+        label: 'Variantes (taille, couleur…)',
+        subtitle: 'Chaque combinaison devient un produit avec son code-barres, son prix et son stock.',
         value: _variantsOn,
         onChanged: (v) {
           setState(() => _variantsOn = v);
@@ -1695,92 +1651,47 @@ class _ProductPageState extends State<ProductPage> {
       if (_variantsOn) children.add(_variantGenerator());
     }
     if (children.isEmpty) return const SizedBox.shrink();
-    return _Section(title: 'Suivi', children: children);
+    return PageSection(
+      title: 'Suivi',
+      child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch, children: children),
+    );
   }
 
   Widget _reveal(String text) => Padding(
         padding: const EdgeInsetsDirectional.only(start: 4, bottom: 10),
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Icon(Icons.subdirectory_arrow_right_rounded,
-              size: 15, color: T.faint),
+              size: 17, color: T.faint),
           const SizedBox(width: 6),
-          Expanded(child: Text(text, style: T.small.copyWith(fontSize: 11.5))),
+          Expanded(child: Text(text, style: T.small)),
         ]),
       );
-
-  Widget _serialsBlock() {
-    final p = _existing;
-    if (p == null || !p.trackSerials) {
-      return _reveal(
-          'Les numéros se saisissent à la réception (ou ici une fois le produit enregistré).');
-    }
-    final inStock = _units.where((u) => u.status == 'in_stock').length;
-    return Padding(
-      padding: const EdgeInsetsDirectional.only(start: 4, bottom: 10),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Expanded(
-              child: Text('$inStock en stock / ${_units.length} connus',
-                  style: T.small)),
-          TextButton.icon(
-            onPressed: _addSerials,
-            icon: const Icon(Icons.add, size: 14),
-            label: const Text('Ajouter des numéros'),
-          ),
-        ]),
-        for (final u in _units.take(8))
-          Padding(
-            padding: const EdgeInsets.only(bottom: 3),
-            child: Row(children: [
-              Icon(
-                  u.status == 'in_stock'
-                      ? Icons.inventory_2_outlined
-                      : Icons.sell_outlined,
-                  size: 13,
-                  color: u.status == 'in_stock' ? T.mintDeep : T.faint),
-              const SizedBox(width: 8),
-              Expanded(
-                  child: Text(u.serial,
-                      style: T.monoSmall.copyWith(fontSize: 11))),
-              if (u.isUsed)
-                const MintChip('occasion', color: T.warnTint, fg: T.warnDark),
-              const SizedBox(width: 6),
-              Text(
-                  switch (u.status) {
-                    'in_stock' => 'en stock',
-                    'sold' => 'vendu',
-                    'returned' => 'retourné',
-                    'repair' => 'en SAV',
-                    _ => 'rebuté',
-                  },
-                  style: T.small.copyWith(fontSize: 10.5)),
-            ]),
-          ),
-        if (_units.length > 8)
-          Text('… et ${_units.length - 8} autres', style: T.small),
-      ]),
-    );
-  }
 
   Widget _existingVariantsBlock() => Padding(
         padding: const EdgeInsetsDirectional.only(start: 4, bottom: 10),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          MicroLabel('${_existingVariants.length} déclinaison(s) existante(s)'),
-          const SizedBox(height: 4),
+          _FieldLabel('${_existingVariants.length} variante(s) existante(s)'),
+          const SizedBox(height: 6),
           for (final v in _existingVariants)
             Padding(
-              padding: const EdgeInsets.only(bottom: 3),
+              padding: const EdgeInsets.only(bottom: 4),
               child: Row(children: [
                 const Icon(Icons.subdirectory_arrow_right,
-                    size: 14, color: T.faint),
+                    size: 16, color: T.faint),
                 const SizedBox(width: 8),
                 Expanded(
                     child: Text(v.variantLabel ?? v.name,
-                        style: T.body.copyWith(fontSize: 12.5))),
+                        style: T.body, overflow: TextOverflow.ellipsis)),
                 if (v.barcode != null)
                   SizedBox(
-                      width: 140, child: Text(v.barcode!, style: T.monoSmall)),
-                Text(fmtDA(v.priceRetail), style: T.monoSmall),
+                      width: 170,
+                      child: Text(v.barcode!,
+                          style: T.monoSmall, overflow: TextOverflow.ellipsis)),
+                SizedBox(
+                    width: 130,
+                    child: Text(fmtDA(v.priceRetail),
+                        textAlign: TextAlign.end, style: T.monoBody)),
               ]),
             ),
         ]),
@@ -1792,7 +1703,7 @@ class _ProductPageState extends State<ProductPage> {
       key: _k('variants'),
       child: Container(
         margin: const EdgeInsets.only(bottom: 10),
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
           color: T.bg,
           borderRadius: BorderRadius.circular(T.rInner),
@@ -1800,38 +1711,40 @@ class _ProductPageState extends State<ProductPage> {
               color: _errors['variants'] != null ? T.danger : T.border),
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const MicroLabel('Options'),
-          const SizedBox(height: 6),
+          const _FieldLabel('Options (ex. Taille : S, M, L — Couleur : Rouge, Bleu)'),
+          const SizedBox(height: 8),
           for (var i = 0; i < _options.length; i++) _optionRow(i),
           Align(
             alignment: AlignmentDirectional.centerStart,
             child: TextButton.icon(
               onPressed: () => setState(() => _options.add(_OptionRow(''))),
-              icon: const Icon(Icons.add, size: 14),
+              icon: const Icon(Icons.add, size: 16),
               label: const Text('Ajouter une option'),
             ),
           ),
           if (grid.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            MicroLabel(
-                '${grid.length} combinaison${grid.length > 1 ? 's' : ''} — créées à l’enregistrement'),
+            const SizedBox(height: 8),
+            _FieldLabel(
+                '${grid.length} variante${grid.length > 1 ? 's' : ''} — créée${grid.length > 1 ? 's' : ''} à l’enregistrement'),
             const SizedBox(height: 6),
             Row(children: [
-              const Expanded(flex: 3, child: MicroLabel('Déclinaison')),
-              const Expanded(flex: 3, child: MicroLabel('Code-barres')),
-              const Expanded(flex: 2, child: MicroLabel('Prix de vente')),
+              const Expanded(flex: 3, child: _FieldLabel('Variante')),
+              const Expanded(flex: 3, child: _FieldLabel('Code-barres')),
+              const Expanded(flex: 2, child: _FieldLabel('Prix de vente TTC')),
               if (widget.showCost)
-                const Expanded(flex: 2, child: MicroLabel('Prix d’achat')),
+                const Expanded(flex: 2, child: _FieldLabel('Prix d’achat HT')),
             ]),
             const SizedBox(height: 4),
             for (final (label, row) in grid)
               Padding(
-                padding: const EdgeInsets.only(bottom: 4),
+                padding: const EdgeInsets.only(bottom: 6),
                 child: Row(children: [
                   Expanded(
                       flex: 3,
                       child: Text(label,
-                          style: T.body.copyWith(fontWeight: FontWeight.w600))),
+                          style: T.body.copyWith(fontWeight: FontWeight.w600),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis)),
                   Expanded(
                       flex: 3,
                       child: _GridInput(
@@ -1866,7 +1779,7 @@ class _ProductPageState extends State<ProductPage> {
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         SizedBox(
-          width: 130,
+          width: 150,
           child: _GridInput(
               controller: o.name,
               hint: 'Option (Taille…)',
@@ -1875,7 +1788,7 @@ class _ProductPageState extends State<ProductPage> {
         const SizedBox(width: 8),
         Expanded(
           child: Container(
-            constraints: const BoxConstraints(minHeight: 36),
+            constraints: const BoxConstraints(minHeight: 40),
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
             decoration: BoxDecoration(
               color: T.surface,
@@ -1899,7 +1812,7 @@ class _ProductPageState extends State<ProductPage> {
                     },
                   ),
                 SizedBox(
-                  width: 160,
+                  width: 240,
                   child: Focus(
                     onKeyEvent: (node, e) {
                       if (e is KeyDownEvent &&
@@ -1921,10 +1834,10 @@ class _ProductPageState extends State<ProductPage> {
                         border: InputBorder.none,
                         hintText: o.values.isEmpty
                             ? 'S, M, L… (Entrée ou virgule)'
-                            : 'Ajouter…',
+                            : 'Ajouter une valeur…',
                         hintStyle: T.small.copyWith(color: T.ghost),
                         contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 4, vertical: 8),
+                            horizontal: 4, vertical: 9),
                       ),
                       onChanged: (t) {
                         if (t.contains(',')) _addOptionValue(o, t);
@@ -1940,131 +1853,90 @@ class _ProductPageState extends State<ProductPage> {
             ),
           ),
         ),
-        IconButton(
-          tooltip: 'Retirer cette option',
+        const SizedBox(width: 4),
+        TextButton(
+          style: TextButton.styleFrom(foregroundColor: T.muted),
           onPressed: () {
             setState(() => _options.removeAt(i).dispose());
             _touch();
           },
-          icon: const Icon(Icons.close, size: 15, color: T.faint),
+          child: const Text('Retirer'),
         ),
       ]),
     );
   }
 
-  Widget _typeSection() {
-    return _Section(
-      title: 'Type',
-      children: [
-        Wrap(spacing: 8, children: [
-          for (final (k, label, icon) in const [
-            ('standard', 'Standard', Icons.inventory_2_outlined),
-            ('service', 'Service', Icons.handyman_outlined),
-          ])
-            ChoiceChip(
-              avatar: Icon(icon,
-                  size: 16, color: _kind == k ? T.mintDark : T.muted),
-              label: Text(label,
-                  style: T.body.copyWith(
-                      fontWeight: FontWeight.w600,
-                      color: _kind == k ? T.mintDark : T.ink)),
-              selected: _kind == k,
-              selectedColor: T.mintTint,
-              backgroundColor: T.surface,
-              side: BorderSide(color: _kind == k ? T.mintDeep : T.border),
-              showCheckmark: false,
-              onSelected: (_) {
-                setState(() => _kind = k);
+  // ---------------------------------------------------------------- Boutique
+
+  Widget _webstore() {
+    return PageSection(
+      title: 'Boutique en ligne',
+      child: _PField(
+        label: 'Description',
+        helper: 'Une ligne « Clé : Valeur » = une ligne du tableau de caractéristiques sur la boutique.',
+        controller: _description,
+        maxLines: 6,
+        hint: 'Marque : Samsung\nStockage : 128 Go\nNeuf sous blister…',
+        onChanged: (_) => _touch(),
+      ),
+    );
+  }
+
+  // ---------------------------------------------------------------- Garantie / promo
+
+  Widget _warrantyPromo() {
+    return PageSection(
+      title: 'Garantie et promotion',
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        _short(
+            _PField(
+              fieldKey: _k('warranty'),
+              focusNode: _fn('warranty'),
+              label: 'Garantie (mois)',
+              helper: 'Laissez vide si le produit est vendu sans garantie.',
+              controller: _warranty,
+              mono: true,
+              error: _errors['warranty'],
+              onChanged: (_) {
+                _errors.remove('warranty');
                 _touch();
               },
             ),
-        ]),
-        const SizedBox(height: 6),
-        Text(
-            _kind == 'service'
-                ? 'Un service (main-d’œuvre, livraison, pose…) se vend sans stock : aucun mouvement, aucun inventaire.'
-                : 'Un produit standard a un stock, des mouvements et un CMUP.',
-            style: T.small.copyWith(fontSize: 11.5)),
-      ],
-    );
-  }
-
-  // ---------------------------------------------------------------- right
-
-  List<Widget> _rightSections() {
-    return [
-      _Section(title: 'Statut', children: [
-        _SwitchRow(
-          label: 'Actif',
-          subtitle: _active
-              ? 'Vendable à la caisse et visible dans les listes.'
-              : 'Masqué de la caisse ; l’historique reste.',
-          value: _active,
-          onChanged: (v) {
-            setState(() => _active = v);
-            _touch();
-          },
-        ),
-      ]),
-      if (_f.webstore)
-        _Section(title: 'Boutique en ligne', children: [
-          _PField(
-            label: 'Description',
-            controller: _description,
-            maxLines: 6,
-            hint: 'Marque: Samsung\nStockage: 128 Go\nNeuf sous blister…',
-            onChanged: (_) => _touch(),
-          ),
-          Text('« Clé: Valeur » par ligne = tableau de caractéristiques.',
-              style: T.small.copyWith(fontSize: 10.5)),
-        ]),
-      _Section(title: 'Garantie', children: [
-        _PField(
-          fieldKey: _k('warranty'),
-          focusNode: _fn('warranty'),
-          label: 'Durée (mois) — vide = sans garantie',
-          controller: _warranty,
-          mono: true,
-          error: _errors['warranty'],
-          onChanged: (_) {
-            _errors.remove('warranty');
-            _touch();
-          },
-        ),
-      ]),
-      _Section(title: 'Promotion', children: [
-        _PField(
-          fieldKey: _k('promo'),
-          focusNode: _fn('promo'),
-          label: 'Prix promo TTC — vide = pas de promo',
-          controller: _promoPrice,
-          mono: true,
-          error: _errors['promo'],
-          onChanged: (_) {
-            _errors.remove('promo');
-            _touch();
-            setState(() {});
-          },
-        ),
-        Row(children: [
-          Expanded(
-              child: _DateBtn(
+            width: 420),
+        _short(
+            _PField(
+              fieldKey: _k('promo'),
+              focusNode: _fn('promo'),
+              label: 'Prix promo TTC (DA)',
+              helper: 'Laissez vide s’il n’y a pas de promotion.',
+              controller: _promoPrice,
+              mono: true,
+              error: _errors['promo'],
+              onChanged: (_) {
+                _errors.remove('promo');
+                _touch();
+                setState(() {});
+              },
+            ),
+            width: 420),
+        _short(
+            _pair(
+              _DateBtn(
                   label: 'Du',
                   value: _promoStart,
                   onTap: () => _pickPromoDate(true),
                   onClear: _promoStart == null
                       ? null
-                      : () => setState(() => _promoStart = null))),
-          const SizedBox(width: 8),
-          Expanded(
-              child: _DateBtn(
+                      : () => setState(() => _promoStart = null)),
+              _DateBtn(
                   label: 'Au',
                   value: _promoEnd,
                   onTap: () => _pickPromoDate(false),
                   onClear: _promoEnd == null
                       ? null
-                      : () => setState(() => _promoEnd = null))),
-        ]),
+                      : () => setState(() => _promoEnd = null)),
+            ),
+            width: 640),
         Builder(builder: (_) {
           final promo = parseDA(_promoPrice.text) ?? 0;
           final ttc = parseDA(_retail.text) ?? 0;
@@ -2075,33 +1947,303 @@ class _ProductPageState extends State<ProductPage> {
           return Padding(
             padding: const EdgeInsets.only(top: 6),
             child: Text('Remise de ${_fmtPct(pct)} %',
-                style: T.monoSmall.copyWith(color: T.mintDark)),
+                style: T.monoBody.copyWith(color: T.mintDark)),
           );
         }),
       ]),
-    ];
+    );
+  }
+
+  // ---------------------------------------------------------------- Options avancées
+
+  Widget _advancedSection() {
+    final service = _kind == 'service';
+    final hasError =
+        _errors.containsKey('packs') || _errors.containsKey('barcodesEx');
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      decoration: BoxDecoration(
+        color: T.surface,
+        borderRadius: BorderRadius.circular(T.rCard),
+        border: Border.all(color: hasError ? T.danger : T.border),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        InkWell(
+          borderRadius: BorderRadius.circular(T.rCard),
+          onTap: () => setState(() => _advanced = !_advanced),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 16, 16),
+            child: Row(children: [
+              Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Options avancées', style: T.h2),
+                      const SizedBox(height: 2),
+                      Text(
+                          [
+                            'Nom en arabe',
+                            'codes-barres supplémentaires',
+                            if (_f.packagings && !service) 'emballages (carton, pack…)',
+                            if (_f.serials && _serial) 'n° de série',
+                          ].join(' · '),
+                          style: T.small),
+                    ]),
+              ),
+              Text(_advanced ? 'Masquer' : 'Afficher',
+                  style: T.body.copyWith(
+                      color: T.mintDark, fontWeight: FontWeight.w700)),
+              Icon(_advanced ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+                  color: T.mintDark),
+            ]),
+          ),
+        ),
+        if (_advanced)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Divider(height: 1),
+                const SizedBox(height: 14),
+                _PField(
+                  label: 'Nom en arabe',
+                  helper: 'Imprimé sur les tickets et étiquettes en arabe.',
+                  controller: _nameAr,
+                  rtl: true,
+                  onChanged: (_) => _touch(),
+                ),
+                _extraBarcodes(),
+                if (_f.packagings && !service) _packagings(),
+                if (_f.serials && _serial && !service) _serialsBlock(),
+              ],
+            ),
+          ),
+      ]),
+    );
+  }
+
+  Widget _extraBarcodes() {
+    return KeyedSubtree(
+      key: _k('barcodesEx'),
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 14),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          const _FieldLabel('Codes-barres supplémentaires'),
+          const SizedBox(height: 2),
+          Text('Même produit, même stock, même prix (ex. un ancien code-barres, un code fournisseur).',
+              style: T.small),
+          const SizedBox(height: 8),
+          for (var i = 0; i < _bcodes.length; i++)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Row(children: [
+                SizedBox(
+                    width: 200,
+                    child: Text(_bcodes[i].code,
+                        style: T.monoBody, overflow: TextOverflow.ellipsis)),
+                Expanded(
+                    child: Text(
+                        _bcodes[i].label.isEmpty ? '—' : _bcodes[i].label,
+                        style: T.body,
+                        overflow: TextOverflow.ellipsis)),
+                TextButton(
+                  style: TextButton.styleFrom(foregroundColor: T.muted),
+                  onPressed: () {
+                    setState(() => _bcodes.removeAt(i));
+                    _touch();
+                  },
+                  child: const Text('Retirer'),
+                ),
+              ]),
+            ),
+          Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            Expanded(
+                child: _PField(
+                    label: 'Code-barres',
+                    hint: 'Scannez le code…',
+                    controller: _newBcode,
+                    mono: true,
+                    bottomGap: 0,
+                    onSubmitted: (_) => _addExtraBarcode())),
+            const SizedBox(width: 10),
+            Expanded(
+                child: _PField(
+                    label: 'Libellé (facultatif)',
+                    hint: 'Pomme, ancien code…',
+                    controller: _newBcodeLabel,
+                    bottomGap: 0,
+                    onSubmitted: (_) => _addExtraBarcode())),
+            const SizedBox(width: 10),
+            SizedBox(
+              height: 44,
+              child: OutlinedButton.icon(
+                onPressed: _addExtraBarcode,
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Ajouter'),
+              ),
+            ),
+          ]),
+          FieldError(_errors['barcodesEx']),
+        ]),
+      ),
+    );
+  }
+
+  Widget _packagings() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        _SwitchRow(
+          label: 'Vendu aussi par emballage (carton, pack…)',
+          subtitle:
+              'Chaque emballage a son code-barres et un nombre d’unités : scanner le carton vend 24 unités.',
+          value: _soldByPack,
+          onChanged: (v) {
+            setState(() {
+              _soldByPack = v;
+              if (v && _packs.isEmpty) _packs.add(_PackRow());
+              _errors.remove('packs');
+            });
+            _touch();
+          },
+        ),
+        if (_soldByPack)
+          KeyedSubtree(
+            key: _k('packs'),
+            child: Column(children: [
+              for (var i = 0; i < _packs.length; i++)
+                Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                  Expanded(
+                      flex: 3,
+                      child: _PField(
+                          label: 'Emballage',
+                          controller: _packs[i].name,
+                          onChanged: (_) => _touch())),
+                  const SizedBox(width: 10),
+                  Expanded(
+                      flex: 2,
+                      child: _PField(
+                          label: 'Unités dedans',
+                          controller: _packs[i].factor,
+                          mono: true,
+                          hint: '24',
+                          onChanged: (_) {
+                            _errors.remove('packs');
+                            _touch();
+                          })),
+                  const SizedBox(width: 10),
+                  Expanded(
+                      flex: 3,
+                      child: _PField(
+                          label: 'Code-barres de l’emballage',
+                          controller: _packs[i].barcode,
+                          mono: true,
+                          onChanged: (_) => _touch())),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 14),
+                    child: TextButton(
+                      style: TextButton.styleFrom(foregroundColor: T.muted),
+                      onPressed: () {
+                        setState(() => _packs.removeAt(i).dispose());
+                        _touch();
+                      },
+                      child: const Text('Retirer'),
+                    ),
+                  ),
+                ]),
+              FieldError(_errors['packs']),
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: TextButton.icon(
+                  onPressed: () {
+                    setState(() => _packs.add(_PackRow()));
+                    _touch();
+                  },
+                  icon: const Icon(Icons.add, size: 16),
+                  label: const Text('Ajouter un emballage'),
+                ),
+              ),
+            ]),
+          ),
+      ]),
+    );
+  }
+
+  Widget _serialsBlock() {
+    final p = _existing;
+    if (p == null || !p.trackSerials) {
+      return Text(
+          'N° de série : ils se saisissent au bon de réception, ou ici une fois le produit enregistré.',
+          style: T.small);
+    }
+    final inStock = _units.where((u) => u.status == 'in_stock').length;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        Expanded(
+            child: Text('N° de série : $inStock en stock sur ${_units.length} enregistrés',
+                style: T.body.copyWith(fontWeight: FontWeight.w600))),
+        OutlinedButton.icon(
+          onPressed: _addSerials,
+          icon: const Icon(Icons.add, size: 16),
+          label: const Text('Ajouter des numéros'),
+        ),
+      ]),
+      const SizedBox(height: 6),
+      for (final u in _units.take(8))
+        Padding(
+          padding: const EdgeInsets.only(bottom: 4),
+          child: Row(children: [
+            Icon(
+                u.status == 'in_stock'
+                    ? Icons.inventory_2_outlined
+                    : Icons.sell_outlined,
+                size: 16,
+                color: u.status == 'in_stock' ? T.mintDeep : T.faint),
+            const SizedBox(width: 8),
+            Expanded(
+                child: Text(u.serial,
+                    style: T.monoBody, overflow: TextOverflow.ellipsis)),
+            if (u.isUsed)
+              const MintChip('occasion', color: T.warnTint, fg: T.warnDark),
+            const SizedBox(width: 8),
+            Text(
+                switch (u.status) {
+                  'in_stock' => 'en stock',
+                  'sold' => 'vendu',
+                  'returned' => 'retourné',
+                  'repair' => 'en SAV',
+                  _ => 'rebuté',
+                },
+                style: T.small),
+          ]),
+        ),
+      if (_units.length > 8)
+        Text('… et ${_units.length - 8} autres', style: T.small),
+    ]);
   }
 }
 
 // ---------------------------------------------------------------- widgets
 
-class _Section extends StatelessWidget {
-  const _Section({required this.title, required this.children});
-  final String title;
-  final List<Widget> children;
+/// Label above a field; a red « * » when the field is required.
+class _FieldLabel extends StatelessWidget {
+  const _FieldLabel(this.text, {this.required = false, this.color});
+  final String text;
+  final bool required;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 14),
-      child: Card14(
-        padding: const EdgeInsets.fromLTRB(18, 14, 18, 8),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Text(title, style: T.h2.copyWith(fontSize: 15)),
-          const SizedBox(height: 12),
-          ...children,
-        ]),
-      ),
+    return Text.rich(
+      TextSpan(children: [
+        TextSpan(text: text),
+        if (required)
+          const TextSpan(
+              text: ' *',
+              style: TextStyle(color: T.danger, fontWeight: FontWeight.w800)),
+      ]),
+      style: T.label.copyWith(color: color ?? T.ink, fontWeight: FontWeight.w600),
     );
   }
 }
@@ -2113,6 +2255,8 @@ class _PField extends StatelessWidget {
     this.fieldKey,
     this.focusNode,
     this.error,
+    this.helper,
+    this.required = false,
     this.mono = false,
     this.enabled = true,
     this.autofocus = false,
@@ -2123,12 +2267,15 @@ class _PField extends StatelessWidget {
     this.hint,
     this.suffixText,
     this.maxLines = 1,
+    this.bottomGap = 14,
   });
   final String label;
   final TextEditingController controller;
   final Key? fieldKey;
   final FocusNode? focusNode;
   final String? error;
+  final String? helper;
+  final bool required;
   final bool mono;
   final bool enabled;
   final bool autofocus;
@@ -2139,25 +2286,27 @@ class _PField extends StatelessWidget {
   final String? hint;
   final String? suffixText;
   final int maxLines;
+  final double bottomGap;
 
   @override
   Widget build(BuildContext context) {
     final hasError = error != null && error!.isNotEmpty;
     return Padding(
       key: fieldKey,
-      padding: const EdgeInsets.only(bottom: 10),
+      padding: EdgeInsets.only(bottom: bottomGap),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          MicroLabel(label, color: hasError ? T.dangerDark : null),
-          const SizedBox(height: 4),
+          _FieldLabel(label,
+              required: required, color: hasError ? T.dangerDark : null),
+          const SizedBox(height: 6),
           Container(
-            constraints: BoxConstraints(minHeight: maxLines > 1 ? 0 : 38),
+            constraints: BoxConstraints(minHeight: maxLines > 1 ? 0 : 44),
             decoration: BoxDecoration(
               color: enabled ? T.surface : T.bg,
               borderRadius: BorderRadius.circular(T.rInner),
               border: Border.all(
-                  color: hasError ? T.danger : T.border,
+                  color: hasError ? T.danger : T.border3,
                   width: hasError ? 1.4 : 1),
             ),
             child: Row(children: [
@@ -2177,17 +2326,23 @@ class _PField extends StatelessWidget {
                     isDense: true,
                     border: InputBorder.none,
                     hintText: hint,
-                    hintStyle: T.small.copyWith(color: T.ghost),
+                    hintStyle: T.body.copyWith(color: T.ghost),
                     suffixText: suffixText,
                     contentPadding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                   ),
                 ),
               ),
               ?trailing,
             ]),
           ),
-          FieldError(error),
+          if (hasError)
+            FieldError(error)
+          else if (helper != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 4, left: 2),
+              child: Text(helper!, style: T.small),
+            ),
         ],
       ),
     );
@@ -2205,23 +2360,23 @@ class _GridInput extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 34,
+      height: 40,
       margin: const EdgeInsetsDirectional.only(end: 6),
       decoration: BoxDecoration(
         color: T.surface,
         borderRadius: BorderRadius.circular(T.rInner),
-        border: Border.all(color: T.border),
+        border: Border.all(color: T.border3),
       ),
       child: TextField(
         controller: controller,
-        style: (mono ? T.monoBody : T.body).copyWith(fontSize: 12.5),
+        style: (mono ? T.monoBody : T.body),
         onChanged: onChanged,
         decoration: InputDecoration(
           isDense: true,
           border: InputBorder.none,
           hintText: hint,
           hintStyle: T.small.copyWith(color: T.ghost),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
         ),
       ),
     );
@@ -2233,26 +2388,28 @@ class _Dropdown<V> extends StatelessWidget {
       {required this.label,
       required this.value,
       required this.items,
-      required this.onChanged});
+      required this.onChanged,
+      this.helper});
   final String label;
   final V value;
   final List<DropdownMenuItem<V>> items;
   final ValueChanged<V?> onChanged;
+  final String? helper;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.only(bottom: 14),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        MicroLabel(label),
-        const SizedBox(height: 4),
+        _FieldLabel(label),
+        const SizedBox(height: 6),
         Container(
-          height: 38,
-          padding: const EdgeInsets.symmetric(horizontal: 10),
+          height: 44,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
           decoration: BoxDecoration(
             color: T.surface,
             borderRadius: BorderRadius.circular(T.rInner),
-            border: Border.all(color: T.border),
+            border: Border.all(color: T.border3),
           ),
           child: DropdownButtonHideUnderline(
             child: DropdownButton<V>(
@@ -2265,6 +2422,11 @@ class _Dropdown<V> extends StatelessWidget {
             ),
           ),
         ),
+        if (helper != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 4, left: 2),
+            child: Text(helper!, style: T.small),
+          ),
       ]),
     );
   }
@@ -2287,15 +2449,23 @@ class _SwitchRow extends StatelessWidget {
       onTap: () => onChanged(!value),
       borderRadius: BorderRadius.circular(T.rInner),
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
+        padding: const EdgeInsets.symmetric(vertical: 8),
         child: Row(children: [
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(label, style: T.body.copyWith(fontWeight: FontWeight.w600)),
-              if (subtitle != null)
-                Text(subtitle!, style: T.small.copyWith(fontSize: 11)),
+              if (subtitle != null) ...[
+                const SizedBox(height: 2),
+                Text(subtitle!, style: T.small),
+              ],
             ]),
           ),
+          const SizedBox(width: 12),
+          Text(value ? 'Oui' : 'Non',
+              style: T.body.copyWith(
+                  color: value ? T.mintDark : T.muted,
+                  fontWeight: FontWeight.w600)),
+          const SizedBox(width: 6),
           Switch(
             value: value,
             activeTrackColor: T.mint,
@@ -2317,35 +2487,42 @@ class _DateBtn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(T.rInner),
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        decoration: BoxDecoration(
-          color: T.surface,
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _FieldLabel(label),
+        const SizedBox(height: 6),
+        InkWell(
+          onTap: onTap,
           borderRadius: BorderRadius.circular(T.rInner),
-          border: Border.all(color: T.border),
-        ),
-        child: Row(children: [
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              MicroLabel(label),
-              const SizedBox(height: 2),
-              Text(value ?? '—', style: T.monoBody.copyWith(fontSize: 11.5)),
+          child: Container(
+            height: 44,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: T.surface,
+              borderRadius: BorderRadius.circular(T.rInner),
+              border: Border.all(color: T.border3),
+            ),
+            child: Row(children: [
+              const Icon(Icons.calendar_today_outlined, size: 16, color: T.muted),
+              const SizedBox(width: 8),
+              Expanded(
+                  child: Text(value ?? 'Choisir une date',
+                      style: value == null
+                          ? T.body.copyWith(color: T.muted)
+                          : T.monoBody)),
+              if (onClear != null)
+                TextButton(
+                  style: TextButton.styleFrom(
+                      foregroundColor: T.muted,
+                      padding: const EdgeInsets.symmetric(horizontal: 6)),
+                  onPressed: onClear,
+                  child: const Text('Effacer'),
+                ),
             ]),
           ),
-          if (onClear != null)
-            InkWell(
-              onTap: onClear,
-              child: const Tooltip(
-                message: 'Effacer la date',
-                child: Icon(Icons.close, size: 14, color: T.faint),
-              ),
-            ),
-        ]),
-      ),
+        ),
+      ]),
     );
   }
 }
@@ -2360,42 +2537,48 @@ class _PhotoTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final s = main ? 84.0 : 56.0;
+    final s = main ? 96.0 : 72.0;
     return Padding(
-      padding: const EdgeInsetsDirectional.only(end: 8),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Container(
-          width: s,
-          height: s,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(T.rInner),
-            border: Border.all(
-                color: main ? T.mintDeep : T.border, width: main ? 1.5 : 1),
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(T.rInner - 1),
-            child: SizedBox(width: s, height: s, child: image),
-          ),
-        ),
-        Row(mainAxisSize: MainAxisSize.min, children: [
-          if (onMain != null)
-            IconButton(
-              tooltip: 'Photo principale',
-              visualDensity: VisualDensity.compact,
-              iconSize: 15,
-              onPressed: onMain,
-              icon: const Icon(Icons.star_outline_rounded, color: T.muted),
-            ),
-          if (onRemove != null)
-            IconButton(
-              tooltip: 'Supprimer la photo',
-              visualDensity: VisualDensity.compact,
-              iconSize: 15,
-              onPressed: onRemove,
-              icon: const Icon(Icons.delete_outline_rounded, color: T.muted),
-            ),
-        ]),
-      ]),
+      padding: const EdgeInsetsDirectional.only(end: 10),
+      child: SizedBox(
+        width: 150,
+        child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: s,
+                height: s,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(T.rInner),
+                  border: Border.all(
+                      color: main ? T.mintDeep : T.border, width: main ? 1.5 : 1),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(T.rInner - 1),
+                  child: SizedBox(width: s, height: s, child: image),
+                ),
+              ),
+              if (main)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text('Photo principale', style: T.small),
+                ),
+              if (onMain != null)
+                TextButton.icon(
+                  onPressed: onMain,
+                  icon: const Icon(Icons.star_outline_rounded, size: 16),
+                  label: const Text('Mettre en premier'),
+                ),
+              if (onRemove != null)
+                TextButton.icon(
+                  style: TextButton.styleFrom(foregroundColor: T.dangerDark),
+                  onPressed: onRemove,
+                  icon: const Icon(Icons.delete_outline_rounded, size: 16),
+                  label: const Text('Supprimer'),
+                ),
+            ]),
+      ),
     );
   }
 }

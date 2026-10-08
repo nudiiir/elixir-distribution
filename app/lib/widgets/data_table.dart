@@ -161,6 +161,8 @@ class _DataListViewState<R> extends State<DataListView<R>> {
   bool _asc = true;
   bool _exporting = false;
   bool _compact = false;
+  int _page = 0;
+  int _pageSize = 50; // 0 = tout afficher
   Set<String> _hidden = {};
   final Set<String> _selected = {};
   int? _cursor;
@@ -187,6 +189,7 @@ class _DataListViewState<R> extends State<DataListView<R>> {
               .any((c) => c.key == key && !c.hideable));
       }
       _compact = UiPrefs.instance.get<bool>(k, 'compact') ?? false;
+      _pageSize = UiPrefs.instance.get<int>(k, 'page_size') ?? 50;
       final sortKey = UiPrefs.instance.get<String>(k, 'sort');
       if (sortKey != null) {
         final i = widget.columns.indexWhere((c) => c.key == sortKey);
@@ -201,6 +204,8 @@ class _DataListViewState<R> extends State<DataListView<R>> {
   @override
   void didUpdateWidget(covariant DataListView<R> old) {
     super.didUpdateWidget(old);
+    // A new search / filter result starts again on page 1.
+    if (old.items.length != widget.items.length) _page = 0;
     if (widget.rowId != null && _selected.isNotEmpty) {
       final ids = {for (final r in widget.items) widget.rowId!(r)};
       _selected.removeWhere((id) => !ids.contains(id));
@@ -383,7 +388,7 @@ class _DataListViewState<R> extends State<DataListView<R>> {
 
   void _ensureVisible(int i) {
     if (!_scroll.hasClients) return;
-    final h = _compact ? 37.0 : 45.0;
+    final h = _compact ? 37.0 : 49.0;
     final top = i * h;
     final view = _scroll.position.viewportDimension;
     if (top < _scroll.offset) {
@@ -492,7 +497,7 @@ class _DataListViewState<R> extends State<DataListView<R>> {
               size: 14, color: T.muted),
           const SizedBox(width: 5),
           Text(_exporting ? 'Export…' : 'Exporter',
-              style: T.small.copyWith(fontSize: 11)),
+              style: T.small.copyWith(fontSize: 13, color: T.ink)),
         ]),
       );
 
@@ -503,7 +508,17 @@ class _DataListViewState<R> extends State<DataListView<R>> {
     final cols = _visibleCols;
     final selectedRows = _selectedRows(rows);
     final hasMenu = widget.rowMenu != null;
-    final vPad = _compact ? 5.0 : 9.0;
+    // ~48 px rows (36 px in compact mode): easy to read and to click.
+    final vPad = _compact ? 7.0 : 13.0;
+
+    // ---- Paging: « 1–50 sur 312 » with previous / next ----
+    final size = _pageSize <= 0 ? rows.length : _pageSize;
+    final pages = rows.isEmpty || size == 0 ? 1 : (rows.length + size - 1) ~/ size;
+    if (_page >= pages) _page = pages - 1;
+    if (_page < 0) _page = 0;
+    final start = rows.isEmpty ? 0 : _page * size;
+    final end = rows.isEmpty ? 0 : (start + size).clamp(0, rows.length);
+    final view = rows.isEmpty ? <R>[] : rows.sublist(start, end);
 
     Widget body;
     if (widget.loading && widget.items.isEmpty) {
@@ -530,10 +545,10 @@ class _DataListViewState<R> extends State<DataListView<R>> {
     } else {
       body = ListView.separated(
         controller: _scroll,
-        itemCount: rows.length,
+        itemCount: view.length,
         separatorBuilder: (_, _) => const Divider(),
         itemBuilder: (context, i) {
-          final row = rows[i];
+          final row = view[i];
           final id = widget.rowId?.call(row);
           final selected = id != null && _selected.contains(id);
           final highlighted = widget.highlight?.call(row) ?? false;
@@ -557,36 +572,50 @@ class _DataListViewState<R> extends State<DataListView<R>> {
               child: Row(children: [
                 if (_selectable)
                   SizedBox(
-                    width: 30,
-                    child: (hover || _selected.isNotEmpty)
-                        ? Checkbox(
-                            value: selected,
-                            visualDensity: VisualDensity.compact,
-                            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            onChanged: (v) => setState(() =>
-                                v == true ? _selected.add(id!) : _selected.remove(id)),
-                          )
-                        : const SizedBox.shrink(),
+                    width: 36,
+                    child: Checkbox(
+                      value: selected,
+                      visualDensity: VisualDensity.compact,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      onChanged: (v) => setState(() =>
+                          v == true ? _selected.add(id!) : _selected.remove(id)),
+                    ),
                   ),
                 for (final c in cols) _cellBox(c, c.cell(context, row)),
                 if (hasMenu)
                   SizedBox(
-                    width: 30,
-                    child: hover
-                        ? Builder(
-                            builder: (btnCtx) => IconButton(
-                              tooltip: 'Actions',
-                              visualDensity: VisualDensity.compact,
-                              iconSize: 17,
-                              icon: const Icon(Icons.more_horiz_rounded, color: T.muted),
-                              onPressed: () {
-                                final box = btnCtx.findRenderObject() as RenderBox;
-                                _openRowMenu(row,
-                                    box.localToGlobal(Offset(0, box.size.height)));
-                              },
-                            ),
-                          )
-                        : const SizedBox.shrink(),
+                    width: 112,
+                    child: Align(
+                      alignment: AlignmentDirectional.centerEnd,
+                      // Always visible and labelled: nothing hides behind a
+                      // hover or a right-click.
+                      child: Builder(
+                        builder: (btnCtx) => OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: T.ink,
+                            side: BorderSide(color: hover ? T.mintDeep : T.border3),
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                            minimumSize: const Size(0, 32),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8)),
+                          ),
+                          onPressed: () {
+                            final box = btnCtx.findRenderObject() as RenderBox;
+                            _openRowMenu(
+                                row, box.localToGlobal(Offset(0, box.size.height)));
+                          },
+                          child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                            Text('Actions',
+                                style: TextStyle(
+                                    fontFamily: T.sans,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600)),
+                            SizedBox(width: 2),
+                            Icon(Icons.arrow_drop_down_rounded, size: 18),
+                          ]),
+                        ),
+                      ),
+                    ),
                   ),
               ]),
             ),
@@ -598,7 +627,7 @@ class _DataListViewState<R> extends State<DataListView<R>> {
     final aggSource = selectedRows.isNotEmpty ? selectedRows : rows;
     return Focus(
       focusNode: _focus,
-      onKeyEvent: (n, e) => _onKey(n, e, rows),
+      onKeyEvent: (n, e) => _onKey(n, e, view),
       child: Card14(
         padding: EdgeInsets.zero,
         child: Column(children: [
@@ -640,7 +669,7 @@ class _DataListViewState<R> extends State<DataListView<R>> {
                               if (clear && mounted) setState(_selected.clear);
                             },
                             icon: Icon(a.icon, size: 16),
-                            label: Text(a.label, style: const TextStyle(fontSize: 12.5)),
+                            label: Text(a.label, style: const TextStyle(fontSize: 13.5)),
                           ),
                         ),
                     ]),
@@ -656,9 +685,20 @@ class _DataListViewState<R> extends State<DataListView<R>> {
             )
           else
             Padding(
-              padding: const EdgeInsetsDirectional.fromSTEB(16, 10, 16, 8),
+              padding: const EdgeInsetsDirectional.fromSTEB(16, 8, 16, 8),
               child: Row(children: [
-                if (_selectable) const SizedBox(width: 30),
+                if (_selectable)
+                  SizedBox(
+                    width: 36,
+                    child: Checkbox(
+                      value: false,
+                      visualDensity: VisualDensity.compact,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      onChanged: rows.isEmpty
+                          ? null
+                          : (_) => setState(() => _selected.addAll(rows.map(widget.rowId!))),
+                    ),
+                  ),
                 for (final c in cols)
                   _cellBox(
                     c,
@@ -677,7 +717,7 @@ class _DataListViewState<R> extends State<DataListView<R>> {
                                 _asc
                                     ? Icons.arrow_upward_rounded
                                     : Icons.arrow_downward_rounded,
-                                size: 11,
+                                size: 14,
                                 color: T.mintDeep,
                               ),
                             )
@@ -685,13 +725,13 @@ class _DataListViewState<R> extends State<DataListView<R>> {
                             const Padding(
                               padding: EdgeInsetsDirectional.only(start: 3),
                               child: Icon(Icons.unfold_more_rounded,
-                                  size: 11, color: T.ghost),
+                                  size: 14, color: T.ghost),
                             ),
                         ],
                       ),
                     ),
                   ),
-                if (hasMenu) const SizedBox(width: 30),
+                if (hasMenu) const SizedBox(width: 112),
               ]),
             ),
           const Divider(),
@@ -704,9 +744,54 @@ class _DataListViewState<R> extends State<DataListView<R>> {
           Padding(
             padding: const EdgeInsetsDirectional.fromSTEB(16, 4, 4, 4),
             child: Row(children: [
-              MicroLabel(selectedRows.isNotEmpty
-                  ? '${selectedRows.length} / ${rows.length} lignes'
-                  : '${rows.length} lignes'),
+              Text(
+                  rows.isEmpty
+                      ? '0 ligne'
+                      : selectedRows.isNotEmpty
+                          ? '${selectedRows.length} sélectionné${selectedRows.length > 1 ? 's' : ''} · ${start + 1}–$end sur ${rows.length}'
+                          : '${start + 1}–$end sur ${rows.length}',
+                  style: T.body.copyWith(fontSize: 13.5, color: T.muted)),
+              if (pages > 1) ...[
+                const SizedBox(width: 6),
+                IconButton(
+                  tooltip: 'Page précédente',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: _page == 0 ? null : () => setState(() => _page--),
+                  icon: const Icon(Icons.chevron_left_rounded, size: 20),
+                ),
+                Text('Page ${_page + 1} / $pages', style: T.small),
+                IconButton(
+                  tooltip: 'Page suivante',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: _page >= pages - 1 ? null : () => setState(() => _page++),
+                  icon: const Icon(Icons.chevron_right_rounded, size: 20),
+                ),
+              ],
+              if (rows.length > 25) ...[
+                const SizedBox(width: 6),
+                DropdownButtonHideUnderline(
+                  child: DropdownButton<int>(
+                    value: _pageSize,
+                    isDense: true,
+                    style: T.small.copyWith(color: T.ink),
+                    items: const [
+                      DropdownMenuItem(value: 25, child: Text('25 par page')),
+                      DropdownMenuItem(value: 50, child: Text('50 par page')),
+                      DropdownMenuItem(value: 100, child: Text('100 par page')),
+                      DropdownMenuItem(value: 0, child: Text('Tout afficher')),
+                    ],
+                    onChanged: (v) {
+                      setState(() {
+                        _pageSize = v ?? 50;
+                        _page = 0;
+                      });
+                      if (widget.prefsKey != null) {
+                        UiPrefs.instance.set(widget.prefsKey!, 'page_size', _pageSize);
+                      }
+                    },
+                  ),
+                ),
+              ],
               if (widget.aggregates != null)
                 Expanded(
                   child: SingleChildScrollView(
@@ -718,7 +803,7 @@ class _DataListViewState<R> extends State<DataListView<R>> {
                         const SizedBox(width: 6),
                         Text(value,
                             style: T.monoBody.copyWith(
-                                fontSize: 11.5, fontWeight: FontWeight.w600)),
+                                fontSize: 13.5, fontWeight: FontWeight.w700)),
                       ],
                     ]),
                   ),

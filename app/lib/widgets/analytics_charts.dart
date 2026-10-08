@@ -243,7 +243,7 @@ class StatTiles extends StatelessWidget {
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: Text(fmtValue(row[r.colIndex(m.key)], m.format), style: T.h2.copyWith(fontSize: 20))),
-                Text(m.label, style: T.small.copyWith(fontSize: 10.5), maxLines: 1, overflow: TextOverflow.ellipsis),
+                Text(m.label, style: T.small.copyWith(fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
               ]),
             ),
           ],
@@ -406,7 +406,7 @@ class _SeriesChartState extends State<SeriesChart> {
                   const SizedBox(width: 5),
                   Text(
                     _hoverX == null || s.values[_hoverX!] == null ? s.label : '${s.label} : ${fmtValue(s.values[_hoverX!], s.format)}',
-                    style: T.small.copyWith(fontSize: 11, decoration: _hidden.contains(s.label) ? TextDecoration.lineThrough : null),
+                    style: T.small.copyWith(fontSize: 13, decoration: _hidden.contains(s.label) ? TextDecoration.lineThrough : null),
                   ),
                 ]),
               ),
@@ -480,7 +480,7 @@ class _SeriesPainter extends CustomPainter {
       final v = primaryMin + range * i / 4;
       final y = yOf(v, false);
       canvas.drawLine(Offset(left, y), Offset(right, y), grid);
-      tp.text = TextSpan(text: fmtAxis(v, fmt), style: T.monoSmall.copyWith(fontSize: 9.5));
+      tp.text = TextSpan(text: fmtAxis(v, fmt), style: T.monoSmall.copyWith(fontSize: 12));
       tp.layout();
       tp.paint(canvas, Offset(left - tp.width - 6, y - tp.height / 2));
     }
@@ -489,7 +489,7 @@ class _SeriesPainter extends CustomPainter {
       for (var i = 0; i <= 4; i++) {
         final v = secondaryMax * i / 4;
         final y = yOf(v, true);
-        tp.text = TextSpan(text: fmtAxis(v, sf), style: T.monoSmall.copyWith(fontSize: 9.5, color: T.faint));
+        tp.text = TextSpan(text: fmtAxis(v, sf), style: T.monoSmall.copyWith(fontSize: 12, color: T.faint));
         tp.layout();
         tp.paint(canvas, Offset(right + 6, y - tp.height / 2));
       }
@@ -503,7 +503,7 @@ class _SeriesPainter extends CustomPainter {
     // libellés X (échantillonnés)
     final step = math.max(1, (n / (w / 64)).ceil());
     for (var i = 0; i < n; i += step) {
-      tp.text = TextSpan(text: labels[i].length > 12 ? '${labels[i].substring(0, 11)}…' : labels[i], style: T.monoSmall.copyWith(fontSize: 9.5));
+      tp.text = TextSpan(text: labels[i].length > 12 ? '${labels[i].substring(0, 11)}…' : labels[i], style: T.monoSmall.copyWith(fontSize: 12));
       tp.layout();
       tp.paint(canvas, Offset(left + i * slot + slot / 2 - tp.width / 2, bottom + 5));
     }
@@ -588,7 +588,7 @@ class _SeriesPainter extends CustomPainter {
           final rect = RRect.fromRectAndCorners(Rect.fromLTRB(x0, y0, x1, y1), topLeft: const Radius.circular(3), topRight: const Radius.circular(3));
           canvas.drawRRect(rect, Paint()..color = hover == i ? s.color : s.color.withValues(alpha: 0.85));
           if (showValues && !stacked && n <= 24) {
-            tp.text = TextSpan(text: fmtAxis(v, s.format), style: T.monoSmall.copyWith(fontSize: 9, color: T.muted));
+            tp.text = TextSpan(text: fmtAxis(v, s.format), style: T.monoSmall.copyWith(fontSize: 11.5, color: T.muted));
             tp.layout();
             tp.paint(canvas, Offset((x0 + x1) / 2 - tp.width / 2, y0 - tp.height - 2));
           }
@@ -676,7 +676,7 @@ class DonutChart extends StatelessWidget {
         size: size,
         center: Column(mainAxisSize: MainAxisSize.min, children: [
           Text(fmtAxis(total, m.format), style: compact ? T.h2 : T.monoBig.copyWith(fontSize: 20)),
-          Text('total', style: T.small.copyWith(fontSize: 10)),
+          Text('total', style: T.small.copyWith(fontSize: 13)),
         ]),
       ),
       const SizedBox(width: 16),
@@ -691,7 +691,7 @@ class DonutChart extends StatelessWidget {
                   child: Row(children: [
                     Container(width: 10, height: 10, decoration: BoxDecoration(color: seriesColor(i), shape: BoxShape.circle)),
                     const SizedBox(width: 6),
-                    Expanded(child: Text(r.labelOf(xCol, rows[i][xi]), style: T.small.copyWith(color: T.ink, fontSize: 11.5), maxLines: 1, overflow: TextOverflow.ellipsis)),
+                    Expanded(child: Text(r.labelOf(xCol, rows[i][xi]), style: T.small.copyWith(color: T.ink, fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis)),
                     const SizedBox(width: 6),
                     Text(fmtValue(rows[i][mi], m.format), style: T.monoSmall.copyWith(color: T.ink)),
                     const SizedBox(width: 6),
@@ -764,7 +764,7 @@ class PivotGrid extends StatelessWidget {
       rowTotals.add(tot);
     }
     const cw = 108.0;
-    final headerStyle = T.label.copyWith(color: T.ink, fontSize: 9.5);
+    final headerStyle = T.label.copyWith(color: T.ink, fontSize: 13);
     Widget hcell(String t, {double w = cw, bool left = false}) => Container(
           width: w,
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
@@ -775,7 +775,7 @@ class PivotGrid extends StatelessWidget {
           width: w,
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
           decoration: BoxDecoration(border: Border(bottom: BorderSide(color: T.border2))),
-          child: Text(fmtValue(v, format), style: (bold ? T.monoBody.copyWith(fontWeight: FontWeight.w700) : T.monoBody).copyWith(fontSize: 11.5), textAlign: TextAlign.end),
+          child: Text(fmtValue(v, format), style: (bold ? T.monoBody.copyWith(fontWeight: FontWeight.w700) : T.monoBody).copyWith(fontSize: 13), textAlign: TextAlign.end),
         );
     final rowW = 200.0;
     return Scrollbar(
@@ -795,14 +795,14 @@ class PivotGrid extends StatelessWidget {
                   width: rowW,
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
                   decoration: BoxDecoration(border: Border(bottom: BorderSide(color: T.border2))),
-                  child: Text([for (var i = 0; i < rowDims.length; i++) r.labelOf(rowDims[i], rowVals[ri][i])].join(' · '), style: T.body.copyWith(fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  child: Text([for (var i = 0; i < rowDims.length; i++) r.labelOf(rowDims[i], rowVals[ri][i])].join(' · '), style: T.body.copyWith(fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
                 ),
                 for (var cj = 0; cj < colKeys.length; cj++)
                   for (var k = 0; k < nm; k++) vcell(cells['${rowKeys[ri]}||${colKeys[cj]}']?[k] ?? 0, meas[k].format),
                 for (var k = 0; k < nm; k++) vcell(rowTotals[ri][k], meas[k].format, bold: true),
               ]),
             Row(children: [
-              Container(width: rowW, padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8), color: T.bg, child: Text('Total', style: T.body.copyWith(fontWeight: FontWeight.w700, fontSize: 12))),
+              Container(width: rowW, padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8), color: T.bg, child: Text('Total', style: T.body.copyWith(fontWeight: FontWeight.w700, fontSize: 13))),
               for (var cj = 0; cj < colKeys.length; cj++) for (var k = 0; k < nm; k++) Container(color: T.bg, child: vcell(colTotals[cj * nm + k], meas[k].format, bold: true)),
               for (var k = 0; k < nm; k++) Container(color: T.bg, child: vcell(grand[k], meas[k].format, bold: true)),
             ]),
@@ -869,7 +869,7 @@ class _ResultTableState extends State<ResultTable> {
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                     color: T.bg,
                     child: Row(mainAxisAlignment: r.columns[i].isDimension ? MainAxisAlignment.start : MainAxisAlignment.end, children: [
-                      Flexible(child: Text(r.columns[i].label, style: T.label.copyWith(color: T.ink, fontSize: 9.5), maxLines: 2, overflow: TextOverflow.ellipsis)),
+                      Flexible(child: Text(r.columns[i].label, style: T.label.copyWith(color: T.ink, fontSize: 13), maxLines: 2, overflow: TextOverflow.ellipsis)),
                       if (_sortCol == i) Icon(_asc ? Icons.arrow_drop_up : Icons.arrow_drop_down, size: 14, color: T.mintDark),
                     ]),
                   ),
@@ -889,7 +889,7 @@ class _ResultTableState extends State<ResultTable> {
                         alignment: r.columns[i].isDimension ? Alignment.centerLeft : Alignment.centerRight,
                         child: Text(
                           r.columns[i].isDimension ? r.labelOf(r.columns[i], rows[ri][i]) : fmtValue(rows[ri][i], r.columns[i].format),
-                          style: (r.columns[i].isDimension ? T.body : T.monoBody).copyWith(fontSize: 12),
+                          style: (r.columns[i].isDimension ? T.body : T.monoBody).copyWith(fontSize: 13),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),

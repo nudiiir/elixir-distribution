@@ -8,11 +8,12 @@ import '../../widgets/data_table.dart';
 import '../../widgets/doc_list.dart';
 import '../../widgets/list_toolbar.dart';
 import '../../widgets/ui.dart';
+import 'inventory_page.dart';
 import 'stock_common.dart';
 
-enum StockDocsMode { adjustments, transfers }
+enum StockDocsMode { adjustments, inventories, transfers }
 
-/// « Ajustements » (ajustements + inventaires) and « Transferts » lists.
+/// « Ajustements », « Inventaire » and « Transferts » lists.
 class StockDocsTab extends StatefulWidget {
   const StockDocsTab({
     super.key,
@@ -34,7 +35,7 @@ class StockDocsTab extends StatefulWidget {
   final String? warehouseId;
   final ValueChanged<String?> onWarehouse;
 
-  /// « Faire un inventaire » / « Nouveau transfert » (empty state).
+  /// « Nouvel ajustement » / « Nouvel inventaire » / « Nouveau transfert ».
   final VoidCallback onPrimary;
 
   /// Opens a saved (draft) inventory session.
@@ -46,13 +47,25 @@ class StockDocsTab extends StatefulWidget {
 }
 
 class StockDocsTabState extends State<StockDocsTab> {
-  static const _reasons = ['casse', 'vol', 'péremption', 'inventaire'];
+  static const _reasons = ['casse', 'vol', 'péremption'];
 
-  bool get _adj => widget.mode == StockDocsMode.adjustments;
-  String get _p => _adj ? 'stock_adjustments' : 'stock_transfers';
+  StockDocsMode get _mode => widget.mode;
+  bool get _adj => _mode == StockDocsMode.adjustments;
+  bool get _inv => _mode == StockDocsMode.inventories;
+  String get _p => switch (_mode) {
+        StockDocsMode.adjustments => 'stock_adjustments',
+        StockDocsMode.inventories => 'stock_inventories',
+        StockDocsMode.transfers => 'stock_transfers',
+      };
+
+  String get _primaryLabel => switch (_mode) {
+        StockDocsMode.adjustments => 'Nouvel ajustement',
+        StockDocsMode.inventories => 'Nouvel inventaire',
+        StockDocsMode.transfers => 'Nouveau transfert',
+      };
 
   final _search = TextEditingController();
-  late StockPeriod _period = StockPeriod.load(_p, fallback: 'month');
+  late StockPeriod _period = StockPeriod.load(_p, fallback: _inv ? 'year' : 'month');
   late String? _reason = UiPrefs.instance.get<String>(_p, 'reason');
   late bool _drafts = UiPrefs.instance.get<bool>(_p, 'drafts') ?? false;
 
@@ -85,7 +98,11 @@ class StockDocsTabState extends State<StockDocsTab> {
     });
     try {
       final docs = await widget.api.stockDocuments(
-        types: _adj ? const ['STOCK_ADJUSTMENT', 'INVENTORY_COUNT'] : const ['STOCK_TRANSFER'],
+        types: switch (_mode) {
+          StockDocsMode.adjustments => const ['STOCK_ADJUSTMENT'],
+          StockDocsMode.inventories => const ['INVENTORY_COUNT'],
+          StockDocsMode.transfers => const ['STOCK_TRANSFER'],
+        },
         from: _period.fromIso,
         to: _period.toIso,
         warehouseId: widget.warehouseId,
@@ -106,15 +123,14 @@ class StockDocsTabState extends State<StockDocsTab> {
     }
   }
 
-  String _reasonOf(StockDoc d) =>
-      d.docType == 'INVENTORY_COUNT' ? 'inventaire' : (d.reason ?? '').trim().toLowerCase();
+  String _reasonOf(StockDoc d) => (d.reason ?? '').trim().toLowerCase();
 
   List<StockDoc> get _visible {
     final q = _search.text.trim().toLowerCase();
     return [
       for (final d in _docs)
         if ((!_drafts || d.status == 'draft') &&
-            (_reason == null || _reasonOf(d) == _reason) &&
+            (!_adj || _reason == null || _reasonOf(d) == _reason) &&
             (q.isEmpty ||
                 (d.number ?? '').toLowerCase().contains(q) ||
                 (d.reason ?? '').toLowerCase().contains(q) ||
@@ -124,12 +140,35 @@ class StockDocsTabState extends State<StockDocsTab> {
   }
 
   Future<void> _open(StockDoc d) async {
-    if (d.docType == 'INVENTORY_COUNT' && d.status == 'draft' && widget.onResumeInventory != null) {
-      widget.onResumeInventory!(d.id);
+    if (d.docType == 'INVENTORY_COUNT') {
+      if (d.status == 'draft' && widget.onResumeInventory != null) {
+        widget.onResumeInventory!(d.id);
+        return;
+      }
+      final changed = await Navigator.of(context).push<bool>(MaterialPageRoute(
+        builder: (_) => InventoryDetailPage(api: widget.api, doc: d, viewCost: widget.viewCost),
+      ));
+      if (changed == true) reload();
       return;
     }
     final changed = await openStockDocument(context, widget.api, d.id);
     if (changed) reload();
+  }
+
+  void _setPeriod(StockPeriod p) {
+    setState(() => _period = p);
+    p.save(_p);
+    reload();
+  }
+
+  void _clearAll() {
+    setState(() {
+      _reason = null;
+      _drafts = false;
+      _search.clear();
+    });
+    UiPrefs.instance.set(_p, 'reason', null);
+    UiPrefs.instance.set(_p, 'drafts', false);
   }
 
   String _cap(String s) => s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
@@ -139,6 +178,18 @@ class StockDocsTabState extends State<StockDocsTab> {
     final rows = _visible;
     final draftCount = _docs.where((d) => d.status == 'draft').length;
     final multi = widget.warehouses.length > 1;
+    final reasons = {
+      ..._reasons,
+      for (final d in _docs)
+        if (_reasonOf(d).isNotEmpty) _reasonOf(d)
+    }.toList();
+    final depot = depotFilter(
+      warehouses: widget.warehouses,
+      value: widget.warehouseId,
+      onChanged: widget.onWarehouse,
+      label: _mode == StockDocsMode.transfers ? 'Dépôt (départ ou arrivée)' : 'Dépôt',
+    );
+    final anyFilter = _reason != null || _drafts || _search.text.trim().isNotEmpty;
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       ListToolbar(
@@ -146,27 +197,8 @@ class StockDocsTabState extends State<StockDocsTab> {
         searchHint: _adj ? 'N°, motif, note…' : 'N°, note…',
         onSearchChanged: (_) => setState(() {}),
         quickFilters: [
-          PeriodButton(
-            period: _period,
-            onChanged: (p) {
-              setState(() => _period = p);
-              p.save(_p);
-              reload();
-            },
-          ),
-          if (_adj)
-            for (final r in _reasons)
-              FilterPill(
-                label: _cap(r),
-                active: _reason == r,
-                count: _docs.where((d) => _reasonOf(d) == r).length,
-                onTap: () {
-                  setState(() => _reason = _reason == r ? null : r);
-                  UiPrefs.instance.set(_p, 'reason', _reason);
-                },
-              ),
           FilterPill(
-            label: 'Brouillons',
+            label: _inv ? 'En cours (non validés)' : 'Brouillons',
             icon: Icons.edit_note_rounded,
             active: _drafts,
             count: draftCount,
@@ -176,6 +208,20 @@ class StockDocsTabState extends State<StockDocsTab> {
             },
           ),
         ],
+        panel: FilterPanel(fields: [
+          ?depot,
+          periodFilter(context, period: _period, onChanged: _setPeriod),
+          if (_adj)
+            FilterField<String>(
+              label: 'Motif',
+              value: reasons.contains(_reason) ? _reason : null,
+              options: [for (final r in reasons) (r, _cap(r))],
+              onChanged: (v) {
+                setState(() => _reason = v);
+                UiPrefs.instance.set(_p, 'reason', v);
+              },
+            ),
+        ]),
         active: [
           if (_reason != null)
             ActiveFilter('Motif : $_reason', () {
@@ -183,32 +229,13 @@ class StockDocsTabState extends State<StockDocsTab> {
               UiPrefs.instance.set(_p, 'reason', null);
             }),
           if (_drafts)
-            ActiveFilter('Brouillons', () {
+            ActiveFilter(_inv ? 'En cours' : 'Brouillons', () {
               setState(() => _drafts = false);
               UiPrefs.instance.set(_p, 'drafts', false);
             }),
         ],
-        onClearAll: () {
-          setState(() {
-            _reason = null;
-            _drafts = false;
-            _search.clear();
-          });
-          UiPrefs.instance.set(_p, 'reason', null);
-          UiPrefs.instance.set(_p, 'drafts', false);
-        },
-        trailing: [
-          DepotDropdown(
-            warehouses: widget.warehouses,
-            value: widget.warehouseId,
-            onChanged: widget.onWarehouse,
-          ),
-          IconButton(
-            tooltip: 'Actualiser',
-            onPressed: reload,
-            icon: const Icon(Icons.refresh_rounded, size: 18, color: T.muted),
-          ),
-        ],
+        onClearAll: _clearAll,
+        trailing: [RefreshButton(onPressed: reload)],
       ),
       const SizedBox(height: 12),
       Expanded(
@@ -221,68 +248,83 @@ class StockDocsTabState extends State<StockDocsTab> {
           rowId: (d) => d.id,
           initialSortColumn: 0,
           initialAscending: false,
-          exportTitle: '${_adj ? 'Ajustements de stock' : 'Transferts de stock'} — ${_period.label}',
-          exportBaseName: _adj ? 'ajustements' : 'transferts',
+          exportTitle: '${switch (_mode) {
+            StockDocsMode.adjustments => 'Ajustements de stock',
+            StockDocsMode.inventories => 'Inventaires',
+            StockDocsMode.transfers => 'Transferts de stock',
+          }} — ${_period.label}',
+          exportBaseName: _p.replaceFirst('stock_', ''),
           company: widget.company,
           onTap: _open,
           rowMenu: (d) => [
             RowAction(
                 d.docType == 'INVENTORY_COUNT' && d.status == 'draft'
-                    ? 'Reprendre l’inventaire'
+                    ? 'Reprendre le comptage'
                     : 'Ouvrir',
                 Icons.open_in_new_rounded,
                 _open),
+            if (d.docType == 'INVENTORY_COUNT' && d.status != 'draft')
+              RowAction('Document complet (imprimer, annuler)', Icons.description_outlined,
+                  (d) async {
+                final changed = await openStockDocument(context, widget.api, d.id);
+                if (changed) reload();
+              }),
           ],
-          empty: EmptyState(
-            icon: _adj ? Icons.tune_rounded : Icons.compare_arrows_rounded,
-            text: _adj
-                ? 'Aucun ajustement ni inventaire sur cette période.'
-                : 'Aucun transfert sur cette période.',
-            actions: [
-              if (_period.key != 'all')
-                ('Toute la période', () {
-                  setState(() => _period = StockPeriod.preset('all'));
-                  _period.save(_p);
-                  reload();
-                }),
-              (_adj ? 'Faire un inventaire' : 'Nouveau transfert', widget.onPrimary),
-            ],
-          ),
+          empty: anyFilter
+              ? EmptyState(
+                  icon: Icons.filter_alt_off_outlined,
+                  text: 'Aucun document ne correspond à ces filtres.',
+                  actions: [('Effacer les filtres', _clearAll), (_primaryLabel, widget.onPrimary)])
+              : EmptyState(
+                  icon: switch (_mode) {
+                    StockDocsMode.adjustments => Icons.tune_rounded,
+                    StockDocsMode.inventories => Icons.fact_check_outlined,
+                    StockDocsMode.transfers => Icons.compare_arrows_rounded,
+                  },
+                  text: switch (_mode) {
+                    StockDocsMode.adjustments =>
+                      'Aucun ajustement sur cette période.\nUn ajustement corrige le stock d’un produit (casse, vol, péremption…).',
+                    StockDocsMode.inventories =>
+                      'Aucun inventaire sur cette période.\nUn inventaire compare ce que vous comptez au stock du logiciel.',
+                    StockDocsMode.transfers => multi
+                        ? 'Aucun transfert sur cette période.'
+                        : 'Un transfert déplace du stock d’un dépôt à un autre : créez d’abord un deuxième dépôt dans les paramètres.',
+                  },
+                  actions: [
+                    if (_period.key != 'all')
+                      ('Voir toute la période', () => _setPeriod(StockPeriod.preset('all'))),
+                    if (_mode != StockDocsMode.transfers || multi)
+                      (_primaryLabel, widget.onPrimary),
+                  ],
+                ),
           aggregates: (sel) => [
             ('Documents', '${sel.length}'),
             if (widget.viewCost)
-              ('Valeur nette', fmtDA(sel.fold<int>(0, (s, d) => s + d.value))),
+              (_inv ? 'Différence en DA' : 'Valeur nette',
+                  fmtDA(sel.fold<int>(0, (s, d) => s + d.value))),
           ],
           columns: [
             ColumnSpec(
               id: 'date',
               label: 'Date',
-              width: 100,
+              width: 110,
               hideable: false,
               sortKey: (d) => '${d.docDate}${d.createdAt}',
               exportValue: (d) => frDate(d.docDate),
               cell: (context, d) => Text(frDate(d.docDate), style: T.monoSmall),
             ),
-            if (_adj)
-              ColumnSpec(
-                id: 'type',
-                label: 'Type',
-                width: 105,
-                sortKey: (d) => d.docType,
-                exportValue: (d) => docLabel(d.docType),
-                cell: (context, d) => Text(docLabel(d.docType), style: T.small),
-              ),
             ColumnSpec(
               id: 'number',
               label: 'N°',
-              width: 150,
+              width: 160,
               hideable: false,
               sortKey: (d) => d.number ?? '',
               exportValue: (d) => d.number ?? '',
-              cell: (context, d) => Text(d.number ?? 'brouillon',
-                  style: T.monoSmall.copyWith(color: d.number == null ? T.faint : T.ink)),
+              cell: (context, d) => Text(
+                  d.number ?? (_inv ? 'en cours' : 'brouillon'),
+                  style: T.monoSmall.copyWith(color: d.number == null ? T.muted : T.ink)),
             ),
-            if (_adj && multi)
+            if (_mode != StockDocsMode.transfers && multi)
               ColumnSpec(
                 id: 'depot',
                 label: 'Dépôt',
@@ -292,10 +334,10 @@ class StockDocsTabState extends State<StockDocsTab> {
                 cell: (context, d) => Text(d.warehouseName ?? '—',
                     style: T.small, maxLines: 1, overflow: TextOverflow.ellipsis),
               ),
-            if (!_adj) ...[
+            if (_mode == StockDocsMode.transfers) ...[
               ColumnSpec(
                 id: 'from',
-                label: 'De',
+                label: 'Depuis',
                 flex: 2,
                 sortKey: (d) => d.warehouseName ?? '',
                 exportValue: (d) => d.warehouseName ?? '',
@@ -309,7 +351,7 @@ class StockDocsTabState extends State<StockDocsTab> {
                 sortKey: (d) => d.destWarehouseName ?? '',
                 exportValue: (d) => d.destWarehouseName ?? '',
                 cell: (context, d) => Row(children: [
-                  const Icon(Icons.arrow_forward_rounded, size: 13, color: T.faint),
+                  const Icon(Icons.arrow_forward_rounded, size: 15, color: T.faint),
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(d.destWarehouseName ?? '—',
@@ -325,33 +367,36 @@ class StockDocsTabState extends State<StockDocsTab> {
                 flex: 2,
                 sortKey: (d) => _reasonOf(d),
                 exportValue: (d) => _reasonOf(d),
-                cell: (context, d) => Text(_cap(_reasonOf(d)).isEmpty ? '—' : _cap(_reasonOf(d)),
+                cell: (context, d) => Text(_reasonOf(d).isEmpty ? '—' : _cap(_reasonOf(d)),
                     style: T.small, maxLines: 1, overflow: TextOverflow.ellipsis),
               ),
             ColumnSpec(
               id: 'notes',
-              label: 'Note',
+              label: _inv ? 'Ce qui a été compté' : 'Note',
               flex: 3,
-              visibleByDefault: false,
+              visibleByDefault: _inv,
               sortKey: (d) => d.notes ?? '',
               exportValue: (d) => d.notes ?? '',
-              cell: (context, d) => Text(d.notes ?? '',
-                  style: T.small, maxLines: 1, overflow: TextOverflow.ellipsis),
+              cell: (context, d) => Text(
+                  _inv ? (d.notes ?? '').replaceFirst('Inventaire — ', '') : (d.notes ?? ''),
+                  style: T.small,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis),
             ),
             ColumnSpec(
               id: 'lines',
-              label: 'Lignes',
-              width: 70,
+              label: _inv ? 'Produits comptés' : 'Lignes',
+              width: _inv ? 140 : 80,
               numeric: true,
               sortKey: (d) => d.lineCount,
               exportValue: (d) => d.lineCount,
               cell: (context, d) => Text('${d.lineCount}', style: T.monoSmall),
             ),
-            if (_adj) ...[
+            if (_mode != StockDocsMode.transfers) ...[
               ColumnSpec(
                 id: 'in',
-                label: 'Entrées',
-                width: 85,
+                label: _inv ? 'En plus' : 'Entrées',
+                width: 95,
                 numeric: true,
                 sortKey: (d) => d.inMilli,
                 exportValue: (d) => d.inMilli / 1000,
@@ -360,8 +405,8 @@ class StockDocsTabState extends State<StockDocsTab> {
               ),
               ColumnSpec(
                 id: 'out',
-                label: 'Sorties',
-                width: 85,
+                label: _inv ? 'En moins' : 'Sorties',
+                width: 95,
                 numeric: true,
                 sortKey: (d) => d.outMilli,
                 exportValue: (d) => d.outMilli / 1000,
@@ -372,7 +417,7 @@ class StockDocsTabState extends State<StockDocsTab> {
               ColumnSpec(
                 id: 'qty',
                 label: 'Quantité',
-                width: 90,
+                width: 100,
                 numeric: true,
                 sortKey: (d) => d.outMilli,
                 exportValue: (d) => d.outMilli / 1000,
@@ -382,25 +427,29 @@ class StockDocsTabState extends State<StockDocsTab> {
             if (widget.viewCost)
               ColumnSpec(
                 id: 'value',
-                label: 'Valeur',
-                width: 120,
+                label: _inv ? 'Différence en DA' : 'Valeur',
+                width: 150,
                 numeric: true,
-                sortKey: (d) => _adj ? d.value : -d.value,
-                exportValue: (d) => (_adj ? d.value : -d.value) / 100,
+                sortKey: (d) => _mode == StockDocsMode.transfers ? -d.value : d.value,
+                exportValue: (d) => (_mode == StockDocsMode.transfers ? -d.value : d.value) / 100,
                 cell: (context, d) => Text(
-                    d.status == 'posted' ? fmtDA(_adj ? d.value : -d.value) : '—',
+                    d.status == 'posted'
+                        ? fmtDA(_mode == StockDocsMode.transfers ? -d.value : d.value)
+                        : '—',
                     style: T.monoBody.copyWith(
-                        color: _adj && d.value < 0 ? T.dangerDark : T.ink)),
+                        color: _mode != StockDocsMode.transfers && d.value < 0
+                            ? T.dangerDark
+                            : T.ink)),
               ),
             ColumnSpec(
               id: 'status',
               label: 'Statut',
-              width: 95,
+              width: 110,
               sortKey: (d) => d.status,
               exportValue: (d) => switch (d.status) {
                 'posted' => 'validé',
                 'cancelled' => 'annulé',
-                _ => 'brouillon',
+                _ => _inv ? 'en cours' : 'brouillon',
               },
               cell: (context, d) => StatusChip(status: d.status),
             ),
