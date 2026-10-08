@@ -141,10 +141,18 @@ class SearchField extends StatelessWidget {
   }
 }
 
+/// Empty list / screen. Give it [actions] so the user always sees the next
+/// step (« Importer un fichier », « Nouveau produit »…).
 class EmptyState extends StatelessWidget {
-  const EmptyState({super.key, required this.icon, required this.text});
+  const EmptyState({
+    super.key,
+    required this.icon,
+    required this.text,
+    this.actions = const [],
+  });
   final IconData icon;
   final String text;
+  final List<(String, VoidCallback)> actions;
 
   @override
   Widget build(BuildContext context) {
@@ -155,8 +163,42 @@ class EmptyState extends StatelessWidget {
           Icon(icon, size: 34, color: T.ghost),
           const SizedBox(height: 10),
           Text(text, style: T.bodyMuted, textAlign: TextAlign.center),
+          if (actions.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            Wrap(spacing: 8, children: [
+              for (var i = 0; i < actions.length; i++)
+                i == actions.length - 1
+                    ? FilledButton(
+                        style: FilledButton.styleFrom(
+                            backgroundColor: T.mint, foregroundColor: T.ink),
+                        onPressed: actions[i].$2,
+                        child: Text(actions[i].$1),
+                      )
+                    : OutlinedButton(
+                        onPressed: actions[i].$2,
+                        child: Text(actions[i].$1),
+                      ),
+            ]),
+          ],
         ],
       ),
     );
   }
+}
+
+/// Grey shimmer-free placeholder bar for loading states.
+class SkeletonBar extends StatelessWidget {
+  const SkeletonBar({super.key, this.width = 120, this.height = 10});
+  final double width;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: width,
+        height: height,
+        decoration: BoxDecoration(
+          color: T.border2,
+          borderRadius: BorderRadius.circular(height / 2),
+        ),
+      );
 }

@@ -12,6 +12,7 @@ import 'screens/login_screen.dart';
 import 'shell/app_shell.dart';
 import 'theme/tokens.dart';
 import 'util/config.dart';
+import 'util/prefs.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -31,6 +32,7 @@ Future<void> main() async {
     await windowManager.focus();
   });
 
+  await UiPrefs.instance.load();
   runApp(const ElixirApp());
 }
 

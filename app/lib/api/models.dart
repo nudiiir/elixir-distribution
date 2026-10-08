@@ -62,9 +62,16 @@ class Product {
   final List<String> barcodes; // additional barcodes
   final List<BarcodeEntry> barcodesEx; // barcodes avec libellé
   final List<Packaging> packagings; // conditionnements (carton = 24)
+  final int imageRev; // 0 = pas de photo ; change à chaque nouvelle photo
+  final String kind; // 'standard' | 'service' (un service ne bouge pas le stock)
+
+  bool get hasImage => imageRev > 0;
+  bool get isService => kind == 'service';
 
   Product.fromJson(Map<String, dynamic> j)
       : id = j['id'] as String,
+        imageRev = (j['image_rev'] as num?)?.toInt() ?? 0,
+        kind = (j['kind'] as String?) ?? 'standard',
         barcode = j['barcode'] as String?,
         name = j['name'] as String,
         nameAr = j['name_ar'] as String?,

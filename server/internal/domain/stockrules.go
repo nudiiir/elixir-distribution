@@ -87,6 +87,14 @@ type lotChunk struct {
 	qty int64 // signed
 }
 
+// productIsService: a service (repair labour, delivery, installation) is sold
+// like a product but never moves stock.
+func productIsService(tx *sql.Tx, productID string) bool {
+	var kind string
+	tx.QueryRow(`SELECT kind FROM products WHERE id=?`, productID).Scan(&kind)
+	return kind == "service"
+}
+
 func productIsLotTracked(tx *sql.Tx, productID string) bool {
 	var n int64
 	tx.QueryRow(`SELECT track_lots + track_expiry FROM products WHERE id=?`, productID).Scan(&n)

@@ -76,6 +76,12 @@ const purchaseCreditNoteConfig = DocEditorConfig(
     title: 'Avoir fournisseur',
     partnerKind: 'supplier',
     isPurchase: true);
+// Transfert entre dépôts : pas de partenaire, dépôt source + destination.
+// (L'éditeur gère le dépôt de destination pour ce type.)
+const stockTransferConfig = DocEditorConfig(
+    docType: 'STOCK_TRANSFER',
+    title: 'Transfert de stock',
+    isPurchase: true);
 
 class _EditLine {
   _EditLine({

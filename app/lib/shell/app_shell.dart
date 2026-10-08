@@ -23,6 +23,8 @@ import '../screens/stock_screen.dart';
 import '../screens/webstore_screen.dart';
 import '../theme/tokens.dart';
 import '../util/config.dart';
+import '../util/features.dart';
+import '../util/prefs.dart';
 import '../util/updater.dart';
 import '../widgets/ui.dart';
 
@@ -98,6 +100,8 @@ class _AppShellState extends State<AppShell> {
   @override
   void initState() {
     super.initState();
+    UiPrefs.instance.user = user.id;
+    Features.instance.load(widget.api);
     _checkHealth();
     _loadCompany();
     _healthTimer =

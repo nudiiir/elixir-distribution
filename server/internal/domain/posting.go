@@ -318,6 +318,9 @@ func Post(db *sql.DB, docID, userID string) (string, error) {
 				continue
 			}
 			pid := l.productID.String
+			if productIsService(tx, pid) {
+				continue // un service est facturé, jamais stocké
+			}
 
 			var delta, unitCost, lineCostBase int64
 			updateAvg := isCostBearing(d.docType)
@@ -438,6 +441,9 @@ func Post(db *sql.DB, docID, userID string) (string, error) {
 			}
 			if l.qtyMilli < 0 {
 				return "", &PostError{"une quantité comptée ne peut pas être négative"}
+			}
+			if productIsService(tx, l.productID.String) {
+				continue
 			}
 			var current int64
 			tx.QueryRow(`SELECT qty_milli FROM stock_levels WHERE product_id=? AND warehouse_id=?`,

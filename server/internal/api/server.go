@@ -156,6 +156,12 @@ func New(db *sql.DB, dbPath string, eng *analytics.Engine) http.Handler {
 		r.Put("/analytics/dashboards/{id}", s.updateDashboard)
 		r.Delete("/analytics/dashboards/{id}", s.deleteDashboard)
 
+		// Route groups added by the UX-benchmark work (one file each).
+		s.routesProductsUX(r)
+		s.routesDocumentsUX(r)
+		s.routesStockUX(r)
+		s.routesPosUX(r)
+
 		r.Get("/cloud/status", s.cloudStatus)
 		r.Post("/cloud/connect", s.cloudConnect)
 		r.Post("/cloud/disconnect", s.cloudDisconnect)

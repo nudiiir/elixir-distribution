@@ -33,6 +33,16 @@ class ApiClient {
         if (token != null) 'Authorization': 'Bearer $token',
       };
 
+  /// Headers for widgets that fetch on their own (Image.network).
+  Map<String, String> get authHeaders =>
+      {if (token != null) 'Authorization': 'Bearer $token'};
+
+  /// Photo of a product. `rev` busts the image cache when the photo changes.
+  String productImageUrl(String productId, int rev,
+          {bool thumb = true, int index = 0}) =>
+      '$baseUrl/api/v1/products/$productId/images/$index'
+      '?thumb=${thumb ? 1 : 0}&v=$rev';
+
   Uri _u(String path, [Map<String, String>? query]) =>
       Uri.parse('$baseUrl$path').replace(queryParameters: query);
 
