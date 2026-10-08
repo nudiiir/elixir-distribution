@@ -130,12 +130,16 @@ func (s *Server) createDocument(w http.ResponseWriter, r *http.Request) {
 		forbid(w)
 		return
 	}
+	if !docActionOK(authFrom(r), in.DocType, "create") {
+		writeErr(w, http.StatusForbidden, "vous n'avez pas le droit de créer ce document")
+		return
+	}
 	if len(in.DocDate) != 10 {
 		writeErr(w, http.StatusBadRequest, "doc_date must be YYYY-MM-DD")
 		return
 	}
-	if msg := s.checkDiscounts(r, in.DocType, in.Lines); msg != "" {
-		writeErr(w, http.StatusForbidden, msg)
+	if !s.checkSaleRights(w, r, SaleCheck{DocType: in.DocType, DocDate: in.DocDate,
+		PartnerID: in.PartnerID, Lines: in.Lines}) {
 		return
 	}
 	if msg := in.validateTransfer(in.DocType); msg != "" {
@@ -143,6 +147,10 @@ func (s *Server) createDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, now := domain.NewID(), domain.NowISO()
+	var createdBy any
+	if u := authFrom(r); u != nil {
+		createdBy = u.ID
+	}
 
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -154,12 +162,12 @@ func (s *Server) createDocument(w http.ResponseWriter, r *http.Request) {
 	if _, err := tx.Exec(`INSERT INTO documents (id, doc_type, status, doc_date, partner_id,
 			warehouse_id, dest_warehouse_id, ref_document_id, amount, payment_method,
 			caisse_session_id, notes, supplier_ref, due_date, freight_cost, reason,
-			accept_short_dated, accept_over_receipt, internal_notes, created_at, updated_at)
-		VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			accept_short_dated, accept_over_receipt, internal_notes, created_by, created_at, updated_at)
+		VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, in.DocType, in.DocDate, in.PartnerID, in.WarehouseID, in.DestWarehouseID,
 		in.RefDocumentID, in.Amount, in.PaymentMethod, in.CaisseSessionID, in.Notes,
 		in.SupplierRef, in.DueDate, in.FreightCost, in.Reason,
-		b2i(in.AcceptShort), b2i(in.AcceptOver), in.InternalNotes, now, now); err != nil {
+		b2i(in.AcceptShort), b2i(in.AcceptOver), in.InternalNotes, createdBy, now, now); err != nil {
 		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}
@@ -186,6 +194,23 @@ func (s *Server) updateDocument(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Permission checks first: they read the DB, which has a single connection.
+	var preType, preDate string
+	if err := s.db.QueryRow(`SELECT doc_type, doc_date FROM documents WHERE id = ?`, id).
+		Scan(&preType, &preDate); err == nil {
+		if !docPermOK(authFrom(r), preType) {
+			forbid(w)
+			return
+		}
+		if !docActionOK(authFrom(r), preType, "edit") && !docActionOK(authFrom(r), preType, "create") {
+			writeErr(w, http.StatusForbidden, "vous n'avez pas le droit de modifier ce document")
+			return
+		}
+		if !s.checkSaleRights(w, r, SaleCheck{DocType: preType, DocDate: in.DocDate, OldDate: preDate,
+			PartnerID: in.PartnerID, Lines: in.Lines}) {
+			return
+		}
+	}
 
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -211,10 +236,6 @@ func (s *Server) updateDocument(w http.ResponseWriter, r *http.Request) {
 	}
 	if !docPermOK(authFrom(r), docType) {
 		forbid(w)
-		return
-	}
-	if msg := s.checkDiscounts(r, docType, in.Lines); msg != "" {
-		writeErr(w, http.StatusForbidden, msg)
 		return
 	}
 	if msg := in.validateTransfer(docType); msg != "" {
@@ -295,21 +316,23 @@ func draftTotals(tx *sql.Tx, id, docType string, method *string, lines []Documen
 	return err
 }
 
-// checkDiscounts refuses sale-side discounts from users without the right.
+// checkDiscounts refuses sale-side discounts from users without the right or
+// above their max_discount_pct (unless a manager code approved them). Prefer
+// checkSaleRights, which answers needs_approval.
 func (s *Server) checkDiscounts(r *http.Request, docType string, lines []DocumentLine) string {
-	if !strings.HasPrefix(docType, "SALE") && docType != domain.Quote &&
-		docType != domain.DeliveryNote {
+	if !isSaleFamily(docType) {
 		return ""
 	}
-	if s.can(r, "discount") {
-		return ""
-	}
+	var maxPct int64
 	for _, l := range lines {
-		if l.DiscountPct != 0 {
-			return "vous n'êtes pas autorisé à accorder des remises"
+		if l.DiscountPct > maxPct {
+			maxPct = l.DiscountPct
 		}
 	}
-	return ""
+	if maxPct == 0 || s.rightOrApproval(r, "discount", maxPct) {
+		return ""
+	}
+	return discountMsg(authFrom(r), maxPct)
 }
 
 func insertLines(tx *sql.Tx, docID string, lines []DocumentLine, now string) error {
@@ -371,6 +394,10 @@ func (s *Server) listDocuments(w http.ResponseWriter, r *http.Request) {
 	} else if !s.can(r, "purchases") {
 		// Without the purchases right, purchase documents stay invisible.
 		where += " AND doc_type NOT LIKE 'PURCHASE%'"
+	}
+	if sw, sa := docScopeWhere(authFrom(r), ""); sw != "" {
+		where += sw
+		args = append(args, sa...)
 	}
 	if st := r.URL.Query().Get("status"); st != "" {
 		where += " AND status = ?"
@@ -501,15 +528,35 @@ func (s *Server) respondDocument(w http.ResponseWriter, id string, status int) {
 func (s *Server) postDocument(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var docType string
-	var src, dest sql.NullString
-	if err := s.db.QueryRow(`SELECT doc_type, warehouse_id, dest_warehouse_id FROM documents WHERE id = ?`, id).
-		Scan(&docType, &src, &dest); err == nil {
+	var src, dest, partner, method sql.NullString
+	var ttc int64
+	if err := s.db.QueryRow(`SELECT doc_type, warehouse_id, dest_warehouse_id, partner_id,
+			payment_method, total_ttc FROM documents WHERE id = ? AND status = 'draft'`, id).
+		Scan(&docType, &src, &dest, &partner, &method, &ttc); err == nil {
 		if !docPermOK(authFrom(r), docType) {
 			forbid(w)
 			return
 		}
 		if docType == domain.StockTransfer && src.Valid && dest.Valid && src.String == dest.String {
 			writeErr(w, http.StatusConflict, "le dépôt de destination doit être différent du dépôt source")
+			return
+		}
+		if !s.requireDocAction(w, r, docType, "validate") {
+			return
+		}
+		var credit int64
+		if method.String == "credit" {
+			credit = ttc
+		} else {
+			s.db.QueryRow(`SELECT COALESCE(SUM(amount),0) FROM document_payments
+				WHERE document_id = ? AND method = 'credit'`, id).Scan(&credit)
+		}
+		var pid *string
+		if partner.Valid {
+			pid = &partner.String
+		}
+		if !s.checkSaleRights(w, r, SaleCheck{DocType: docType, PartnerID: pid,
+			Credit: credit, Total: ttc, Posting: true}) {
 			return
 		}
 	}
@@ -549,6 +596,10 @@ func (s *Server) voidDocument(w http.ResponseWriter, r *http.Request) {
 		Scan(&docType); err == nil {
 		if !docPermOK(authFrom(r), docType) {
 			forbid(w)
+			return
+		}
+		if !s.requireDocAction(w, r, docType, "cancel") ||
+			!s.requireRight(w, r, "void_document", 0, "vous n'avez pas le droit d'annuler un document validé") {
 			return
 		}
 	}
@@ -744,6 +795,16 @@ func (s *Server) matchDocument(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) cancelDocument(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	var docType string
+	if err := s.db.QueryRow(`SELECT doc_type FROM documents WHERE id = ?`, id).Scan(&docType); err == nil {
+		if !docPermOK(authFrom(r), docType) {
+			forbid(w)
+			return
+		}
+		if !s.requireDocAction(w, r, docType, "cancel") {
+			return
+		}
+	}
 	res, err := s.db.Exec(`UPDATE documents SET status='cancelled', updated_at=?
 		WHERE id=? AND status='draft'`, domain.NowISO(), id)
 	if err != nil {

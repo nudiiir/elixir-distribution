@@ -3,6 +3,7 @@ package api
 import (
 	"database/sql"
 	"net/http"
+	"time"
 
 	"elixir/server/internal/domain"
 )
@@ -22,16 +23,16 @@ type CaisseSession struct {
 
 // CaisseReport is the X/Z content: what happened since opening.
 type CaisseReport struct {
-	OpeningCash int64 `json:"opening_cash"`
-	TicketCount int64 `json:"ticket_count"`
-	TotalSales  int64 `json:"total_sales"`
-	CashSales   int64 `json:"cash_sales"`
-	CardSales   int64 `json:"card_sales"`
-	CreditSales int64 `json:"credit_sales"`
-	OtherSales  int64 `json:"other_sales"`
-	CashIn      int64 `json:"cash_in"`  // encaissements espèces
-	CashOut     int64 `json:"cash_out"` // règlements espèces
-	CashRefunds int64 `json:"cash_refunds"` // avoirs remboursés en espèces
+	OpeningCash  int64 `json:"opening_cash"`
+	TicketCount  int64 `json:"ticket_count"`
+	TotalSales   int64 `json:"total_sales"`
+	CashSales    int64 `json:"cash_sales"`
+	CardSales    int64 `json:"card_sales"`
+	CreditSales  int64 `json:"credit_sales"`
+	OtherSales   int64 `json:"other_sales"`
+	CashIn       int64 `json:"cash_in"`      // encaissements espèces
+	CashOut      int64 `json:"cash_out"`     // règlements espèces
+	CashRefunds  int64 `json:"cash_refunds"` // avoirs remboursés en espèces
 	ExpectedCash int64 `json:"expected_cash"`
 }
 
@@ -68,7 +69,18 @@ func (s *Server) caisseCurrent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"session": c})
+	// needs_z: the open till dates from a previous day and the shop requires
+	// a daily Z (Paramètres › Caisse) — new sales are refused until closed.
+	needsZ := c != nil && s.loadPosConf().RequireDailyZ &&
+		sessionFromPreviousDay(c.OpenedAt, time.Now())
+	writeJSON(w, http.StatusOK, map[string]any{"session": c, "needs_z": needsZ})
+}
+
+// tillCloseAllowed: X/Z reports and closing need the close_till right; a
+// manager approval (X-Approval) also works (needs_approval 403 otherwise).
+func (s *Server) tillCloseAllowed(w http.ResponseWriter, r *http.Request) bool {
+	return s.requireRight(w, r, "close_till", 0,
+		"vous n'avez pas le droit de faire le rapport de caisse ni de la clôturer")
 }
 
 func (s *Server) caisseOpen(w http.ResponseWriter, r *http.Request) {
@@ -187,6 +199,9 @@ func (s *Server) caisseReport(w http.ResponseWriter, r *http.Request) {
 		forbid(w)
 		return
 	}
+	if !s.tillCloseAllowed(w, r) {
+		return
+	}
 	c, err := s.openSessionRow()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
@@ -215,6 +230,9 @@ func (s *Server) caisseClose(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := decode(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !s.tillCloseAllowed(w, r) {
 		return
 	}
 	c, err := s.openSessionRow()

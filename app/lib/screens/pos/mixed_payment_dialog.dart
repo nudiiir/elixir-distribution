@@ -3,7 +3,9 @@ import 'package:flutter/services.dart';
 
 import '../../api/models.dart';
 import '../../theme/tokens.dart';
+import '../../util/features.dart';
 import '../../widgets/ui.dart';
+import 'cash_rounding.dart';
 
 /// Moyens proposés dans le paiement mixte (la carte cadeau garde son propre
 /// parcours : code, solde, débit).
@@ -39,15 +41,30 @@ class MixedPaymentResult {
 /// the non-cash rows pay part of the goods, the cash rows pay the rest plus
 /// the timbre due on that cash part only.
 class MixedMath {
-  MixedMath(this.goods, this.cashGiven, this.nonCash);
+  MixedMath(
+    this.goods,
+    this.cashGiven,
+    this.nonCash, {
+    this.step = 0,
+    this.timbreOn = true,
+  });
   final int goods; // total TTC of the goods, timbre excluded
   final int cashGiven; // sum of the cash rows as typed (may exceed: change)
   final int nonCash; // sum of the other rows
+  final int step; // arrondi des espèces (centimes, 0 = aucun)
+  final bool timbreOn;
 
   int get cashGoods => goods - nonCash;
-  int get timbre => cashGiven > 0 && cashGoods > 0 ? timbreFor(cashGoods) : 0;
-  int get cashDue => cashGoods > 0 ? cashGoods + timbre : 0;
-  int get totalToPay => goods + timbre;
+
+  /// « Arrondi » on the cash part (recorded by the server as a ticket line).
+  int get rounding => cashGiven > 0 && cashGoods > 0
+      ? cashRoundingDelta(cashGoods, step, timbre: timbreOn)
+      : 0;
+  int get timbre => cashGiven > 0 && cashGoods > 0 && timbreOn
+      ? timbreFor(cashGoods + rounding)
+      : 0;
+  int get cashDue => cashGoods > 0 ? cashGoods + rounding + timbre : 0;
+  int get totalToPay => goods + rounding + timbre;
   int get collected => cashGiven + nonCash;
   bool get overNonCash => nonCash > goods;
   int get remaining {
@@ -87,8 +104,23 @@ class _Row {
   int get amount => parseDA(ctrl.text) ?? 0;
 }
 
+/// The mixed-payment methods this shop offers (Paramètres › Caisse).
+List<(String, String, IconData)> get offeredMixedMethods {
+  final on = Features.instance.posPaymentMethods;
+  final list = [
+    for (final m in mixedMethods)
+      if (on.contains(m.$1)) m,
+  ];
+  return list.isEmpty ? mixedMethods : list;
+}
+
 class _MixedPaymentDialogState extends State<MixedPaymentDialog> {
-  late final List<_Row> _rows = [_Row('cib'), _Row('cash')];
+  late final List<_Row> _rows = () {
+    final ids = [for (final m in offeredMixedMethods) m.$1];
+    final other = ids.firstWhere((m) => m != 'cash', orElse: () => ids.first);
+    final second = ids.contains('cash') ? 'cash' : ids.last;
+    return [_Row(other), _Row(second)];
+  }();
 
   @override
   void dispose() {
@@ -96,6 +128,13 @@ class _MixedPaymentDialogState extends State<MixedPaymentDialog> {
       r.ctrl.dispose();
     }
     super.dispose();
+  }
+
+  /// Cash to take for [g] of goods: timbre + the shop's cash rounding.
+  int _cashFor(int g) {
+    if (g <= 0) return 0;
+    final d = cashRoundingDelta(g, posCashStep);
+    return cashDueOf(g + d);
   }
 
   MixedMath _math({_Row? except}) {
@@ -108,7 +147,13 @@ class _MixedPaymentDialogState extends State<MixedPaymentDialog> {
         other += r.amount;
       }
     }
-    return MixedMath(widget.goodsTotal, cash, other);
+    return MixedMath(
+      widget.goodsTotal,
+      cash,
+      other,
+      step: posCashStep,
+      timbreOn: posTimbreOn,
+    );
   }
 
   String? get _error {
@@ -131,7 +176,7 @@ class _MixedPaymentDialogState extends State<MixedPaymentDialog> {
     int fill;
     if (row.method == 'cash') {
       final g = widget.goodsTotal - others.nonCash;
-      fill = g > 0 ? g + timbreFor(g) - others.cashGiven : 0;
+      fill = g > 0 ? _cashFor(g) - others.cashGiven : 0;
     } else {
       // Smallest x such that the cash already typed covers what is left
       // (goods − x) plus its timbre. g + timbre(g) grows with g: bisection.
@@ -145,7 +190,7 @@ class _MixedPaymentDialogState extends State<MixedPaymentDialog> {
         while (lo < hi) {
           final mid = (lo + hi) ~/ 2;
           final g = maxX - mid;
-          final due = g > 0 ? g + timbreFor(g) : 0;
+          final due = _cashFor(g);
           if (due <= others.cashGiven) {
             hi = mid;
           } else {
@@ -236,7 +281,9 @@ class _MixedPaymentDialogState extends State<MixedPaymentDialog> {
                   child: TextButton.icon(
                     onPressed: _rows.length >= 6
                         ? null
-                        : () => setState(() => _rows.add(_Row('cash'))),
+                        : () => setState(
+                            () => _rows.add(_Row(offeredMixedMethods.first.$1)),
+                          ),
                     icon: const Icon(Icons.add, size: 16),
                     label: const Text('Ajouter un moyen'),
                   ),
@@ -275,6 +322,13 @@ class _MixedPaymentDialogState extends State<MixedPaymentDialog> {
                         const SizedBox(height: 8),
                         Text(
                           'Timbre fiscal ${fmtDA(m.timbre)} sur la part en espèces (${fmtDA(m.cashGoods)}).',
+                          style: T.small,
+                        ),
+                      ],
+                      if (m.rounding != 0) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          'Arrondi des espèces : ${m.rounding > 0 ? '+' : ''}${fmtDA(m.rounding)}.',
                           style: T.small,
                         ),
                       ],
@@ -337,7 +391,7 @@ class _MixedPaymentDialogState extends State<MixedPaymentDialog> {
                 value: r.method,
                 style: T.body,
                 items: [
-                  for (final (id, label, icon) in mixedMethods)
+                  for (final (id, label, icon) in offeredMixedMethods)
                     DropdownMenuItem(
                       value: id,
                       enabled: id != 'credit' || widget.hasClient,

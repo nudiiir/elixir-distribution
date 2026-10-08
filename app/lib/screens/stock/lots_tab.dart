@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../api/client.dart';
 import '../../api/models.dart';
 import '../../theme/tokens.dart';
+import '../../util/features.dart';
 import '../../util/feedback.dart';
 import '../../util/prefs.dart';
 import '../../widgets/data_table.dart';
@@ -90,7 +91,7 @@ class LotsTabState extends State<LotsTab> {
     return switch (w) {
       'expired' => d < 0,
       '15' => d >= 0 && d <= 15,
-      '60' => d >= 0 && d <= 60,
+      '60' => d >= 0 && d <= Features.instance.expiryAlertDays, // fenêtre des Paramètres
       _ => true,
     };
   }
@@ -228,10 +229,10 @@ class LotsTabState extends State<LotsTab> {
         searchHint: 'Produit ou n° de lot…',
         onSearchChanged: (_) => setState(() {}),
         quickFilters: [
-          for (final (k, label) in const [
+          for (final (k, label) in [
             ('expired', 'Périmés'),
             ('15', '≤ 15 jours'),
-            ('60', '≤ 60 jours'),
+            ('60', '≤ ${Features.instance.expiryAlertDays} jours'),
           ])
             FilterPill(
               label: label,
@@ -267,7 +268,7 @@ class LotsTabState extends State<LotsTab> {
                 switch (_window) {
                   'expired' => 'Périmés',
                   '15' => '≤ 15 jours',
-                  _ => '≤ 60 jours',
+                  _ => '≤ ${Features.instance.expiryAlertDays} jours',
                 }, () {
               setState(() => _window = null);
               _save();

@@ -8,6 +8,7 @@ import '../screens/documents/doc_detail_page.dart';
 import '../templates/template_model.dart';
 import '../templates/template_render.dart';
 import '../theme/tokens.dart';
+import '../util/approval.dart';
 import '../util/feedback.dart';
 import '../util/invoice_pdf.dart';
 import '../util/prefs.dart';
@@ -310,9 +311,11 @@ Future<bool> voidDocumentFlow(BuildContext context, ApiClient api, String docId,
   );
   final text = reason.text.trim();
   reason.dispose();
-  if (ok != true) return false;
+  if (ok != true || !context.mounted) return false;
   try {
-    await api.voidDocument(docId, reason: text);
+    // Sans le droit « annuler un document validé » : code du gérant.
+    await withApproval(
+        context, api, () => api.voidDocument(docId, reason: text));
     if (context.mounted) {
       showToast(context, 'Document annulé (une trace est gardée).');
     }
@@ -332,9 +335,9 @@ Future<bool> cancelDraftFlow(
           'Le brouillon reste visible, marqué annulé. Il ne pourra plus être validé.',
       confirmLabel: 'Annuler le brouillon',
       danger: true);
-  if (!ok) return false;
+  if (!ok || !context.mounted) return false;
   try {
-    await api.cancelDocument(docId);
+    await withApproval(context, api, () => api.cancelDocument(docId));
     if (context.mounted) showToast(context, 'Brouillon annulé');
     return true;
   } on ApiException catch (e) {
@@ -372,7 +375,7 @@ Future<void> printDocumentPdf(ApiClient api, DocDetail d) async {
     );
     await saveAndOpenPdf(bytes, d.number ?? 'brouillon-${d.id.substring(0, 8)}');
   } else {
-    await openDocumentPdf(company: company, doc: d, partner: partner);
+    await openDocumentPdf(company: company, doc: d, partner: partner, api: api);
   }
 }
 
@@ -634,7 +637,11 @@ class DocListPaneState extends State<DocListPane> {
               Icons.transform_rounded,
               (x) => _rowConvert(x, target)),
         if (d.status == 'posted' && !d.docType.startsWith('PAYMENT'))
-          RowAction('Annuler le document…', Icons.undo_rounded, (x) async {
+          RowAction(
+              'Annuler le document…',
+              canDocAlone(widget.api.user, d.docType, 'void')
+                  ? Icons.undo_rounded
+                  : Icons.lock_outline_rounded, (x) async {
             if (await voidDocumentFlow(context, widget.api, x.id,
                 docType: x.docType)) {
               refresh();

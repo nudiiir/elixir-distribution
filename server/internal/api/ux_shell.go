@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+
+	"elixir/server/internal/domain"
 )
 
 // routesShellUX: what the top bar needs (alerts bell).
@@ -27,7 +29,12 @@ type alertItem struct {
 func (s *Server) alerts(w http.ResponseWriter, r *http.Request) {
 	items := []alertItem{}
 	today := time.Now().Format("2006-01-02")
-	soon := time.Now().AddDate(0, 0, 15).Format("2006-01-02")
+	// Fenêtre « périme bientôt » : Paramètres › Produits et stock (90 j par défaut).
+	expiryDays := domain.SettingInt(s.db, "expiry_alert_days", 90)
+	if expiryDays < 1 || expiryDays > 3650 {
+		expiryDays = 90
+	}
+	soon := time.Now().AddDate(0, 0, int(expiryDays)).Format("2006-01-02")
 
 	collect := func(kind, severity, title, target, query string, args ...any) {
 		rows, err := s.db.Query(query, args...)
@@ -69,7 +76,7 @@ func (s *Server) alerts(w http.ResponseWriter, r *http.Request) {
 			`SELECT p.name || ' — lot ' || l.lot_number FROM lots l JOIN products p ON p.id = l.product_id
 			 WHERE l.qty_milli > 0 AND l.expiry_date IS NOT NULL AND l.expiry_date <> '' AND l.expiry_date < ?
 			 ORDER BY l.expiry_date`, today)
-		collect("lot_expiring", "warning", "%d lot(s) périment dans les 15 jours", "stock",
+		collect("lot_expiring", "warning", fmt.Sprintf("%%d lot(s) périment dans les %d jours", expiryDays), "stock",
 			`SELECT p.name || ' — ' || l.expiry_date FROM lots l JOIN products p ON p.id = l.product_id
 			 WHERE l.qty_milli > 0 AND l.expiry_date >= ? AND l.expiry_date <= ?
 			 ORDER BY l.expiry_date`, today, soon)

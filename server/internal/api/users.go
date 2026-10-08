@@ -12,68 +12,84 @@ import (
 	"elixir/server/internal/domain"
 )
 
-type UserOut struct {
-	ID       string          `json:"id"`
-	Username string          `json:"username"`
-	FullName string          `json:"full_name"`
-	Role     string          `json:"role"`
-	Active   bool            `json:"active"`
-	Perms    map[string]bool `json:"perms"`
-}
+// UserOut is what the users list returns: the same shape as /auth/me
+// (perms, limits, scope, role, depots, has_pin, last_login_at…).
+type UserOut = AuthUser
 
 func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 	if !s.isAdmin(r) {
 		forbid(w)
 		return
 	}
-	rows, err := s.db.Query(
-		`SELECT id, username, full_name, role, perms, active FROM users ORDER BY username`)
+	rows, err := s.db.Query(authUserSelect + ` ORDER BY u.username`)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	defer rows.Close()
-	items := []UserOut{}
+	items := []*UserOut{}
 	for rows.Next() {
-		var u UserOut
-		var permsJSON string
-		var active int
-		if err := rows.Scan(&u.ID, &u.Username, &u.FullName, &u.Role, &permsJSON, &active); err != nil {
+		u, err := scanAuthUser(rows)
+		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		u.Active = active == 1
-		u.Perms = EffectivePerms(u.Role, permsJSON)
 		items = append(items, u)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 type userInput struct {
-	Username string           `json:"username"`
-	Password *string          `json:"password"` // required on create; optional on update
-	FullName string           `json:"full_name"`
-	Role     string           `json:"role"`
-	Active   *bool            `json:"active"`
-	Perms    map[string]bool  `json:"perms"`
+	Username           string          `json:"username"`
+	Password           *string         `json:"password"` // required on create; optional on update (= reset)
+	FullName           string          `json:"full_name"`
+	Role               string          `json:"role"`    // legacy: admin | manager | cashier
+	RoleID             *string         `json:"role_id"` // 0013: editable role
+	Active             *bool           `json:"active"`
+	Perms              map[string]bool `json:"perms"` // legacy per-user overrides
+	Phone              *string         `json:"phone"`
+	Email              *string         `json:"email"`
+	WarehouseIDs       []string        `json:"warehouse_ids"`
+	DefaultWarehouseID *string         `json:"default_warehouse_id"`
 }
 
-func (in *userInput) validate(create bool) string {
-	if strings.TrimSpace(in.Username) == "" {
-		return "le nom d'utilisateur est obligatoire"
+// resolve validates the input and returns the role id + legacy role column.
+func (s *Server) resolveUserInput(in *userInput, create bool) (roleID, legacy, field, msg string) {
+	in.Username = strings.TrimSpace(in.Username)
+	if in.Username == "" {
+		return "", "", "username", "l'identifiant est obligatoire"
 	}
-	switch in.Role {
-	case "admin", "manager", "cashier":
-	default:
-		return "rôle invalide"
+	if strings.ContainsAny(in.Username, " \t") {
+		return "", "", "username", "l'identifiant ne doit pas contenir d'espace"
+	}
+	if in.RoleID != nil && *in.RoleID != "" {
+		roleID = *in.RoleID
+		var perms string
+		if err := s.db.QueryRow(`SELECT perms_json FROM roles WHERE id = ?`, roleID).Scan(&perms); err != nil {
+			return "", "", "role_id", "rôle introuvable"
+		}
+		legacy = legacyRoleFor(roleID, computePerms(roleID, perms, "{}"))
+	} else {
+		switch in.Role {
+		case "admin", "manager", "cashier":
+		default:
+			return "", "", "role_id", "choisissez un rôle"
+		}
+		roleID, legacy = legacyRoleID(in.Role), in.Role
 	}
 	if create && (in.Password == nil || len(*in.Password) < 4) {
-		return "mot de passe obligatoire (4 caractères minimum)"
+		return "", "", "password", "mot de passe obligatoire (4 caractères minimum)"
 	}
 	if in.Password != nil && len(*in.Password) > 0 && len(*in.Password) < 4 {
-		return "mot de passe trop court (4 caractères minimum)"
+		return "", "", "password", "mot de passe trop court (4 caractères minimum)"
 	}
-	return ""
+	if in.Email != nil {
+		e := strings.TrimSpace(*in.Email)
+		if e != "" && (!strings.Contains(e, "@") || strings.ContainsAny(e, " ")) {
+			return "", "", "email", "adresse email invalide"
+		}
+	}
+	return roleID, legacy, "", ""
 }
 
 func permsJSONOf(p map[string]bool) string {
@@ -87,6 +103,35 @@ func permsJSONOf(p map[string]bool) string {
 	return string(b)
 }
 
+func warehousesJSON(ids []string, def *string) (string, *string) {
+	clean := []string{}
+	seen := map[string]bool{}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id != "" && !seen[id] {
+			seen[id] = true
+			clean = append(clean, id)
+		}
+	}
+	var d *string
+	if def != nil && *def != "" {
+		v := *def
+		d = &v
+		if len(clean) > 0 && !seen[v] {
+			clean = append(clean, v)
+		}
+	}
+	b, _ := json.Marshal(clean)
+	return string(b), d
+}
+
+func strOr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return strings.TrimSpace(*p)
+}
+
 func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 	if !s.isAdmin(r) {
 		forbid(w)
@@ -97,8 +142,9 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if msg := in.validate(true); msg != "" {
-		writeErr(w, http.StatusBadRequest, msg)
+	roleID, legacy, field, msg := s.resolveUserInput(&in, true)
+	if msg != "" {
+		writeFieldErr(w, http.StatusBadRequest, field, msg)
 		return
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(*in.Password), bcrypt.DefaultCost)
@@ -111,15 +157,26 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 	if in.Active != nil {
 		active = *in.Active
 	}
-	_, err = s.db.Exec(`INSERT INTO users (id, username, password_hash, full_name, role, perms, active, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, strings.TrimSpace(in.Username), string(hash), in.FullName, in.Role,
-		permsJSONOf(in.Perms), b2i(active), now, now)
+	whJSON, def := warehousesJSON(in.WarehouseIDs, in.DefaultWarehouseID)
+	_, err = s.db.Exec(`INSERT INTO users (id, username, password_hash, full_name, role, perms, active,
+			role_id, phone, email, warehouse_ids_json, default_warehouse_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, in.Username, string(hash), strings.TrimSpace(in.FullName), legacy,
+		permsJSONOf(in.Perms), b2i(active), roleID, strOr(in.Phone), strOr(in.Email),
+		whJSON, def, now, now)
 	if err != nil {
-		writeErr(w, http.StatusConflict, "ce nom d'utilisateur existe déjà")
+		writeFieldErr(w, http.StatusConflict, "username", "cet identifiant existe déjà")
 		return
 	}
+	s.audit(r, "user.create", "user", id, in.Username)
 	s.respondUser(w, id, http.StatusCreated)
+}
+
+func (s *Server) activeAdminsExcept(id string) int {
+	var n int
+	s.db.QueryRow(`SELECT COUNT(*) FROM users WHERE active = 1 AND id <> ?
+		AND COALESCE(role_id, CASE role WHEN 'admin' THEN 'role-admin' ELSE '' END) = 'role-admin'`, id).Scan(&n)
+	return n
 }
 
 func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
@@ -133,31 +190,68 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if msg := in.validate(false); msg != "" {
-		writeErr(w, http.StatusBadRequest, msg)
+	roleID, legacy, field, msg := s.resolveUserInput(&in, false)
+	if msg != "" {
+		writeFieldErr(w, http.StatusBadRequest, field, msg)
 		return
 	}
-	// Never let the last admin lock themselves out by demoting/deactivating.
-	me := authFrom(r)
-	if me != nil && me.ID == id && (in.Role != "admin" || (in.Active != nil && !*in.Active)) {
-		writeErr(w, http.StatusConflict,
-			"impossible de retirer vos propres droits administrateur")
+	cur, err := s.loadAuthUser(id)
+	if err == sql.ErrNoRows {
+		writeErr(w, http.StatusNotFound, "utilisateur introuvable")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	active := true
 	if in.Active != nil {
 		active = *in.Active
 	}
-	res, err := s.db.Exec(`UPDATE users SET username=?, full_name=?, role=?, perms=?, active=?, updated_at=?
-		WHERE id=?`,
-		strings.TrimSpace(in.Username), in.FullName, in.Role,
-		permsJSONOf(in.Perms), b2i(active), domain.NowISO(), id)
-	if err != nil {
-		writeErr(w, http.StatusConflict, "ce nom d'utilisateur existe déjà")
+	// Never let the admin lock themselves out by demoting/deactivating.
+	me := authFrom(r)
+	if me != nil && me.ID == id && (roleID != RoleAdminID || !active) {
+		writeFieldErr(w, http.StatusConflict, "role_id",
+			"impossible de retirer vos propres droits administrateur")
 		return
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		writeErr(w, http.StatusNotFound, "utilisateur introuvable")
+	if cur.RoleID == RoleAdminID && (roleID != RoleAdminID || !active) && s.activeAdminsExcept(id) == 0 {
+		writeFieldErr(w, http.StatusConflict, "role_id",
+			"il faut garder au moins un administrateur actif")
+		return
+	}
+	// The new users page sends role_id without per-user overrides: the role
+	// becomes the only source of rights. The legacy UI keeps its overrides.
+	perms := ""
+	if in.Perms != nil {
+		perms = permsJSONOf(in.Perms)
+	} else if in.RoleID != nil {
+		perms = "{}"
+	}
+	now := domain.NowISO()
+	q := `UPDATE users SET username=?, full_name=?, role=?, role_id=?, active=?, updated_at=?`
+	args := []any{in.Username, strings.TrimSpace(in.FullName), legacy, roleID, b2i(active), now}
+	if perms != "" {
+		q += `, perms=?`
+		args = append(args, perms)
+	}
+	if in.Phone != nil {
+		q += `, phone=?`
+		args = append(args, strOr(in.Phone))
+	}
+	if in.Email != nil {
+		q += `, email=?`
+		args = append(args, strOr(in.Email))
+	}
+	if in.WarehouseIDs != nil || in.DefaultWarehouseID != nil {
+		whJSON, def := warehousesJSON(in.WarehouseIDs, in.DefaultWarehouseID)
+		q += `, warehouse_ids_json=?, default_warehouse_id=?`
+		args = append(args, whJSON, def)
+	}
+	q += ` WHERE id=?`
+	args = append(args, id)
+	if _, err := s.db.Exec(q, args...); err != nil {
+		writeFieldErr(w, http.StatusConflict, "username", "cet identifiant existe déjà")
 		return
 	}
 	if in.Password != nil && *in.Password != "" {
@@ -171,17 +265,14 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		s.audit(r, "user.password", "user", id, "mot de passe réinitialisé")
 	}
+	s.audit(r, "user.update", "user", id, in.Username)
 	s.respondUser(w, id, http.StatusOK)
 }
 
 func (s *Server) respondUser(w http.ResponseWriter, id string, status int) {
-	var u UserOut
-	var permsJSON string
-	var active int
-	err := s.db.QueryRow(
-		`SELECT id, username, full_name, role, perms, active FROM users WHERE id = ?`, id).
-		Scan(&u.ID, &u.Username, &u.FullName, &u.Role, &permsJSON, &active)
+	u, err := s.loadAuthUser(id)
 	if err == sql.ErrNoRows {
 		writeErr(w, http.StatusNotFound, "utilisateur introuvable")
 		return
@@ -190,7 +281,5 @@ func (s *Server) respondUser(w http.ResponseWriter, id string, status int) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	u.Active = active == 1
-	u.Perms = EffectivePerms(u.Role, permsJSON)
 	writeJSON(w, status, u)
 }

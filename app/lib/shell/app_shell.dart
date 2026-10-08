@@ -17,7 +17,7 @@ import '../screens/products_screen.dart';
 import '../screens/purchases_screen.dart';
 import '../screens/reports_screen.dart';
 import '../screens/sales_screen.dart';
-import '../screens/settings_screen.dart';
+import '../screens/settings/settings_shell.dart';
 import '../screens/stock_screen.dart';
 import '../screens/webstore_screen.dart';
 import '../theme/tokens.dart';
@@ -125,11 +125,19 @@ class AppShell extends StatefulWidget {
     required this.config,
     required this.session,
     required this.onLogout,
+    this.openModule,
+    this.onSwitchSession,
   });
   final ApiClient api;
   final LocalConfig config;
   final Session session;
   final VoidCallback onLogout;
+
+  /// Module to open first (after « Changer de caissier » → the till).
+  final String? openModule;
+
+  /// « Changer de caissier » at the till: the new cashier's session.
+  final void Function(Session)? onSwitchSession;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -184,6 +192,12 @@ class _AppShellState extends State<AppShell> {
   void initState() {
     super.initState();
     UiPrefs.instance.user = user.id;
+    // « Mes préférences » → page d'accueil choisie par l'utilisateur.
+    final start = UiPrefs.instance.get<String>('prefs', 'start_module');
+    final si = start == null ? -1 : _visible.indexWhere((m) => m.key == start);
+    if (si >= 0) _index = si;
+    final om = widget.openModule == null ? -1 : _visible.indexWhere((m) => m.key == widget.openModule);
+    if (om >= 0) _index = om;
     // « Analyser » buttons of the modules open the Explorateur on a seed.
     if (_visible.any((m) => m.key == 'explorer')) {
       AnalysisLinks.open = (spec, {title, origin}) {
@@ -537,7 +551,8 @@ class _AppShellState extends State<AppShell> {
             config: widget.config,
             user: user,
             cashierName:
-                user.fullName.isEmpty ? user.username : user.fullName),
+                user.fullName.isEmpty ? user.username : user.fullName,
+            onSwitchUser: widget.onSwitchSession),
         'sales' => SalesScreen(api: widget.api, command: _commands['sales']),
         'purchases' =>
             PurchasesScreen(api: widget.api, command: _commands['purchases']),

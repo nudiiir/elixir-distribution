@@ -67,15 +67,22 @@ class ParkedTicket {
 }
 
 class ParkedLine {
-  ParkedLine(this.product, this.qtyMilli, this.discountPct);
+  ParkedLine(
+    this.product,
+    this.qtyMilli,
+    this.discountPct, {
+    this.priceOverride,
+  });
   final Product product;
   final int qtyMilli;
   final int discountPct;
+  final int? priceOverride; // price typed at the till (TTC)
 
   Map<String, dynamic> toJson() => {
     'product': productToJson(product),
     'qty_milli': qtyMilli,
     'discount_pct': discountPct,
+    if (priceOverride != null) 'price_override': priceOverride,
   };
 
   static ParkedLine? fromJson(Map<String, dynamic> j) {
@@ -84,6 +91,7 @@ class ParkedLine {
         Product.fromJson(j['product'] as Map<String, dynamic>),
         (j['qty_milli'] as num).toInt(),
         (j['discount_pct'] as num?)?.toInt() ?? 0,
+        priceOverride: (j['price_override'] as num?)?.toInt(),
       );
     } catch (_) {
       return null;
@@ -131,6 +139,11 @@ Map<String, dynamic> partnerToJson(Partner p) => {
   'price_level': p.priceLevel,
   'balance': p.balance,
   'active': p.active,
+  // customer group: price level + discount must survive « mettre en attente »
+  'group_id': p.groupId,
+  'group_name': p.groupName,
+  'group_price_level': p.groupPriceLevel,
+  'group_discount_pct': p.groupDiscountPct,
 };
 
 /// Load/save of the parked tickets file. Every call re-reads the file so two

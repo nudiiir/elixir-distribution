@@ -19,9 +19,12 @@ import '../widgets/product_thumb.dart';
 import '../widgets/side_panel.dart';
 import '../widgets/ui.dart';
 import 'pos/cart_line.dart';
+import 'pos/cash_rounding.dart';
 import 'pos/mixed_payment_dialog.dart';
 import 'pos/parked_tickets.dart';
 import 'pos/parked_tickets_dialog.dart';
+import 'pos/pos_customer.dart';
+import 'pos/pos_rights.dart';
 import 'pos/recent_tickets_panel.dart';
 
 export 'pos/cart_line.dart';
@@ -36,11 +39,16 @@ class PosScreen extends StatefulWidget {
     required this.config,
     required this.user,
     this.cashierName = '',
+    this.onSwitchUser,
   });
   final ApiClient api;
   final LocalConfig config;
   final User user;
   final String cashierName;
+
+  /// « Changer de caissier » succeeded: the shell switches to [Session]
+  /// (new token, new user) and rebuilds the till for that cashier.
+  final void Function(Session session)? onSwitchUser;
 
   @override
   State<PosScreen> createState() => _PosScreenState();
@@ -68,15 +76,124 @@ class _PosScreenState extends State<PosScreen> {
   int _parkedCount = 0;
   // « Rendu : X DA » of the last sale, shown until the next scan.
   int? _lastChange;
+  // Paramètres › Caisse : client proposé à chaque nouveau ticket.
+  Partner? _defaultClient;
+  // Groupe (tarif + remise) et points fidélité du client choisi.
+  PosCustomerInfo _clientInfo = const PosCustomerInfo();
+  String? _clientInfoFor; // partner id _clientInfo belongs to
+  // Points fidélité utilisés sur ce ticket (ligne « Points fidélité »).
+  PosLoyaltyUse? _pointsUse;
+  // Manager code already typed on this ticket (price change): sent with the
+  // checkout so the manager is not asked twice.
+  String? _pendingApproval;
 
-  bool get _canDiscount => widget.user.can('discount');
-  String get _priceLevel => _client?.priceLevel ?? 'retail';
+  late final PosRights _rights = PosRights(widget.user);
+  Features get _f => Features.instance;
+  bool get _canDiscount => _rights.discount;
+  String get _priceLevel =>
+      _clientInfo.groupPriceLevel ?? _client?.priceLevel ?? 'retail';
+
+  /// The customer changed (or may have): drop the points used for the
+  /// previous one and load the new one's group and points.
+  void _clientChanged() {
+    final id = _client?.id;
+    final use = _pointsUse;
+    if (use != null && id != _clientInfoFor) {
+      _pointsUse = null;
+      cancelPosPoints(widget.api, use.redemptionId).catchError((_) {});
+    }
+    if (id == _clientInfoFor) return;
+    _clientInfoFor = id;
+    _clientInfo = const PosCustomerInfo();
+    if (id == null) return;
+    loadPosCustomerInfo(widget.api, id, loyalty: _f.loyaltyEnabled).then((
+      info,
+    ) {
+      if (mounted && _client?.id == id) setState(() => _clientInfo = info);
+    });
+  }
+
+  /// The group's remise follows every line (lines with their own remise
+  /// keep it).
+  void _syncGroupDiscount() {
+    final g = _clientInfo.groupDiscountPct;
+    for (final l in _cart) {
+      l.groupDiscountPct = g;
+    }
+  }
+
+  /// Gives back the points of an abandoned ticket.
+  void _dropPoints() {
+    final use = _pointsUse;
+    if (use == null) return;
+    _pointsUse = null;
+    cancelPosPoints(widget.api, use.redemptionId).catchError((_) {});
+  }
+
+  /// Payment tiles offered by the shop (Paramètres › Caisse).
+  List<(String, String, IconData)> get _offeredMethods {
+    final on = _f.posPaymentMethods;
+    final all = <(String, String, IconData)>[
+      ('cash', 'Espèces', Icons.payments_outlined),
+      ('cib', 'CIB', Icons.credit_card),
+      ('edahabia', 'Edahabia', Icons.contactless_outlined),
+      ('cheque', 'Chèque', Icons.request_page_outlined),
+      ('credit', 'Crédit client', Icons.menu_book_outlined),
+      ('gift', 'Carte cadeau', Icons.card_giftcard),
+      if (_f.loyaltyEnabled)
+        ('loyalty', 'Points fidélité', Icons.loyalty_outlined),
+    ];
+    final list = [
+      for (final m in all)
+        if (on.contains(m.$1)) m,
+    ];
+    return list.isEmpty ? all.take(1).toList() : list;
+  }
+
+  /// Method a new ticket starts with: cash when offered, else the first tile.
+  String get _firstMethod {
+    final ids = [for (final m in _offeredMethods) m.$1];
+    return ids.contains('cash') ? 'cash' : ids.first;
+  }
+
+  /// A new ticket: default customer and first payment method.
+  void _resetTicketState() {
+    _client = _defaultClient;
+    _paymentMethod = _firstMethod;
+    _clientChanged();
+  }
+
+  /// The open till dates from a previous day and the shop requires a Z.
+  bool get _needsDailyZ {
+    final s = _session;
+    if (s == null || !_f.posRequireDailyZ) return false;
+    final opened = DateTime.tryParse(s.openedAt)?.toLocal();
+    if (opened == null) return false;
+    final now = DateTime.now();
+    return DateTime(
+      opened.year,
+      opened.month,
+      opened.day,
+    ).isBefore(DateTime(now.year, now.month, now.day));
+  }
 
   @override
   void initState() {
     super.initState();
+    _paymentMethod = _firstMethod;
+    _f.addListener(_onFeatures);
     _init();
     _refreshParked();
+  }
+
+  /// Paramètres › Caisse saved on this PC: follow the new tiles at once.
+  void _onFeatures() {
+    if (!mounted) return;
+    setState(() {
+      if (!_offeredMethods.any((m) => m.$1 == _paymentMethod)) {
+        _paymentMethod = _firstMethod;
+      }
+    });
   }
 
   Future<void> _refreshParked() async {
@@ -97,6 +214,7 @@ class _PosScreenState extends State<PosScreen> {
         ..addAll(lines);
       _client = client;
       _paymentMethod = method;
+      _clientChanged();
       _touch();
     });
     _searchFocus.requestFocus();
@@ -109,14 +227,17 @@ class _PosScreenState extends State<PosScreen> {
     final before = _snapshot();
     final client = _client;
     final method = _paymentMethod;
+    final hadPoints = _pointsUse != null;
     setState(() {
       _cart.clear();
-      _client = null;
-      _paymentMethod = 'cash';
+      _dropPoints();
+      _resetTicketState();
     });
     showUndoToast(
       context,
-      'Ticket vidé (${before.length} ligne(s)).',
+      hadPoints
+          ? 'Ticket vidé (${before.length} ligne(s)) — les points fidélité sont rendus au client.'
+          : 'Ticket vidé (${before.length} ligne(s)).',
       undo: () => _restoreCart(before, client, method),
     );
     _searchFocus.requestFocus();
@@ -150,7 +271,13 @@ class _PosScreenState extends State<PosScreen> {
     }
     final t = await ParkedTicketStore.instance.park(
       lines: [
-        for (final l in _cart) ParkedLine(l.product, l.qtyMilli, l.discountPct),
+        for (final l in _cart)
+          ParkedLine(
+            l.product,
+            l.qtyMilli,
+            l.discountPct,
+            priceOverride: l.priceOverride,
+          ),
       ],
       client: _client,
       paymentMethod: _paymentMethod,
@@ -159,8 +286,9 @@ class _PosScreenState extends State<PosScreen> {
     if (!mounted) return;
     setState(() {
       _cart.clear();
-      _client = null;
-      _paymentMethod = 'cash';
+      // Points are not kept on hold: they are used again at payment.
+      _dropPoints();
+      _resetTicketState();
       _touch();
     });
     await _refreshParked();
@@ -183,7 +311,8 @@ class _PosScreenState extends State<PosScreen> {
           for (final l in pick.lines)
             CartLine(l.product)
               ..qtyMilli = l.qtyMilli
-              ..discountPct = l.discountPct,
+              ..discountPct = l.discountPct
+              ..priceOverride = l.priceOverride,
         ],
         pick.partner,
         pick.paymentMethod,
@@ -281,16 +410,46 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   Future<void> _init() async {
+    // The caisse settings may have changed on another PC since start.
+    await _f.load(widget.api);
     try {
       final whs = await widget.api.warehouses();
       if (whs.isNotEmpty && mounted) {
+        // A cashier limited to his depots sells from his own depot; else the
+        // dépôt de la caisse (Paramètres › Caisse), else the default depot.
+        final own = widget.user.scope == 'warehouse'
+            ? widget.user.defaultWarehouseId
+            : null;
+        final wanted = own != null && whs.any((w) => w.id == own)
+            ? own
+            : _f.posDefaultWarehouseId;
         setState(
           () => _warehouseId = whs
-              .firstWhere((w) => w.isDefault, orElse: () => whs.first)
+              .firstWhere(
+                (w) => w.id == wanted,
+                orElse: () =>
+                    whs.firstWhere((w) => w.isDefault, orElse: () => whs.first),
+              )
               .id,
         );
       }
     } catch (_) {}
+    final defId = _f.posDefaultCustomerId;
+    if (defId != null) {
+      try {
+        final p = await widget.api.getPartner(defId);
+        if (mounted && p.active) {
+          setState(() {
+            _defaultClient = p;
+            if (_cart.isEmpty && _client == null) {
+              _client = p;
+              _clientChanged();
+            }
+          });
+        }
+      } catch (_) {}
+    }
+    if (mounted) setState(() => _paymentMethod = _firstMethod);
     _loadSession();
     _loadCompany();
     _loadCats();
@@ -356,7 +515,8 @@ class _PosScreenState extends State<PosScreen> {
   Future<void> _openCaisse() async {
     final opened = await showDialog<CaisseSession>(
       context: context,
-      builder: (_) => _OpenCaisseDialog(api: widget.api),
+      builder: (_) =>
+          _OpenCaisseDialog(api: widget.api, initialFloat: _f.posDefaultFloat),
     );
     if (opened != null) {
       setState(() => _session = opened);
@@ -367,7 +527,11 @@ class _PosScreenState extends State<PosScreen> {
   Future<void> _showXReport() async {
     await showDialog<void>(
       context: context,
-      builder: (_) => _ReportDialog(api: widget.api, closing: false),
+      builder: (_) => _ReportDialog(
+        api: widget.api,
+        closing: false,
+        showTotals: _rights.viewToday,
+      ),
     );
     _searchFocus.requestFocus();
   }
@@ -375,7 +539,11 @@ class _PosScreenState extends State<PosScreen> {
   Future<void> _closeCaisse() async {
     final closed = await showDialog<bool>(
       context: context,
-      builder: (_) => _ReportDialog(api: widget.api, closing: true),
+      builder: (_) => _ReportDialog(
+        api: widget.api,
+        closing: true,
+        showTotals: _rights.viewToday,
+      ),
     );
     if (closed == true) setState(() => _session = null);
   }
@@ -403,7 +571,9 @@ class _PosScreenState extends State<PosScreen> {
       final hasCash =
           doc.paymentMethod == 'cash' ||
           payments.any((p) => p.method == 'cash');
-      final payload = kick && hasCash ? [...drawerKick, ...bytes] : bytes;
+      final payload = kick && hasCash && _f.posOpenDrawer
+          ? [...drawerKick, ...bytes]
+          : bytes;
       await rawPrint(printer, payload);
     } catch (e) {
       if (!mounted) return;
@@ -433,6 +603,7 @@ class _PosScreenState extends State<PosScreen> {
 
   @override
   void dispose() {
+    _f.removeListener(_onFeatures);
     _debounce?.cancel();
     _searchCtrl.dispose();
     _searchFocus.dispose();
@@ -453,6 +624,12 @@ class _PosScreenState extends State<PosScreen> {
     }
   }
 
+  /// « Bip au scan » (Paramètres › Caisse): a short sound when a scanned
+  /// code lands on the ticket.
+  void _beep() {
+    if (_f.posBeep) SystemSound.play(SystemSoundType.alert);
+  }
+
   /// Barcode scanners type the code then send Enter.
   Future<void> _onSubmitted(String q) async {
     q = q.trim();
@@ -464,6 +641,7 @@ class _PosScreenState extends State<PosScreen> {
         ? RegExp(r'^(2[12])(\d{5})(\d{5})\d$').firstMatch(q)
         : null;
     if (scale != null && await _addScaleItem(scale)) {
+      _beep();
       _searchCtrl.clear();
       _search('');
       _searchFocus.requestFocus();
@@ -477,6 +655,7 @@ class _PosScreenState extends State<PosScreen> {
           ? exact.first
           : (items.length == 1 ? items.first : null);
       if (pick != null) {
+        _beep();
         _addToCart(pick);
         _searchCtrl.clear();
         _search('');
@@ -776,20 +955,56 @@ class _PosScreenState extends State<PosScreen> {
     });
   }
 
+  /// Line editor: quantity, remise (right `discount`) and unit price (right
+  /// `price_edit`, else the manager's code).
   Future<void> _editQty(CartLine line) async {
     final ctrl = TextEditingController(text: fmtQty(line.qtyMilli));
     final discCtrl = TextEditingController(
       text: line.discountPct == 0 ? '' : '${line.discountPct ~/ 100}',
     );
-    final result = await showDialog<(int, int)>(
+    final basePrice = line.product.priceFor(_priceLevel);
+    final priceCtrl = TextEditingController(
+      text: editDA(line.unitTTC(_priceLevel)),
+    );
+    final maxPct = _rights.maxDiscountPct;
+    final result = await showDialog<(int, int, int?)>(
       context: context,
       builder: (context) {
-        (int, int)? parse() {
+        (int, int, int?)? parse() {
           final q = parseQty(ctrl.text);
           if (q == null || q <= 0) return null;
           final d = int.tryParse(discCtrl.text.trim()) ?? 0;
-          return (q, (d.clamp(0, 100)) * 100);
+          final p = parseDA(priceCtrl.text);
+          final price = p == null || p <= 0 || p == basePrice ? null : p;
+          return (q, (d.clamp(0, 100)) * 100, price);
         }
+
+        Widget field(
+          TextEditingController c, {
+          bool big = false,
+          bool autofocus = false,
+          String? hint,
+        }) => Container(
+          height: big ? 54 : 44,
+          decoration: BoxDecoration(
+            color: T.bg,
+            borderRadius: BorderRadius.circular(T.rInner),
+            border: Border.all(color: T.border),
+          ),
+          child: TextField(
+            controller: c,
+            autofocus: autofocus,
+            textAlign: TextAlign.center,
+            style: big ? T.monoBig : T.monoBody,
+            onSubmitted: (_) => Navigator.of(context).pop(parse()),
+            decoration: InputDecoration(
+              border: InputBorder.none,
+              hintText: hint,
+              hintStyle: T.small.copyWith(color: T.ghost),
+              contentPadding: EdgeInsets.symmetric(vertical: big ? 12 : 10),
+            ),
+          ),
+        );
 
         return Dialog(
           backgroundColor: T.surface,
@@ -797,69 +1012,51 @@ class _PosScreenState extends State<PosScreen> {
             borderRadius: BorderRadius.circular(T.rCard),
           ),
           child: SizedBox(
-            width: 300,
+            width: 320,
             child: Padding(
               padding: const EdgeInsets.all(20),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
                     line.product.name,
                     style: T.h2,
                     textAlign: TextAlign.center,
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 12),
                   Text(
                     line.product.isWeighable && Features.instance.weighed
                         ? 'Quantité (kg)'
                         : 'Quantité',
-                    style: T.small,
+                    style: T.label,
                   ),
-                  const SizedBox(height: 12),
-                  Container(
-                    height: 54,
-                    decoration: BoxDecoration(
-                      color: T.bg,
-                      borderRadius: BorderRadius.circular(T.rInner),
-                      border: Border.all(color: T.border),
-                    ),
-                    child: TextField(
-                      controller: ctrl,
-                      autofocus: true,
-                      textAlign: TextAlign.center,
-                      style: T.monoBig,
-                      onSubmitted: (_) => Navigator.of(context).pop(parse()),
-                      decoration: const InputDecoration(
-                        border: InputBorder.none,
-                        contentPadding: EdgeInsets.symmetric(vertical: 12),
-                      ),
-                    ),
-                  ),
+                  const SizedBox(height: 6),
+                  field(ctrl, big: true, autofocus: true),
                   if (_canDiscount) ...[
                     const SizedBox(height: 10),
-                    Container(
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: T.bg,
-                        borderRadius: BorderRadius.circular(T.rInner),
-                        border: Border.all(color: T.border),
+                    const Text('Remise (%)', style: T.label),
+                    const SizedBox(height: 6),
+                    field(discCtrl, hint: '0–100'),
+                    if (maxPct != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        'Au-delà de ${maxPct ~/ 100} %, le code du gérant sera demandé à l’encaissement.',
+                        style: T.small,
                       ),
-                      child: TextField(
-                        controller: discCtrl,
-                        textAlign: TextAlign.center,
-                        style: T.monoBody,
-                        onSubmitted: (_) => Navigator.of(context).pop(parse()),
-                        decoration: InputDecoration(
-                          border: InputBorder.none,
-                          hintText: 'Remise % (0–100)',
-                          hintStyle: T.small.copyWith(color: T.ghost),
-                          contentPadding: const EdgeInsets.symmetric(
-                            vertical: 10,
-                          ),
-                        ),
-                      ),
-                    ),
+                    ],
                   ],
+                  const SizedBox(height: 10),
+                  const Text('Prix unitaire TTC (DA)', style: T.label),
+                  const SizedBox(height: 6),
+                  field(priceCtrl),
+                  const SizedBox(height: 4),
+                  Text(
+                    _rights.priceEdit
+                        ? 'Prix normal : ${fmtDA(basePrice)}.'
+                        : 'Prix normal : ${fmtDA(basePrice)}. Changer le prix demande le code du gérant.',
+                    style: T.small,
+                  ),
                   const SizedBox(height: 14),
                   PrimaryButton(
                     label: 'Valider',
@@ -874,10 +1071,28 @@ class _PosScreenState extends State<PosScreen> {
     );
     ctrl.dispose();
     discCtrl.dispose();
-    if (result != null) {
+    priceCtrl.dispose();
+    if (result != null && mounted) {
+      var price = result.$3;
+      if (price != line.priceOverride && price != null) {
+        final grant = await posRequireRight(
+          context,
+          widget.api,
+          _rights,
+          'price_edit',
+        );
+        if (grant == null) {
+          price = line.priceOverride;
+        } else if (grant.token != null) {
+          _pendingApproval = grant.token;
+        }
+      }
+      if (!mounted) return;
       setState(() {
         line.qtyMilli = result.$1;
-        line.discountPct = result.$2;
+        if (_canDiscount) line.discountPct = result.$2;
+        line.priceOverride = price;
+        _touch();
       });
     }
     _searchFocus.requestFocus();
@@ -952,16 +1167,25 @@ class _PosScreenState extends State<PosScreen> {
 
   Future<void> _pickClient() async {
     final p = await showPartnerPicker(context, widget.api, kind: 'customer');
-    if (p != null) setState(() => _client = p);
+    if (p != null) {
+      setState(() {
+        _client = p;
+        _clientChanged();
+      });
+    }
     _searchFocus.requestFocus();
   }
 
   /// Return flow: pick the original sale, choose the lines, refund in cash.
   Future<void> _startReturn({String? initialDocId}) async {
+    // Right `refund` (retour / avoir), else the manager's code.
+    final grant = await posRequireRight(context, widget.api, _rights, 'refund');
+    if (grant == null || !mounted) return;
     final refunded = await showDialog<DocDetail>(
       context: context,
       builder: (_) => _ReturnDialog(
         api: widget.api,
+        preApproved: grant.token,
         warehouseId: _warehouseId,
         caisseSessionId: _session?.id,
         initialDocId: initialDocId,
@@ -993,19 +1217,95 @@ class _PosScreenState extends State<PosScreen> {
 
   int get _totalHT => _cart.fold(0, (s, l) => s + l.lineHT(_priceLevel));
   int get _totalVAT => _cart.fold(0, (s, l) => s + l.lineVAT(_priceLevel));
-  int get _timbre {
+
+  /// Value of the loyalty points used on this ticket.
+  int get _pointsValue => _pointsUse?.value ?? 0;
+
+  /// What the goods cost once the points are taken off (timbre excluded).
+  int get _goods => _totalHT + _totalVAT - _pointsValue;
+
+  /// « Arrondi » of a cash ticket (Paramètres › Caisse) — the server adds the
+  /// same amount as an « Arrondi » line, so the total is the cash taken.
+  int get _rounding {
     if (_paymentMethod != 'cash' || _cart.isEmpty) return 0;
-    return timbreFor(_totalHT + _totalVAT);
+    return cashRoundingDelta(_goods, posCashStep);
   }
 
-  int get _totalTTC => _totalHT + _totalVAT + _timbre;
+  int get _timbre {
+    if (_paymentMethod != 'cash' || _cart.isEmpty) return 0;
+    return posTimbre(_goods + _rounding);
+  }
+
+  int get _totalTTC => _goods + _rounding + _timbre;
   int get _itemCount => _cart.fold(0, (s, l) => s + (l.qtyMilli / 1000).ceil());
+
+  /// « Demander le client au-delà de X DA » (Paramètres › Caisse): true to go
+  /// on (client chosen or explicitly skipped), false to stay on the ticket.
+  Future<bool> _askCustomerIfNeeded() async {
+    final above = _f.posAskCustomerAbove;
+    if (above <= 0 || _totalTTC < above) return true;
+    if (_client != null && _client?.id != _defaultClient?.id) return true;
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: T.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(T.rCard),
+        ),
+        title: const Text('À quel client est cette vente ?', style: T.h2),
+        content: SizedBox(
+          width: 380,
+          child: Text(
+            'Ce ticket fait ${fmtDA(_totalTTC)}. Au-delà de ${fmtDA(above)}, '
+            'le magasin demande le nom du client (garantie, retour, fidélité).',
+            style: T.body,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop('skip'),
+            child: const Text('Continuer sans client'),
+          ),
+          PrimaryButton(
+            label: 'Choisir le client (F6)',
+            onPressed: () => Navigator.of(ctx).pop('pick'),
+          ),
+        ],
+      ),
+    );
+    if (choice == 'skip') return true;
+    if (choice != 'pick') return false;
+    await _pickClient();
+    return _client != null && _client?.id != _defaultClient?.id;
+  }
 
   Future<void> _startCheckout({bool mixed = false}) async {
     if (_cart.isEmpty || _warehouseId == null || _checkingOut) return;
+    if (_needsDailyZ) {
+      showToast(
+        context,
+        'Clôturez la caisse d’hier (rapport Z) avant de vendre.',
+        kind: ToastKind.warning,
+      );
+      return;
+    }
+    _syncGroupDiscount();
+    if (_goods < 0) {
+      showToast(
+        context,
+        'Les points fidélité dépassent le total du ticket : rendez-les au client ou ajoutez des articles.',
+        kind: ToastKind.warning,
+      );
+      return;
+    }
     if (!mixed && _paymentMethod == 'credit' && _client == null) {
       await _pickClient();
       if (_client == null) return;
+    }
+    if (!mounted) return;
+    if (!await _askCustomerIfNeeded()) {
+      _searchFocus.requestFocus();
+      return;
     }
     if (!mounted) return;
 
@@ -1030,10 +1330,8 @@ class _PosScreenState extends State<PosScreen> {
     if (mixed) {
       final res = await showDialog<MixedPaymentResult>(
         context: context,
-        builder: (_) => MixedPaymentDialog(
-          goodsTotal: _totalHT + _totalVAT,
-          hasClient: _client != null,
-        ),
+        builder: (_) =>
+            MixedPaymentDialog(goodsTotal: _goods, hasClient: _client != null),
       );
       if (res == null) {
         _searchFocus.requestFocus();
@@ -1067,7 +1365,8 @@ class _PosScreenState extends State<PosScreen> {
     if (_paymentMethod == 'cash') {
       received = await showDialog<int>(
         context: context,
-        builder: (context) => _CashDialog(total: _totalTTC),
+        builder: (context) =>
+            _CashDialog(total: _totalTTC, rounding: _rounding),
       );
       if (received == null) {
         _searchFocus.requestFocus();
@@ -1090,30 +1389,54 @@ class _PosScreenState extends State<PosScreen> {
   }) async {
     setState(() => _checkingOut = true);
     try {
-      final goods = _totalHT + _totalVAT;
-      final (posted, paid) = await widget.api.posCheckout(
-        warehouseId: _warehouseId!,
-        // A gift-card sale is not cash in the drawer: no method, no timbre —
-        // it is recorded as one « gift » payment row.
-        paymentMethod: payments != null || _paymentMethod == 'gift'
-            ? null
-            : _paymentMethod,
-        payments:
-            payments ??
-            (_paymentMethod == 'gift' ? [PosPayment('gift', goods)] : const []),
-        partnerId: _client?.id,
-        caisseSessionId: _session?.id,
-        lines: [
-          for (final l in _cart)
-            {
-              'product_id': l.product.id,
-              'description': l.product.name,
-              'qty_milli': l.qtyMilli,
-              'unit_price': l.unitHT(_priceLevel),
-              'discount_pct': l.discountPct,
-              'vat_rate': l.product.vatRate,
-            },
-        ],
+      _syncGroupDiscount();
+      final goods = _goods;
+      final points = _pointsUse;
+      final lines = [
+        for (final l in _cart)
+          {
+            'product_id': l.product.id,
+            'description': l.product.name,
+            'qty_milli': l.qtyMilli,
+            'unit_price': l.unitHT(_priceLevel),
+            'discount_pct': l.effectiveDiscountPct,
+            'vat_rate': l.product.vatRate,
+          },
+        // Points fidélité: their value comes off the ticket as a line.
+        if (points != null)
+          {
+            'product_id': null,
+            'description': 'Points fidélité (${points.points} pts)',
+            'qty_milli': 1000,
+            'unit_price': -points.value,
+            'discount_pct': 0,
+            'vat_rate': 0,
+          },
+      ];
+      // Remise above the cashier's limit, sale on credit beyond his rights
+      // or the customer's ceiling: the server asks for the manager's code.
+      final pre = _pendingApproval;
+      _pendingApproval = null;
+      final (posted, paid) = await posWithApproval(
+        context,
+        widget.api,
+        preApproved: pre,
+        () => widget.api.posCheckout(
+          warehouseId: _warehouseId!,
+          // A gift-card sale is not cash in the drawer: no method, no timbre —
+          // it is recorded as one « gift » payment row.
+          paymentMethod: payments != null || _paymentMethod == 'gift'
+              ? null
+              : _paymentMethod,
+          payments:
+              payments ??
+              (_paymentMethod == 'gift'
+                  ? [PosPayment('gift', goods)]
+                  : const []),
+          partnerId: _client?.id,
+          caisseSessionId: _session?.id,
+          lines: lines,
+        ),
       );
       // Mark the sold serials — the sale stands even if this trails behind.
       for (final e in serials.entries) {
@@ -1136,12 +1459,17 @@ class _PosScreenState extends State<PosScreen> {
               : (received - posted.totalTTC).clamp(0, 1 << 48).toInt());
       setState(() {
         _cart.clear();
-        _client = null;
-        _paymentMethod = 'cash';
+        _pointsUse = null; // consumed by the sale
+        _resetTicketState();
         _lastChange = received == null ? null : rendu;
       });
       _refreshStock();
-      _printTicket(posted, received: received, change: rendu, payments: paid);
+      _afterSaleHardware(
+        posted,
+        received: received,
+        change: rendu,
+        payments: paid,
+      );
       await _showSuccess(posted, rendu);
     } on ApiException catch (e) {
       // The card was debited but the sale never posted — give the money back.
@@ -1151,20 +1479,246 @@ class _PosScreenState extends State<PosScreen> {
         } catch (_) {}
       }
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: T.danger,
-          behavior: SnackBarBehavior.floating,
-          content: Text(
-            'Échec de la vente : ${e.message}',
-            style: const TextStyle(fontFamily: T.sans, color: Colors.white),
-          ),
-        ),
+      // « Clôturez la caisse d'hier » from the server: show the Z card.
+      if (e.status == 409 && e.message.contains('rapport Z')) _loadSession();
+      showToast(
+        context,
+        'Échec de la vente : ${e.message}',
+        kind: ToastKind.error,
       );
     } finally {
       if (mounted) setState(() => _checkingOut = false);
       _searchFocus.requestFocus();
     }
+  }
+
+  /// After a sale: ticket (« Imprimer le ticket automatiquement ») and drawer
+  /// (« Ouvrir le tiroir après une vente en espèces »), Paramètres › Caisse.
+  void _afterSaleHardware(
+    DocDetail posted, {
+    int? received,
+    required int change,
+    required List<PosPayment> payments,
+  }) {
+    final printer = widget.config.ticketPrinter;
+    if (printer == null || printer.isEmpty) return;
+    if (_f.posAutoPrint) {
+      _printTicket(
+        posted,
+        received: received,
+        change: change,
+        payments: payments,
+      );
+      return;
+    }
+    final hasCash =
+        posted.paymentMethod == 'cash' ||
+        payments.any((p) => p.method == 'cash');
+    if (hasCash && _f.posOpenDrawer) {
+      rawPrint(printer, drawerKick).catchError((_) {});
+    }
+    showToast(
+      context,
+      'Vente ${posted.number ?? ''} enregistrée.',
+      actionLabel: 'Imprimer le ticket',
+      onAction: () => _printTicket(
+        posted,
+        received: received,
+        change: change,
+        payments: payments,
+        kick: false,
+      ),
+    );
+  }
+
+  /// « Ouvrir le tiroir » without a sale — right `open_drawer`, else the
+  /// manager's code.
+  Future<void> _openDrawer() async {
+    final printer = widget.config.ticketPrinter;
+    if (printer == null || printer.isEmpty) {
+      showToast(
+        context,
+        'Aucune imprimante ticket configurée sur ce poste : le tiroir s’ouvre par elle.',
+        kind: ToastKind.warning,
+      );
+      return;
+    }
+    final grant = await posRequireRight(
+      context,
+      widget.api,
+      _rights,
+      'open_drawer',
+    );
+    if (grant == null) return;
+    try {
+      await rawPrint(printer, drawerKick);
+    } catch (e) {
+      if (mounted) {
+        showToast(context, 'Tiroir : $e', kind: ToastKind.error);
+      }
+    }
+    _searchFocus.requestFocus();
+  }
+
+  /// « Changer de caissier » : PIN of another user; the shell switches.
+  Future<void> _switchCashier() async {
+    if (_cart.isNotEmpty) {
+      final go = await confirmAction(
+        context,
+        title: 'Changer de caissier ?',
+        message:
+            'Le ticket en cours sera mis en attente : le prochain caissier pourra le reprendre (F5).',
+        confirmLabel: 'Mettre en attente et changer',
+      );
+      if (!go || !mounted) return;
+      await _hold();
+      if (!mounted) return;
+    }
+    final session = await posSwitchUser(context, widget.api);
+    if (session != null) widget.onSwitchUser?.call(session);
+  }
+
+  /// « Utiliser les points » : the customer's loyalty points pay part (or
+  /// all) of the ticket. Tapping it again gives the points back.
+  Future<void> _usePoints() async {
+    if (_cart.isEmpty) {
+      showToast(
+        context,
+        'Ajoutez d’abord les articles du ticket.',
+        kind: ToastKind.info,
+      );
+      return;
+    }
+    if (_client == null || _client?.id == _defaultClient?.id) {
+      await _pickClient();
+      if (_client == null || !mounted) return;
+    }
+    final used = _pointsUse;
+    if (used != null) {
+      final back = await confirmAction(
+        context,
+        title: 'Rendre les points ?',
+        message:
+            '${used.points} points (${fmtDA(used.value)}) sont utilisés sur ce ticket. Les rendre au client ?',
+        confirmLabel: 'Rendre les points',
+      );
+      if (back && mounted) setState(_dropPoints);
+      return;
+    }
+    // Fresh balance (the customer may have bought elsewhere meanwhile).
+    final info = await loadPosCustomerInfo(widget.api, _client!.id);
+    if (!mounted) return;
+    setState(() => _clientInfo = info);
+    if (!info.loyaltyEnabled || info.pointValue <= 0) {
+      showToast(
+        context,
+        'Le programme de fidélité n’est pas activé (Paramètres › Clients et fidélité).',
+        kind: ToastKind.info,
+      );
+      return;
+    }
+    if (!info.canRedeem) {
+      showToast(
+        context,
+        '${_client!.name} a ${info.points} points : il en faut ${info.minRedeem} pour les utiliser.',
+        kind: ToastKind.info,
+      );
+      return;
+    }
+    _syncGroupDiscount();
+    final maxByTicket = (_totalHT + _totalVAT) ~/ info.pointValue;
+    final maxPts = info.points < maxByTicket ? info.points : maxByTicket;
+    if (maxPts <= 0) return;
+    final ctrl = TextEditingController(text: '$maxPts');
+    final pts = await showDialog<int>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) {
+          final n = int.tryParse(ctrl.text.trim()) ?? 0;
+          final err = n <= 0
+              ? 'Indiquez un nombre de points.'
+              : n > maxPts
+              ? 'Au plus $maxPts points sur ce ticket.'
+              : n < info.minRedeem
+              ? 'Au moins ${info.minRedeem} points.'
+              : null;
+          return AlertDialog(
+            backgroundColor: T.surface,
+            title: const Text('Utiliser les points', style: T.h2),
+            content: SizedBox(
+              width: 360,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${_client!.name} a ${info.points} points '
+                    '(${fmtDA(info.pointsValue)}). 1 point = ${fmtDA(info.pointValue)}.',
+                    style: T.body,
+                  ),
+                  const SizedBox(height: 12),
+                  const Text('Points à utiliser', style: T.label),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: ctrl,
+                    autofocus: true,
+                    style: T.monoBody,
+                    onChanged: (_) => setDlg(() {}),
+                    onSubmitted: (_) {
+                      if (err == null) Navigator.of(ctx).pop(n);
+                    },
+                  ),
+                  const SizedBox(height: 6),
+                  if (err != null)
+                    FieldError(err)
+                  else
+                    Text(
+                      'Déduit du ticket : ${fmtDA(n * info.pointValue)}',
+                      style: T.small,
+                    ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Annuler'),
+              ),
+              PrimaryButton(
+                label: 'Utiliser',
+                onPressed: err == null ? () => Navigator.of(ctx).pop(n) : null,
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    Future.delayed(const Duration(seconds: 1), ctrl.dispose);
+    if (pts == null || !mounted) return;
+    try {
+      final use = await redeemPosPoints(widget.api, _client!.id, pts);
+      if (!mounted) return;
+      setState(() {
+        _pointsUse = use;
+        _clientInfo = PosCustomerInfo(
+          groupName: info.groupName,
+          groupPriceLevel: info.groupPriceLevel,
+          groupDiscountPct: info.groupDiscountPct,
+          loyaltyEnabled: info.loyaltyEnabled,
+          points: info.points - use.points,
+          pointValue: info.pointValue,
+          minRedeem: info.minRedeem,
+          canRedeem: false,
+        );
+      });
+      showToast(
+        context,
+        '${use.points} points utilisés : ${fmtDA(use.value)} déduits du ticket. Choisissez comment payer le reste.',
+      );
+    } on ApiException catch (e) {
+      if (mounted) showToast(context, e.message, kind: ToastKind.error);
+    }
+    _searchFocus.requestFocus();
   }
 
   Future<void> _showSuccess(DocDetail doc, int change) async {
@@ -1303,6 +1857,8 @@ class _PosScreenState extends State<PosScreen> {
         ),
       );
     }
+    if (_needsDailyZ) return _dailyZGate();
+    _syncGroupDiscount();
     return CallbackShortcuts(
       bindings: bindingsFor({
         AppShortcuts.posSearch: _focusSearch,
@@ -1318,6 +1874,89 @@ class _PosScreenState extends State<PosScreen> {
         },
       }),
       child: Focus(onKeyEvent: _onKey, child: _buildBody(context)),
+    );
+  }
+
+  /// « Clôturez la caisse d'hier (rapport Z) » — the till was opened on a
+  /// previous day and the shop requires a daily Z (Paramètres › Caisse).
+  Widget _dailyZGate() {
+    final opened = DateTime.tryParse(_session!.openedAt)?.toLocal();
+    String two(int v) => v.toString().padLeft(2, '0');
+    final when = opened == null
+        ? ''
+        : ' le ${two(opened.day)}/${two(opened.month)} à ${two(opened.hour)}:${two(opened.minute)}';
+    final canClose = _rights.closeTill;
+    return Center(
+      child: Container(
+        width: 460,
+        padding: const EdgeInsets.all(28),
+        decoration: BoxDecoration(
+          color: T.surface,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: T.warn),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 56,
+              height: 56,
+              decoration: const BoxDecoration(
+                color: T.warnTint,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.lock_clock_outlined,
+                size: 26,
+                color: T.warnDark,
+              ),
+            ),
+            const SizedBox(height: 14),
+            const Text(
+              'Clôturez la caisse d’hier (rapport Z)',
+              style: T.h1,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'La caisse est ouverte depuis$when. Le magasin demande un rapport Z '
+              'chaque jour : comptez le tiroir et clôturez la caisse avant la '
+              'première vente d’aujourd’hui.',
+              textAlign: TextAlign.center,
+              style: T.bodyMuted,
+            ),
+            if (!canClose) ...[
+              const SizedBox(height: 10),
+              Text(
+                'Votre rôle ne permet pas de clôturer la caisse. Appelez un gérant '
+                'ou l’administrateur : il clôture avec son compte, ou tape son code '
+                'avec le bouton ci-dessous.',
+                textAlign: TextAlign.center,
+                style: T.body.copyWith(color: T.warnDark),
+              ),
+            ],
+            const SizedBox(height: 18),
+            SizedBox(
+              width: 300,
+              child: PrimaryButton(
+                label: canClose
+                    ? 'Clôturer la caisse (rapport Z)'
+                    : 'Clôturer avec le code du gérant',
+                big: true,
+                onPressed: _closeCaisse,
+              ),
+            ),
+            if (widget.onSwitchUser != null && posSwitchUserAvailable) ...[
+              const SizedBox(height: 8),
+              TextButton.icon(
+                onPressed: _switchCashier,
+                icon: const Icon(Icons.switch_account_outlined, size: 18),
+                label: const Text('Changer de caissier'),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 
@@ -1439,7 +2078,8 @@ class _PosScreenState extends State<PosScreen> {
                       label: 'Mettre en attente',
                       icon: Icons.pause_circle_outline,
                       keyHint: 'F4',
-                      tooltip: 'Garder ce ticket de côté pour servir un autre client',
+                      tooltip:
+                          'Garder ce ticket de côté pour servir un autre client',
                       onPressed: _hold,
                     ),
                     _headerButton(
@@ -1460,7 +2100,9 @@ class _PosScreenState extends State<PosScreen> {
                     _headerButton(
                       label: 'Retour',
                       icon: Icons.assignment_return_outlined,
-                      tooltip: 'Retour / remboursement client',
+                      tooltip: _rights.refund
+                          ? 'Retour / remboursement client'
+                          : 'Retour / remboursement client — code du gérant nécessaire',
                       onPressed: () => _startReturn(),
                     ),
                     _headerButton(
@@ -1473,17 +2115,37 @@ class _PosScreenState extends State<PosScreen> {
                       ).then((_) => _searchFocus.requestFocus()),
                     ),
                     _headerButton(
+                      label: 'Ouvrir le tiroir',
+                      icon: Icons.inbox_outlined,
+                      tooltip: _rights.openDrawer
+                          ? 'Ouvrir le tiroir-caisse sans vente (monnaie)'
+                          : 'Ouvrir le tiroir-caisse sans vente — code du gérant nécessaire',
+                      onPressed: _openDrawer,
+                    ),
+                    _headerButton(
                       label: 'Rapport X',
                       icon: Icons.receipt_long_outlined,
-                      tooltip: 'État de caisse en cours, sans clôturer',
+                      tooltip: _rights.closeTill
+                          ? 'État de caisse en cours, sans clôturer'
+                          : 'État de caisse en cours — code du gérant nécessaire',
                       onPressed: _showXReport,
                     ),
                     _headerButton(
                       label: 'Clôturer la caisse',
                       icon: Icons.lock_outline,
-                      tooltip: 'Compter la caisse et imprimer le rapport Z',
+                      tooltip: _rights.closeTill
+                          ? 'Compter la caisse et imprimer le rapport Z'
+                          : 'Compter la caisse et imprimer le rapport Z — code du gérant nécessaire',
                       onPressed: _closeCaisse,
                     ),
+                    if (widget.onSwitchUser != null && posSwitchUserAvailable)
+                      _headerButton(
+                        label: 'Changer de caissier',
+                        icon: Icons.switch_account_outlined,
+                        tooltip:
+                            'Un autre caissier prend la caisse avec son code',
+                        onPressed: _switchCashier,
+                      ),
                   ],
                 ),
                 const SizedBox(height: 14),
@@ -1589,7 +2251,8 @@ class _PosScreenState extends State<PosScreen> {
                         });
                       }
                       if (shown.isEmpty) {
-                        final filtered = _catFilter != null ||
+                        final filtered =
+                            _catFilter != null ||
                             _favOnly ||
                             _searchCtrl.text.trim().isNotEmpty;
                         return EmptyState(
@@ -1739,7 +2402,7 @@ class _PosScreenState extends State<PosScreen> {
                             ),
                           ),
                         ),
-                        if (_client?.priceLevel == 'wholesale') ...[
+                        if (_client != null && _priceLevel == 'wholesale') ...[
                           const MintChip(
                             'demi-gros',
                             color: T.warnTint,
@@ -1751,8 +2414,10 @@ class _PosScreenState extends State<PosScreen> {
                           TextButton.icon(
                             onPressed: () => setState(() {
                               _client = null;
-                              if (_paymentMethod == 'credit') {
-                                _paymentMethod = 'cash';
+                              _clientChanged();
+                              if (_paymentMethod == 'credit' ||
+                                  _paymentMethod == 'loyalty') {
+                                _paymentMethod = _firstMethod;
                               }
                             }),
                             style: TextButton.styleFrom(
@@ -1783,6 +2448,40 @@ class _PosScreenState extends State<PosScreen> {
                   ),
                 ),
               ),
+              // Groupe du client (tarif + remise) et points fidélité.
+              if (_client != null &&
+                  (_clientInfo.groupName != null ||
+                      (_f.loyaltyEnabled && _clientInfo.loyaltyEnabled)))
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 0, 18, 10),
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      if (_clientInfo.groupName != null)
+                        MintChip(
+                          _clientInfo.groupDiscountPct > 0
+                              ? 'Groupe ${_clientInfo.groupName} · remise ${_clientInfo.groupDiscountPct ~/ 100} %'
+                              : 'Groupe ${_clientInfo.groupName}',
+                          color: T.mintTint,
+                          fg: T.mintDark,
+                        ),
+                      if (_f.loyaltyEnabled && _clientInfo.loyaltyEnabled)
+                        MintChip(
+                          '${_clientInfo.points} points · ${fmtDA(_clientInfo.pointsValue)}',
+                          color: T.bg,
+                          fg: T.ink,
+                        ),
+                      if (_pointsUse != null)
+                        MintChip(
+                          '${_pointsUse!.points} points utilisés',
+                          color: T.warnTint,
+                          fg: T.warnDark,
+                        ),
+                    ],
+                  ),
+                ),
               const Divider(),
               // Lines
               Expanded(
@@ -1827,6 +2526,12 @@ class _PosScreenState extends State<PosScreen> {
                   children: [
                     _TotalRow('Sous-total HT', _totalHT),
                     _TotalRow('TVA', _totalVAT),
+                    if (_pointsValue > 0)
+                      _TotalRow(
+                        'Points fidélité (${_pointsUse!.points} pts)',
+                        -_pointsValue,
+                      ),
+                    if (_rounding != 0) _TotalRow('Arrondi', _rounding),
                     if (_timbre > 0) _TotalRow('Timbre fiscal', _timbre),
                     const SizedBox(height: 6),
                     const Divider(),
@@ -1883,29 +2588,29 @@ class _PosScreenState extends State<PosScreen> {
                     const SizedBox(height: 10),
                     const Text('Paiement', style: T.label),
                     const SizedBox(height: 6),
-                    // 2 rows of 3: each tile has room for its icon AND word.
-                    for (final row in const [
-                      [
-                        ('cash', 'Espèces', Icons.payments_outlined),
-                        ('cib', 'CIB', Icons.credit_card),
-                        ('edahabia', 'Edahabia', Icons.contactless_outlined),
-                      ],
-                      [
-                        ('cheque', 'Chèque', Icons.request_page_outlined),
-                        ('credit', 'Crédit client', Icons.menu_book_outlined),
-                        ('gift', 'Carte cadeau', Icons.card_giftcard),
-                      ],
-                    ]) ...[
-                      if (row.first.$1 != 'cash') const SizedBox(height: 6),
+                    // Rows of 3 (only the tiles the shop offers, Paramètres ›
+                    // Caisse): each tile has room for its icon AND word.
+                    for (final (i, row) in _payRows().indexed) ...[
+                      if (i > 0) const SizedBox(height: 6),
                       Row(
                         children: [
-                          for (final (id, label, icon) in row) ...[
-                            if (id != row.first.$1) const SizedBox(width: 6),
+                          for (final (j, (id, label, icon)) in row.indexed) ...[
+                            if (j > 0) const SizedBox(width: 6),
                             _PayChoice(
-                              label: label,
+                              label: id == 'loyalty' && _pointsUse != null
+                                  ? 'Rendre les points'
+                                  : label,
                               icon: icon,
-                              selected: _paymentMethod == id,
+                              selected: id == 'loyalty'
+                                  ? _pointsUse != null
+                                  : _paymentMethod == id,
                               onTap: () {
+                                // Points pay part of the ticket; the rest
+                                // is paid with the selected method.
+                                if (id == 'loyalty') {
+                                  _usePoints();
+                                  return;
+                                }
                                 setState(() => _paymentMethod = id);
                                 if (id == 'credit' && _client == null) {
                                   _pickClient();
@@ -1913,45 +2618,52 @@ class _PosScreenState extends State<PosScreen> {
                               },
                             ),
                           ],
+                          // Keep tiles the same width on a short last row.
+                          for (var k = row.length; k < 3; k++) ...[
+                            const SizedBox(width: 6),
+                            const Expanded(child: SizedBox()),
+                          ],
                         ],
                       ),
                     ],
                     const SizedBox(height: 12),
                     Row(
                       children: [
-                        SizedBox(
-                          height: 58,
-                          child: Tooltip(
-                            message:
-                                'Payer avec plusieurs moyens (ex. espèces + CIB) — F8',
-                            child: OutlinedButton.icon(
-                              style: OutlinedButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
+                        if (offeredMixedMethods.length >= 2) ...[
+                          SizedBox(
+                            height: 58,
+                            child: Tooltip(
+                              message:
+                                  'Payer avec plusieurs moyens (ex. espèces + CIB) — F8',
+                              child: OutlinedButton.icon(
+                                style: OutlinedButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                  ),
+                                  foregroundColor: T.ink,
+                                  side: const BorderSide(color: T.border3),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  textStyle: const TextStyle(
+                                    fontFamily: T.sans,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w700,
+                                  ),
                                 ),
-                                foregroundColor: T.ink,
-                                side: const BorderSide(color: T.border3),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
+                                onPressed: _cart.isEmpty || _checkingOut
+                                    ? null
+                                    : () => _startCheckout(mixed: true),
+                                icon: const Icon(
+                                  Icons.call_split_rounded,
+                                  size: 20,
                                 ),
-                                textStyle: const TextStyle(
-                                  fontFamily: T.sans,
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w700,
-                                ),
+                                label: const Text('Mixte (F8)'),
                               ),
-                              onPressed: _cart.isEmpty || _checkingOut
-                                  ? null
-                                  : () => _startCheckout(mixed: true),
-                              icon: const Icon(
-                                Icons.call_split_rounded,
-                                size: 20,
-                              ),
-                              label: const Text('Mixte (F8)'),
                             ),
                           ),
-                        ),
-                        const SizedBox(width: 8),
+                          const SizedBox(width: 8),
+                        ],
                         Expanded(child: _payButton()),
                       ],
                     ),
@@ -1963,6 +2675,15 @@ class _PosScreenState extends State<PosScreen> {
         ),
       ],
     );
+  }
+
+  /// The offered payment tiles, 3 per row.
+  List<List<(String, String, IconData)>> _payRows() {
+    final all = _offeredMethods;
+    return [
+      for (var i = 0; i < all.length; i += 3)
+        all.sublist(i, i + 3 > all.length ? all.length : i + 3),
+    ];
   }
 
   Widget _payButton() {
@@ -2080,7 +2801,8 @@ class _ProductTile extends StatefulWidget {
   final int stockMilli;
   final VoidCallback onTap;
   final bool favorite;
-  final VoidCallback? onSecondaryTap; // pin / unpin (also the visible pin button)
+  final VoidCallback?
+  onSecondaryTap; // pin / unpin (also the visible pin button)
   final bool canPin;
 
   @override
@@ -2137,10 +2859,11 @@ class _ProductTileState extends State<_ProductTile> {
                       iconSize: 18,
                       onPressed: widget.onSecondaryTap,
                       icon: Icon(
-                          widget.favorite
-                              ? Icons.push_pin_rounded
-                              : Icons.push_pin_outlined,
-                          color: widget.favorite ? T.warn : T.ghost),
+                        widget.favorite
+                            ? Icons.push_pin_rounded
+                            : Icons.push_pin_outlined,
+                        color: widget.favorite ? T.warn : T.ghost,
+                      ),
                     )
                   else if (widget.favorite) ...[
                     const SizedBox(width: 4),
@@ -2547,8 +3270,10 @@ class _ReturnDialog extends StatefulWidget {
     required this.warehouseId,
     this.caisseSessionId,
     this.initialDocId,
+    this.preApproved,
   });
   final ApiClient api;
+  final String? preApproved; // manager code typed before opening the return
   final String? warehouseId;
   final String? caisseSessionId;
   final String? initialDocId; // « Retour » from « Derniers tickets »
@@ -2662,18 +3387,28 @@ class _ReturnDialogState extends State<_ReturnDialog> {
       _error = null;
     });
     try {
-      final draft = await widget.api.createDraft({
-        'doc_type': 'SALE_CREDIT_NOTE',
-        'doc_date': todayISO(),
-        'warehouse_id': d.warehouseId ?? widget.warehouseId,
-        'partner_id': d.partnerId,
-        'payment_method': 'cash',
-        'caisse_session_id': widget.caisseSessionId,
-        'ref_document_id': d.id,
-        'notes': 'Retour sur ${d.number ?? d.id.substring(0, 8)}',
-        'lines': lines,
-      });
-      final posted = await widget.api.postDocument(draft.id);
+      final draft = await posWithApproval(
+        context,
+        widget.api,
+        preApproved: widget.preApproved,
+        () => widget.api.createDraft({
+          'doc_type': 'SALE_CREDIT_NOTE',
+          'doc_date': todayISO(),
+          'warehouse_id': d.warehouseId ?? widget.warehouseId,
+          'partner_id': d.partnerId,
+          'payment_method': 'cash',
+          'caisse_session_id': widget.caisseSessionId,
+          'ref_document_id': d.id,
+          'notes': 'Retour sur ${d.number ?? d.id.substring(0, 8)}',
+          'lines': lines,
+        }),
+      );
+      if (!mounted) return;
+      final posted = await posWithApproval(
+        context,
+        widget.api,
+        () => widget.api.postDocument(draft.id),
+      );
       if (mounted) Navigator.of(context).pop(posted);
     } on ApiException catch (e) {
       setState(() => _error = e.message);
@@ -2979,15 +3714,25 @@ class _PayChoice extends StatelessWidget {
 // ================= Caisse session dialogs =================
 
 class _OpenCaisseDialog extends StatefulWidget {
-  const _OpenCaisseDialog({required this.api});
+  const _OpenCaisseDialog({required this.api, this.initialFloat = 0});
   final ApiClient api;
+  final int initialFloat; // fond de caisse proposé (Paramètres › Caisse)
 
   @override
   State<_OpenCaisseDialog> createState() => _OpenCaisseDialogState();
 }
 
 class _OpenCaisseDialogState extends State<_OpenCaisseDialog> {
-  final _ctrl = TextEditingController();
+  late final _ctrl =
+      TextEditingController(
+          text: widget.initialFloat > 0 ? editDA(widget.initialFloat) : '',
+        )
+        ..selection = TextSelection(
+          baseOffset: 0,
+          extentOffset: widget.initialFloat > 0
+              ? editDA(widget.initialFloat).length
+              : 0,
+        );
   bool _busy = false;
   String? _error;
 
@@ -3053,7 +3798,10 @@ class _OpenCaisseDialogState extends State<_OpenCaisseDialog> {
               ),
               const SizedBox(height: 6),
               Text(
-                'L’argent déjà dans le tiroir avant la première vente.',
+                widget.initialFloat > 0
+                    ? 'L’argent déjà dans le tiroir avant la première vente. '
+                          'Montant proposé par le magasin : corrigez-le si besoin.'
+                    : 'L’argent déjà dans le tiroir avant la première vente.',
                 style: T.small,
               ),
               if (_error != null) ...[
@@ -3093,9 +3841,15 @@ class _OpenCaisseDialogState extends State<_OpenCaisseDialog> {
 
 /// X report (closing=false) or Z closure flow (closing=true).
 class _ReportDialog extends StatefulWidget {
-  const _ReportDialog({required this.api, required this.closing});
+  const _ReportDialog({
+    required this.api,
+    required this.closing,
+    this.showTotals = true,
+  });
   final ApiClient api;
   final bool closing;
+  // Right `view_today`: the day's turnover (tickets · total) is shown.
+  final bool showTotals;
 
   @override
   State<_ReportDialog> createState() => _ReportDialogState();
@@ -3124,7 +3878,12 @@ class _ReportDialogState extends State<_ReportDialog> {
 
   Future<void> _load() async {
     try {
-      final (session, report) = await widget.api.caisseReport();
+      // Right `close_till` checked by the server: else the manager's code.
+      final (session, report) = await posWithApproval(
+        context,
+        widget.api,
+        () => widget.api.caisseReport(),
+      );
       if (mounted) {
         setState(() {
           _session = session;
@@ -3149,16 +3908,24 @@ class _ReportDialogState extends State<_ReportDialog> {
     if (counted == null) return;
     setState(() => _busy = true);
     try {
-      final (session, report) = await widget.api.caisseClose(
-        counted,
-        _notes.text.trim().isEmpty ? null : _notes.text.trim(),
+      final (session, report) = await posWithApproval(
+        context,
+        widget.api,
+        () => widget.api.caisseClose(
+          counted,
+          _notes.text.trim().isEmpty ? null : _notes.text.trim(),
+        ),
       );
       if (!mounted) return;
       Navigator.of(context).pop(true);
       // Z summary
       showDialog<void>(
         context: context,
-        builder: (_) => _ZSummaryDialog(session: session, report: report),
+        builder: (_) => _ZSummaryDialog(
+          session: session,
+          report: report,
+          showTotals: widget.showTotals,
+        ),
       );
     } on ApiException catch (e) {
       setState(() {
@@ -3253,18 +4020,19 @@ class _ReportDialogState extends State<_ReportDialog> {
                       r.expectedCash,
                       bold: true,
                     ),
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: MicroLabel(
-                              '${r.ticketCount} tickets · ${fmtDA(r.totalSales)}',
+                    if (widget.showTotals)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: MicroLabel(
+                                '${r.ticketCount} tickets · ${fmtDA(r.totalSales)}',
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
-                    ),
                     if (widget.closing) ...[
                       const SizedBox(height: 14),
                       const MicroLabel('Espèces comptées (DA)'),
@@ -3399,9 +4167,14 @@ class _ReportDialogState extends State<_ReportDialog> {
 }
 
 class _ZSummaryDialog extends StatelessWidget {
-  const _ZSummaryDialog({required this.session, required this.report});
+  const _ZSummaryDialog({
+    required this.session,
+    required this.report,
+    this.showTotals = true,
+  });
   final CaisseSession session;
   final CaisseReport report;
+  final bool showTotals;
 
   @override
   Widget build(BuildContext context) {
@@ -3433,7 +4206,9 @@ class _ZSummaryDialog extends StatelessWidget {
               const Text('Caisse clôturée', style: T.h2),
               const SizedBox(height: 4),
               Text(
-                '${report.ticketCount} tickets · ${fmtDA(report.totalSales)}',
+                showTotals
+                    ? '${report.ticketCount} tickets · ${fmtDA(report.totalSales)}'
+                    : '${report.ticketCount} tickets',
                 style: T.bodyMuted,
               ),
               const SizedBox(height: 12),
@@ -3780,7 +4555,9 @@ class _GiftRedeemDialogState extends State<_GiftRedeemDialog> {
                 children: [
                   const Icon(Icons.card_giftcard, size: 18, color: T.mintDeep),
                   const SizedBox(width: 8),
-                  const Expanded(child: Text('Payer par carte cadeau', style: T.h2)),
+                  const Expanded(
+                    child: Text('Payer par carte cadeau', style: T.h2),
+                  ),
                   Text(
                     fmtDA(widget.total),
                     style: T.monoBody.copyWith(fontWeight: FontWeight.w600),
@@ -3884,8 +4661,9 @@ class _GiftRedeemDialogState extends State<_GiftRedeemDialog> {
 // ================= Cash dialog =================
 
 class _CashDialog extends StatefulWidget {
-  const _CashDialog({required this.total});
+  const _CashDialog({required this.total, this.rounding = 0});
   final int total;
+  final int rounding; // « Arrondi » already inside total (Paramètres › Caisse)
 
   @override
   State<_CashDialog> createState() => _CashDialogState();
@@ -3941,13 +4719,22 @@ class _CashDialogState extends State<_CashDialog> {
                     color: T.mintDeep,
                   ),
                   const SizedBox(width: 8),
-                  const Expanded(child: Text('Paiement en espèces', style: T.h2)),
+                  const Expanded(
+                    child: Text('Paiement en espèces', style: T.h2),
+                  ),
                   Text(
                     fmtDA(widget.total),
                     style: T.monoBody.copyWith(fontWeight: FontWeight.w600),
                   ),
                 ],
               ),
+              if (widget.rounding != 0) ...[
+                const SizedBox(height: 4),
+                Text(
+                  'Arrondi des espèces : ${widget.rounding > 0 ? '+' : ''}${fmtDA(widget.rounding)} (inclus)',
+                  style: T.small,
+                ),
+              ],
               const SizedBox(height: 16),
               const MicroLabel('Montant reçu'),
               const SizedBox(height: 6),

@@ -180,12 +180,19 @@ class _ProductPageState extends State<ProductPage> {
   late String? _supplierId = _src?.defaultSupplierId;
   List<Category> _cats = const [];
   List<Partner> _suppliers = const [];
-  late List<String> _brands = widget.brands;
+  // Marques gérées (Paramètres › Produits et stock) + marques déjà utilisées.
+  late List<String> _brands = {...Features.instance.brands, ...widget.brands}.toList()..sort();
 
   // ---- Stock ----
   final _initialQty = TextEditingController();
+  // Nouveau produit : stock minimum par défaut des Paramètres.
   late final _minStock = TextEditingController(
-      text: _src == null || _src!.minStockMilli == 0 ? '' : fmtQty(_src!.minStockMilli));
+      text: _src == null
+          ? (Features.instance.defaultMinStockMilli == 0 ? '' : fmtQty(Features.instance.defaultMinStockMilli))
+          : (_src!.minStockMilli == 0 ? '' : fmtQty(_src!.minStockMilli)));
+  // Unité de vente (liste des Paramètres ; « kg » quand vendu au poids).
+  late String _unit = _src?.unit ??
+      (Features.instance.units.isEmpty ? 'pièce' : Features.instance.units.first);
   late final List<_PackRow> _packs = [
     for (final k in _src?.packagings ?? const <Packaging>[])
       _PackRow(
@@ -288,11 +295,12 @@ class _ProductPageState extends State<ProductPage> {
       final sup = await widget.api.partners(kind: 'supplier', limit: 500);
       if (mounted) setState(() => _suppliers = sup);
     } catch (_) {}
-    if (_brands.isEmpty) {
+    if (widget.brands.isEmpty) {
       try {
         final all = await widget.api.products(limit: 500, includeInactive: true);
         if (mounted) {
           setState(() => _brands = {
+                ..._f.brands,
                 for (final p in all)
                   if (p.brand.isNotEmpty) p.brand
               }.toList()
@@ -356,7 +364,8 @@ class _ProductPageState extends State<ProductPage> {
     final m = _parseMargin(_margin.text);
     if (cost <= 0 || m == null) return;
     final pvHT = roundDiv(cost * (10000 + m), 10000);
-    _retail.text = editDA(roundDiv(pvHT * (10000 + _vat), 10000));
+    // Arrondi du prix de vente (Paramètres › Produits et stock).
+    _retail.text = editDA(_f.roundPrice(roundDiv(pvHT * (10000 + _vat), 10000)));
   }
 
   void _onRetailChanged(String _) {
@@ -741,7 +750,7 @@ class _ProductPageState extends State<ProductPage> {
           : _src?.priceWholesale,
       'min_stock_milli': service ? 0 : (parseQty(_minStock.text) ?? 0),
       'is_weighable': weighed,
-      'unit': weighed ? 'kg' : 'piece',
+      'unit': weighed ? 'kg' : _unit,
       'promo_price': hasPromo ? promo : null,
       'promo_start': hasPromo ? _promoStart : null,
       'promo_end': hasPromo ? _promoEnd : null,
@@ -1287,7 +1296,8 @@ class _ProductPageState extends State<ProductPage> {
     final ttc = parseDA(_retail.text) ?? 0;
     final pvHT = ttc <= 0 ? 0 : roundDiv(ttc * 10000, 10000 + _vat);
     final below = cost > 0 && ttc > 0 && pvHT <= cost;
-    final vats = {1900, 900, 0, _f.defaultVat, _vat}.toList();
+    // Taux de TVA des Paramètres › Taxes (+ celui du produit s'il n'y est plus).
+    final vats = {..._f.vatRates, _vat}.toList();
     final retail = _PField(
       fieldKey: _k('retail'),
       focusNode: _fn('retail'),
@@ -1567,9 +1577,47 @@ class _ProductPageState extends State<ProductPage> {
         _touch();
       },
     );
+    // Unités : liste de Paramètres › Produits et stock (+ l'unité actuelle).
+    final unitChoices = {..._f.units, _unit}.toList();
+    final unitField = _weighed
+        ? null
+        : Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: SizedBox(
+                width: 300,
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('Unité de vente', style: T.label.copyWith(color: T.ink, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 6),
+                  DropdownButtonFormField<String>(
+                    initialValue: _unit,
+                    isExpanded: true,
+                    decoration: InputDecoration(
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(T.rInner)),
+                    ),
+                    items: [
+                      for (final u in unitChoices)
+                        DropdownMenuItem(value: u, child: Text(u == 'piece' ? 'pièce' : u, style: T.body)),
+                    ],
+                    onChanged: (v) {
+                      if (v == null) return;
+                      setState(() => _unit = v);
+                      _touch();
+                    },
+                  ),
+                  const SizedBox(height: 5),
+                  Text('La liste se règle dans Paramètres › Produits et stock.', style: T.small),
+                ]),
+              ),
+            ),
+          );
     return PageSection(
       title: 'Stock',
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        ?unitField,
         _short(_isEdit ? min : _pair(initial, min), width: _isEdit ? 420 : 640),
         if (!_isEdit && (parseQty(_initialQty.text) ?? 0) > 0)
           Padding(

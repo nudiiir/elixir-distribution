@@ -79,22 +79,59 @@ func (s *Server) posCheckout(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if msg := s.checkDiscounts(r, domain.SaleTicket, in.Lines); msg != "" {
-		writeErr(w, http.StatusForbidden, msg)
-		return
+	// The customer's group remise (Paramètres › Clients et fidélité) is the
+	// shop's own rule, not the cashier's: lines carrying exactly it are not
+	// checked against the cashier's discount right.
+	checked := in.Lines
+	if g := s.posGroupDiscount(in.PartnerID); g > 0 {
+		checked = make([]DocumentLine, len(in.Lines))
+		copy(checked, in.Lines)
+		for i := range checked {
+			if checked[i].DiscountPct == g {
+				checked[i].DiscountPct = 0
+			}
+		}
 	}
+
+	conf := s.loadPosConf()
+	// Règle « rapport Z quotidien » : une caisse ouverte un jour précédent
+	// doit être clôturée avant toute nouvelle vente.
+	if conf.RequireDailyZ {
+		if stale, err := s.posSessionStale(in.CaisseSessionID, time.Now()); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		} else if stale {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":   "Clôturez la caisse d'hier (rapport Z) avant de vendre.",
+				"needs_z": true,
+			})
+			return
+		}
+	}
+
+	// Total des marchandises (avant timbre), base de l'arrondi espèces.
+	var goods int64
+	for _, l := range in.Lines {
+		_, _, t := domain.LineTotals(l.UnitPrice, l.QtyMilli, l.DiscountPct, l.VatRate)
+		goods += t
+	}
+	timbreCash := domain.TimbreApplies(domain.SaleTicket, "cash")
+	// Arrondi des espèces : montant (positif ou négatif) ajouté au ticket
+	// comme une ligne « Arrondi » — le total du ticket est alors exactement
+	// ce qui entre dans le tiroir, et les rapports restent justes.
+	var rounding int64
 
 	// Payments: merge same-method rows, validate, and collapse a single row
 	// into the classic single-method form (except the gift card, which has no
 	// documents.payment_method value).
 	method := in.PaymentMethod
 	var pays []PosPayment
+	byMethod := map[string]int64{}
 	if len(in.Payments) > 0 {
 		if method != nil && *method != "" {
 			writeErr(w, http.StatusBadRequest, "payment_method et payments sont exclusifs")
 			return
 		}
-		byMethod := map[string]int64{}
 		order := []string{}
 		for _, p := range in.Payments {
 			if _, ok := domain.PaymentMethods[p.Method]; !ok {
@@ -118,13 +155,17 @@ func (s *Server) posCheckout(w http.ResponseWriter, r *http.Request) {
 			m := order[0]
 			// A single row is stored as a classic one-method ticket, so the
 			// posting engine never sees its amount: check it here.
-			var ttc int64
-			for _, l := range in.Lines {
-				_, _, t := domain.LineTotals(l.UnitPrice, l.QtyMilli, l.DiscountPct, l.VatRate)
-				ttc += t
-			}
+			ttc := goods
 			if domain.TimbreApplies(domain.SaleTicket, m) {
 				ttc += domain.Timbre(ttc)
+			}
+			if m == "cash" && byMethod[m] != ttc {
+				// Montant arrondi par la caisse : accepté s'il correspond
+				// exactement à l'arrondi configuré.
+				if d := cashRoundingDelta(goods, conf.CashRounding, timbreCash); d != 0 &&
+					byMethod[m] == cashDue(goods+d, timbreCash) {
+					rounding, ttc = d, byMethod[m]
+				}
 			}
 			if byMethod[m] != ttc {
 				writeErr(w, http.StatusConflict, fmt.Sprintf(
@@ -138,12 +179,62 @@ func (s *Server) posCheckout(w http.ResponseWriter, r *http.Request) {
 				pays = append(pays, PosPayment{Method: m, Amount: byMethod[m]})
 			}
 			method = nil
+			// Paiement mixte : l'arrondi porte sur la part en espèces.
+			if cash, ok := byMethod["cash"]; ok {
+				cashGoods := goods - (sumPayments(byMethod) - cash)
+				if d := cashRoundingDelta(cashGoods, conf.CashRounding, timbreCash); d != 0 &&
+					cash == cashDue(cashGoods+d, timbreCash) {
+					rounding = d
+				}
+			}
 		}
 	} else if method != nil {
 		if _, ok := domain.PaymentMethods[*method]; !ok || *method == "gift" {
 			writeErr(w, http.StatusBadRequest, "moyen de paiement inconnu : "+*method)
 			return
 		}
+		byMethod[*method] = goods
+		if *method == "cash" {
+			rounding = cashRoundingDelta(goods, conf.CashRounding, timbreCash)
+		}
+	}
+
+	// Droits à la caisse — the shared sale checks of the roles work: remise
+	// (+ max_discount_pct), crédit (+ max_credit, + the customer's ceiling),
+	// approval_above. A refusal answers 403 needs_approval and the till
+	// replays the request with X-Approval (« Code du gérant »).
+	if !s.checkSaleRights(w, r, SaleCheck{
+		DocType:   domain.SaleTicket,
+		DocDate:   in.DocDate,
+		PartnerID: in.PartnerID,
+		Lines:     checked,
+		Credit:    byMethod["credit"],
+		Total:     goods + rounding,
+		Posting:   true,
+	}) {
+		return
+	}
+	// Prix changé à la caisse : right price_edit, else the manager's code.
+	if !s.posCheckPrices(w, r, in.Lines) {
+		return
+	}
+	// Customers without their own ceiling: the shop's default one
+	// (Paramètres › Clients et fidélité, default_credit_limit).
+	if need := s.posCheckRights(r, &in, byMethod, conf); need != nil {
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"error":          need.msg,
+			"needs_approval": true,
+			"action":         need.action,
+		})
+		return
+	}
+
+	if rounding != 0 {
+		in.Lines = append(in.Lines, DocumentLine{
+			Description: posRoundingLabel,
+			QtyMilli:    1000,
+			UnitPrice:   rounding,
+		})
 	}
 
 	id, now := domain.NewID(), domain.NowISO()
@@ -357,4 +448,221 @@ func (s *Server) posRecent(w http.ResponseWriter, r *http.Request) {
 		items[i].Payments, _ = s.posPaymentsOf(items[i].ID)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// ---- Paramètres › Caisse : règles appliquées par le serveur ----------------
+
+// posRoundingLabel is the description of the cash-rounding line.
+const posRoundingLabel = "Arrondi"
+
+// posConf is the part of the shop-wide caisse settings the server enforces.
+type posConf struct {
+	CashRounding       int64 // centimes: 0 (aucun), 50, 100, 500
+	RequireDailyZ      bool  // a till opened on a previous day blocks new sales
+	DefaultCreditLimit int64 // centimes, 0 = no ceiling (customers without their own)
+}
+
+func (s *Server) loadPosConf() posConf {
+	c := posConf{RequireDailyZ: true} // same defaults as the app (features.dart)
+	rows, err := s.db.Query(`SELECT key, value FROM settings
+		WHERE key IN ('pos_cash_rounding','pos_require_daily_z','default_credit_limit')`)
+	if err != nil {
+		return c
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k, v string
+		if rows.Scan(&k, &v) != nil {
+			continue
+		}
+		n, _ := strconv.ParseInt(v, 10, 64)
+		switch k {
+		case "pos_cash_rounding":
+			if n > 0 {
+				c.CashRounding = n
+			}
+		case "pos_require_daily_z":
+			c.RequireDailyZ = v != "0"
+		case "default_credit_limit":
+			if n > 0 {
+				c.DefaultCreditLimit = n
+			}
+		}
+	}
+	return c
+}
+
+// sessionFromPreviousDay reports whether a till opened at openedAt (RFC 3339,
+// UTC) was opened on an earlier calendar day than now, in now's time zone.
+func sessionFromPreviousDay(openedAt string, now time.Time) bool {
+	t, err := time.Parse(time.RFC3339, openedAt)
+	if err != nil {
+		return false
+	}
+	return t.In(now.Location()).Format("2006-01-02") < now.Format("2006-01-02")
+}
+
+// posSessionStale: the session the ticket is rung on (or the open one) was
+// opened on a previous day and is still open.
+func (s *Server) posSessionStale(sessionID *string, now time.Time) (bool, error) {
+	var openedAt string
+	var err error
+	if sessionID != nil && *sessionID != "" {
+		err = s.db.QueryRow(`SELECT opened_at FROM caisse_sessions WHERE id=? AND status='open'`,
+			*sessionID).Scan(&openedAt)
+	} else {
+		err = s.db.QueryRow(`SELECT opened_at FROM caisse_sessions WHERE status='open'
+			ORDER BY opened_at DESC LIMIT 1`).Scan(&openedAt)
+	}
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return sessionFromPreviousDay(openedAt, now), nil
+}
+
+// cashDue is the cash to take for goods paid in cash (timbre included when due).
+func cashDue(cashGoods int64, timbre bool) int64 {
+	if timbre && cashGoods > 0 {
+		return cashGoods + domain.Timbre(cashGoods)
+	}
+	return cashGoods
+}
+
+func absI(v int64) int64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+// cashRoundingDelta returns the « Arrondi » amount d (centimes, may be < 0) to
+// add to the goods paid in cash so that the cash to take — goods + d + the
+// timbre on (goods + d) — is a multiple of step, as close as possible to the
+// unrounded amount (nearest step, half up). 0 when no rounding applies.
+func cashRoundingDelta(cashGoods, step int64, timbre bool) int64 {
+	if step <= 0 || cashGoods <= 0 {
+		return 0
+	}
+	base := cashDue(cashGoods, timbre)
+	if base%step == 0 {
+		return 0
+	}
+	near := ((base + step/2) / step) * step
+	// The timbre moves by whole DA, so the nearest multiple may be out of
+	// reach: then the next nearest one (below or above, closest first).
+	other := []int64{near + step, near - step}
+	if absI(near-step-base) < absI(near+step-base) {
+		other[0], other[1] = other[1], other[0]
+	}
+	for _, target := range []int64{near, other[0], other[1]} {
+		if target <= 0 {
+			continue
+		}
+		best, found := int64(0), false
+		for d := -2 * step; d <= 2*step; d++ {
+			if cashGoods+d <= 0 || cashDue(cashGoods+d, timbre) != target {
+				continue
+			}
+			if !found || absI(d) < absI(best) {
+				best, found = d, true
+			}
+		}
+		if found {
+			return best
+		}
+	}
+	return 0
+}
+
+func sumPayments(m map[string]int64) int64 {
+	var t int64
+	for _, v := range m {
+		t += v
+	}
+	return t
+}
+
+type posNeed struct {
+	action string
+	msg    string
+}
+
+// posCheckRights applies the shop's default credit ceiling to customers who
+// have none of their own (checkSaleRights covers the customer's own ceiling).
+// A manager approval (X-Approval, right credit_limit) lifts it.
+func (s *Server) posCheckRights(r *http.Request, in *posCheckoutInput,
+	byMethod map[string]int64, conf posConf) *posNeed {
+	credit := byMethod["credit"]
+	if credit <= 0 || conf.DefaultCreditLimit <= 0 || in.PartnerID == nil || *in.PartnerID == "" {
+		return nil
+	}
+	var limit sql.NullInt64
+	if err := s.db.QueryRow(`SELECT credit_limit FROM partners WHERE id=?`, *in.PartnerID).
+		Scan(&limit); err != nil || (limit.Valid && limit.Int64 > 0) {
+		return nil
+	}
+	var balance int64
+	s.db.QueryRow(`SELECT COALESCE(SUM(amount),0) FROM partner_ledger WHERE partner_id=?`,
+		*in.PartnerID).Scan(&balance)
+	ceiling := conf.DefaultCreditLimit
+	if balance+credit <= ceiling || s.rightOrApproval(r, "credit_limit", balance+credit) {
+		return nil
+	}
+	return &posNeed{"credit_limit", fmt.Sprintf(
+		"le plafond de crédit du client (%s DA) serait dépassé : %s DA dus après cette vente",
+		centimes(ceiling), centimes(balance+credit))}
+}
+
+// posGroupDiscount is the remise of the customer's group (pct × 100), 0 when
+// the customer has no group (or the groups table is not there yet).
+func (s *Server) posGroupDiscount(partnerID *string) int64 {
+	if partnerID == nil || *partnerID == "" {
+		return 0
+	}
+	var pct sql.NullInt64
+	if err := s.db.QueryRow(`SELECT g.discount_pct FROM partners p
+		JOIN customer_groups g ON g.id = p.group_id WHERE p.id = ?`, *partnerID).Scan(&pct); err != nil {
+		return 0
+	}
+	return pct.Int64
+}
+
+// unitHTOf mirrors the app's TTC → HT unit price conversion (CartLine.unitHT).
+func unitHTOf(ttc, vat int64) int64 {
+	return (ttc*10000 + (10000+vat)/2) / (10000 + vat)
+}
+
+// posCheckPrices: a product line sold at another price than the product's
+// own (détail, demi-gros, promo) needs the price_edit right, or a manager
+// code. Lines without a product (Arrondi, Points fidélité) are not prices.
+func (s *Server) posCheckPrices(w http.ResponseWriter, r *http.Request, lines []DocumentLine) bool {
+	for _, l := range lines {
+		if l.ProductID == nil || *l.ProductID == "" {
+			continue
+		}
+		var retail int64
+		var wholesale, promo sql.NullInt64
+		var vat int64
+		if err := s.db.QueryRow(`SELECT price_retail, price_wholesale, promo_price, vat_rate
+			FROM products WHERE id = ?`, *l.ProductID).Scan(&retail, &wholesale, &promo, &vat); err != nil {
+			continue // unknown product: the posting engine refuses it
+		}
+		ok := false
+		for _, ttc := range []sql.NullInt64{{Int64: retail, Valid: true}, wholesale, promo} {
+			if ttc.Valid && ttc.Int64 > 0 &&
+				(l.UnitPrice == unitHTOf(ttc.Int64, vat) || l.UnitPrice == unitHTOf(ttc.Int64, l.VatRate)) {
+				ok = true
+				break
+			}
+		}
+		if ok {
+			continue
+		}
+		return s.requireRight(w, r, "price_edit", 0,
+			"prix de « "+l.Description+" » changé à la caisse : vous n'avez pas le droit de changer un prix")
+	}
+	return true
 }

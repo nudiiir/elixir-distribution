@@ -616,8 +616,9 @@ func (s *Server) generateBarcode(w http.ResponseWriter, r *http.Request) {
 		forbid(w)
 		return
 	}
+	prefix := internalBarcodePrefix(s.db)
 	for tries := 0; tries < 200; tries++ {
-		code, err := randomEAN13("200")
+		code, err := randomEAN13(prefix)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
@@ -631,6 +632,26 @@ func (s *Server) generateBarcode(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeErr(w, http.StatusInternalServerError, "could not generate a unique barcode")
+}
+
+// internalBarcodePrefix reads `barcode_prefix` (Paramètres › Produits et
+// stock): 1 to 7 digits, « 200 » by default (GS1 in-store range 200–299).
+func internalBarcodePrefix(q domain.Querier) string {
+	v, _ := domain.Setting(q, "barcode_prefix")
+	return normBarcodePrefix(v)
+}
+
+func normBarcodePrefix(v string) string {
+	v = strings.TrimSpace(v)
+	if len(v) < 1 || len(v) > 7 {
+		return "200"
+	}
+	for _, c := range v {
+		if c < '0' || c > '9' {
+			return "200"
+		}
+	}
+	return v
 }
 
 func randomEAN13(prefix string) (string, error) {

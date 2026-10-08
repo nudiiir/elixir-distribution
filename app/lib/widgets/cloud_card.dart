@@ -6,6 +6,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../api/client.dart';
 import '../api/cloud.dart';
 import '../theme/tokens.dart';
+import '../util/feedback.dart';
 import 'ui.dart';
 
 /// Connexion cloud — one button, no fields.
@@ -141,6 +142,13 @@ class _CloudCardState extends State<CloudCard> {
   }
 
   Future<void> _disconnect() async {
+    final ok = await confirmAction(context,
+        title: 'Déconnecter le magasin ?',
+        message: 'Les téléphones, l’assistant, le scan de factures et la boutique en ligne ne '
+            'pourront plus joindre ce magasin. Vous pourrez le reconnecter ensuite.',
+        confirmLabel: 'Déconnecter',
+        danger: true);
+    if (!ok || !mounted) return;
     setState(() => _busy = true);
     try {
       final st = await widget.api.cloudDisconnect();
@@ -244,7 +252,7 @@ class _CloudCardState extends State<CloudCard> {
               style: T.bodyMuted),
           if (_error != null) ...[
             const SizedBox(height: 8),
-            Text(_error!, style: T.small.copyWith(color: T.dangerDark)),
+            Text(_error!, style: T.body.copyWith(color: T.dangerDark)),
           ],
           const SizedBox(height: 14),
           Row(children: [
@@ -270,7 +278,7 @@ class _CloudCardState extends State<CloudCard> {
               TextButton(
                 onPressed: _busy ? null : _disconnect,
                 child: Text('Déconnecter',
-                    style: T.small.copyWith(color: T.dangerDark)),
+                    style: T.body.copyWith(color: T.dangerDark, fontWeight: FontWeight.w600)),
               ),
             ],
           ]),

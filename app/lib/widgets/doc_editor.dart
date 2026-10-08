@@ -9,6 +9,7 @@ import '../api/client.dart';
 import '../api/models.dart';
 import '../screens/documents/doc_detail_page.dart' show DocDetailPage;
 import '../theme/tokens.dart';
+import '../util/approval.dart';
 import '../util/features.dart';
 import '../util/feedback.dart';
 import '../util/file_dialog.dart';
@@ -664,6 +665,12 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
   }
 
   void _addProduct(Product p, {Packaging? packaging}) {
+    // Vente à un client d'un groupe : tarif (demi-gros) et remise du groupe.
+    final sale = !cfg.isPurchase && !cfg.isTransfer && cfg.partnerKind == 'customer';
+    final wholesale = sale &&
+        _partner?.effectivePriceLevel == 'wholesale' &&
+        p.priceWholesale != null &&
+        Features.instance.wholesale;
     setState(() {
       _lines.add(_EditLine(
         productId: p.id,
@@ -676,8 +683,10 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
                 ? (_lastPrices[p.id] != null && packaging == null
                     ? _lastPrices[p.id]!
                     : p.purchasePrice)
-                : p.unitPriceHT,
-        discountPct: 0,
+                : wholesale
+                    ? roundDiv(p.priceWholesale! * 10000, 10000 + p.vatRate)
+                    : p.unitPriceHT,
+        discountPct: sale ? (_partner?.groupDiscountPct ?? 0) : 0,
         vatRate: cfg.isTransfer ? 0 : p.vatRate,
         packaging: packaging,
         salePrice: cfg.isReception ? p.priceRetail : null,
@@ -779,7 +788,8 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
     if (m.newCmup == null || m.newCmup! <= 0) return null;
     final ht = roundDiv(m.newCmup! * (10000 + _targetMarginPct), 10000);
     final ttc = roundDiv(ht * (10000 + l.vatRate), 10000);
-    // arrondi commerçant au dinar
+    // Arrondi du prix de vente des Paramètres (5 / 10 DA), sinon au dinar.
+    if (Features.instance.priceRounding > 0) return Features.instance.roundPrice(ttc);
     return roundDiv(ttc, 100) * 100;
   }
 
@@ -940,9 +950,14 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
       while (true) {
         final payload =
             _payload(acceptShort: acceptShort, acceptOver: acceptOver);
-        final DocDetail draft = _docId == null
-            ? await widget.api.createDraft(payload)
-            : await widget.api.updateDraft(_docId!, payload);
+        if (!mounted) return;
+        // Remise / date / avoir hors droits → « Code du gérant » (approval.dart).
+        final DocDetail draft = await withApproval(
+            context,
+            widget.api,
+            () => _docId == null
+                ? widget.api.createDraft(payload)
+                : widget.api.updateDraft(_docId!, payload));
         _docId = draft.id;
         // Next step offered by the toast: open the saved document (not when
         // we came from its own page — that page reloads by itself).
@@ -960,7 +975,8 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
           return;
         }
         try {
-          final posted = await widget.api.postDocument(draft.id);
+          final posted = await withApproval(
+              context, widget.api, () => widget.api.postDocument(draft.id));
           if (!mounted) return;
           final changed = posted.lines
               .where((l) => l.newSalePrice != null)
@@ -1958,7 +1974,8 @@ class _VatDropdown extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final rates = {1900, 900, 0, line.vatRate}.toList();
+    // Taux de Paramètres › Taxes (+ celui de la ligne s'il n'y est plus).
+    final rates = {...Features.instance.vatRates, line.vatRate}.toList();
     return DropdownButtonHideUnderline(
       child: DropdownButton<int>(
         value: line.vatRate,
@@ -1967,7 +1984,7 @@ class _VatDropdown extends StatelessWidget {
         icon: const Icon(Icons.expand_more, size: 16, color: T.faint),
         items: [
           for (final r in rates)
-            DropdownMenuItem(value: r, child: Text('${r ~/ 100}%')),
+            DropdownMenuItem(value: r, child: Text(_vatPct(r))),
         ],
         onChanged: (v) {
           if (v == null) return;
@@ -2374,9 +2391,9 @@ class _FreeLineDialogState extends State<_FreeLineDialog> {
   final _desc = TextEditingController();
   final _qty = TextEditingController(text: '1');
   final _price = TextEditingController();
-  late int _vat = {1900, 900, 0}.contains(widget.defaultVat)
+  late int _vat = Features.instance.vatRates.contains(widget.defaultVat)
       ? widget.defaultVat
-      : 1900;
+      : Features.instance.vatRates.first;
   Map<String, String> _err = const {};
 
   @override
@@ -2452,12 +2469,11 @@ class _FreeLineDialogState extends State<_FreeLineDialog> {
                 padding: const EdgeInsets.only(top: 14),
                 child: DropdownButton<int>(
                   value: _vat,
-                  items: const [
-                    DropdownMenuItem(value: 1900, child: Text('TVA 19%')),
-                    DropdownMenuItem(value: 900, child: Text('TVA 9%')),
-                    DropdownMenuItem(value: 0, child: Text('TVA 0%')),
+                  items: [
+                    for (final r in {...Features.instance.vatRates, _vat})
+                      DropdownMenuItem(value: r, child: Text('TVA ${_vatPct(r)}')),
                   ],
-                  onChanged: (v) => setState(() => _vat = v ?? 1900),
+                  onChanged: (v) => setState(() => _vat = v ?? _vat),
                 ),
               ),
             ]),
@@ -2488,7 +2504,7 @@ class _QuickCreateDialog extends StatefulWidget {
 class _QuickCreateDialogState extends State<_QuickCreateDialog> {
   final _name = TextEditingController();
   final _sale = TextEditingController();
-  int _vat = 1900;
+  int _vat = Features.instance.defaultVat;
   bool _busy = false;
   String? _error;
 
@@ -2581,13 +2597,12 @@ class _QuickCreateDialogState extends State<_QuickCreateDialog> {
               ),
               const SizedBox(width: 12),
               DropdownButton<int>(
-                value: {0, 900, 1900}.contains(_vat) ? _vat : 1900,
-                items: const [
-                  DropdownMenuItem(value: 0, child: Text('TVA 0%')),
-                  DropdownMenuItem(value: 900, child: Text('TVA 9%')),
-                  DropdownMenuItem(value: 1900, child: Text('TVA 19%')),
+                value: _vat,
+                items: [
+                  for (final r in {...Features.instance.vatRates, _vat})
+                    DropdownMenuItem(value: r, child: Text('TVA ${_vatPct(r)}')),
                 ],
-                onChanged: (v) => setState(() => _vat = v ?? 1900),
+                onChanged: (v) => setState(() => _vat = v ?? _vat),
               ),
             ]),
           ],
@@ -2956,3 +2971,7 @@ Map<String, String> partnerFieldErrors(
   }
   return e;
 }
+
+/// 1900 → « 19% », 950 → « 9,5% ».
+String _vatPct(int r) =>
+    r % 100 == 0 ? '${r ~/ 100}%' : '${(r / 100).toString().replaceAll('.', ',')}%';

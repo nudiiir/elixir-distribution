@@ -16,11 +16,39 @@ class EscPos {
 
   static String fold(String s) {
     const map = {
-      'à': 'a', 'â': 'a', 'ä': 'a', 'é': 'e', 'è': 'e', 'ê': 'e', 'ë': 'e',
-      'î': 'i', 'ï': 'i', 'ô': 'o', 'ö': 'o', 'ù': 'u', 'û': 'u', 'ü': 'u',
-      'ç': 'c', 'À': 'A', 'Â': 'A', 'É': 'E', 'È': 'E', 'Ê': 'E', 'Î': 'I',
-      'Ô': 'O', 'Ù': 'U', 'Û': 'U', 'Ç': 'C', 'œ': 'oe', '’': "'",
-      '…': '...', '—': '-', '–': '-', '·': '.', '×': 'x', '€': 'EUR',
+      'à': 'a',
+      'â': 'a',
+      'ä': 'a',
+      'é': 'e',
+      'è': 'e',
+      'ê': 'e',
+      'ë': 'e',
+      'î': 'i',
+      'ï': 'i',
+      'ô': 'o',
+      'ö': 'o',
+      'ù': 'u',
+      'û': 'u',
+      'ü': 'u',
+      'ç': 'c',
+      'À': 'A',
+      'Â': 'A',
+      'É': 'E',
+      'È': 'E',
+      'Ê': 'E',
+      'Î': 'I',
+      'Ô': 'O',
+      'Ù': 'U',
+      'Û': 'U',
+      'Ç': 'C',
+      'œ': 'oe',
+      '’': "'",
+      '…': '...',
+      '—': '-',
+      '–': '-',
+      '·': '.',
+      '×': 'x',
+      '€': 'EUR',
     };
     final out = StringBuffer();
     for (final ch in s.split('')) {
@@ -63,6 +91,8 @@ class EscPos {
 }
 
 String _da(int centimes) {
+  // « Arrondi » and « Points fidélité » lines can be negative.
+  if (centimes < 0) return '-${_da(-centimes)}';
   final units = centimes ~/ 100;
   final cents = centimes % 100;
   final s = units.toString();
@@ -88,9 +118,11 @@ List<int> buildTicket({
   p.align(1);
   p.doubleSize(true);
   p.bold(true);
-  p.text(company['company_name']?.isNotEmpty == true
-      ? company['company_name']!
-      : 'ELIXIR');
+  p.text(
+    company['company_name']?.isNotEmpty == true
+        ? company['company_name']!
+        : 'ELIXIR',
+  );
   p.doubleSize(false);
   p.bold(false);
   if ((company['company_address'] ?? '').isNotEmpty) {
@@ -111,9 +143,15 @@ List<int> buildTicket({
   p.divider();
 
   for (final l in doc.lines) {
+    // Lines without a product (Arrondi, Points fidélité): one row.
+    if (l.productId == null) {
+      p.row(l.description, _da(l.lineTTC));
+      continue;
+    }
     p.text(l.description);
-    final unitTTC =
-        l.qtyMilli == 0 ? 0 : roundDiv(l.lineTTC * 1000, l.qtyMilli);
+    final unitTTC = l.qtyMilli == 0
+        ? 0
+        : roundDiv(l.lineTTC * 1000, l.qtyMilli);
     p.row('  ${fmtQty(l.qtyMilli)} x ${_da(unitTTC)}', _da(l.lineTTC));
   }
   p.divider();

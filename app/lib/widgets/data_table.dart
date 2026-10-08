@@ -5,6 +5,7 @@ import '../theme/tokens.dart';
 import '../util/feedback.dart';
 import '../util/list_export.dart';
 import '../util/prefs.dart';
+import '../util/user_prefs.dart';
 import 'ui.dart';
 
 /// Column definition for [DataListView].
@@ -160,7 +161,7 @@ class _DataListViewState<R> extends State<DataListView<R>> {
   int? _sortCol;
   bool _asc = true;
   bool _exporting = false;
-  bool _compact = false;
+  bool _compact = UserPrefs.instance.compactLists;
   int _page = 0;
   int _pageSize = 50; // 0 = tout afficher
   Set<String> _hidden = {};
@@ -188,7 +189,7 @@ class _DataListViewState<R> extends State<DataListView<R>> {
           ..removeWhere((key) => widget.columns
               .any((c) => c.key == key && !c.hideable));
       }
-      _compact = UiPrefs.instance.get<bool>(k, 'compact') ?? false;
+      _compact = UiPrefs.instance.get<bool>(k, 'compact') ?? UserPrefs.instance.compactLists;
       _pageSize = UiPrefs.instance.get<int>(k, 'page_size') ?? 50;
       final sortKey = UiPrefs.instance.get<String>(k, 'sort');
       if (sortKey != null) {

@@ -71,6 +71,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
   String? _warehouseFilter = UiPrefs.instance.get<String>(_pk, 'f_wh');
   String? _catFilter = UiPrefs.instance.get<String>(_pk, 'f_cat');
   String? _brandFilter = UiPrefs.instance.get<String>(_pk, 'f_brand');
+  String? _vatFilter = UiPrefs.instance.get<String>(_pk, 'f_vat'); // taux ×100 en texte
   String? _supplierFilter = UiPrefs.instance.get<String>(_pk, 'f_sup');
   String _status = UiPrefs.instance.get<String>(_pk, 'f_status') ?? 'active';
   String? _track = UiPrefs.instance.get<String>(_pk, 'f_track');
@@ -247,7 +248,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
     } catch (_) {}
     if (_f.lots) {
       try {
-        final lots = await widget.api.lots(expiringDays: 90);
+        final lots = await widget.api.lots(expiringDays: _f.expiryAlertDays);
         if (mounted) {
           setState(() => _expiringSoon = {for (final l in lots) l.productId});
         }
@@ -352,6 +353,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
       for (final p in _items)
         if ((_catFilter == null || p.categoryId == _catFilter) &&
             (_brandFilter == null || p.brand == _brandFilter) &&
+            (_vatFilter == null || '${p.vatRate}' == _vatFilter) &&
             (_supplierFilter == null || p.defaultSupplierId == _supplierFilter) &&
             switch (_status) {
               'inactive' => !p.active,
@@ -400,6 +402,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
       _warehouseFilter = null;
       _catFilter = null;
       _brandFilter = null;
+      _vatFilter = null;
       _supplierFilter = null;
       _track = null;
       _quick = '';
@@ -431,6 +434,11 @@ class _ProductsScreenState extends State<ProductsScreen> {
         ActiveFilter('Marque : $_brandFilter', () {
           setState(() => _brandFilter = null);
           _setPref('f_brand', null);
+        }),
+      if (_vatFilter != null)
+        ActiveFilter('TVA : ${_f.vatLabel(int.tryParse(_vatFilter!) ?? 0)}', () {
+          setState(() => _vatFilter = null);
+          _setPref('f_vat', null);
         }),
       if (_supplierFilter != null)
         ActiveFilter('Fournisseur : ${_supplierName(_supplierFilter)}', () {
@@ -484,7 +492,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
             onTap: () => _setQuick('sous_min')),
         if (_f.lots)
           FilterPill(
-              label: 'Péremption < 90 j',
+              label: 'Péremption < ${_f.expiryAlertDays} j',
               icon: Icons.hourglass_bottom_rounded,
               active: _quick == 'peremption',
               count: count('peremption'),
@@ -521,6 +529,18 @@ class _ProductsScreenState extends State<ProductsScreen> {
             onChanged: (v) {
               setState(() => _brandFilter = v);
               _setPref('f_brand', v);
+            },
+          ),
+        // Taux de Paramètres › Taxes.
+        if (_f.vatRates.length > 1)
+          FilterField<String>(
+            label: 'TVA',
+            value: _f.vatRates.any((r) => '$r' == _vatFilter) ? _vatFilter : null,
+            allLabel: 'Tous les taux',
+            options: [for (final r in _f.vatRates) ('$r', _f.vatLabel(r))],
+            onChanged: (v) {
+              setState(() => _vatFilter = v);
+              _setPref('f_vat', v);
             },
           ),
         if (_suppliers.isNotEmpty)
@@ -977,7 +997,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
           exportValue: (p) => [
             if (!p.isService && _stockOf(p) <= 0) 'Rupture',
             if (_isLow(p)) 'Sous le minimum',
-            if (_f.lots && _expiringSoon.contains(p.id)) 'Péremption < 90 j',
+            if (_f.lots && _expiringSoon.contains(p.id)) 'Péremption < ${_f.expiryAlertDays} j',
             if (_hasVariantPool(p, parents))
               'Stock à répartir entre les variantes',
             if (p.promoActive) 'Promotion en cours',
@@ -997,9 +1017,9 @@ class _ProductsScreenState extends State<ProductsScreen> {
                       size: 17, color: T.warnDark)));
             }
             if (_f.lots && _expiringSoon.contains(p.id)) {
-              icons.add(const Tooltip(
-                  message: 'Péremption < 90 j',
-                  child: Icon(Icons.hourglass_bottom_rounded,
+              icons.add(Tooltip(
+                  message: 'Péremption < ${_f.expiryAlertDays} j',
+                  child: const Icon(Icons.hourglass_bottom_rounded,
                       size: 17, color: T.warnDark)));
             }
             if (_hasVariantPool(p, parents)) {
@@ -1197,7 +1217,7 @@ class _PickVatDialogState extends State<_PickVatDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final vats = {1900, 900, 0, Features.instance.defaultVat}.toList();
+    final vats = {...Features.instance.vatRates, Features.instance.defaultVat}.toList(); // Paramètres › Taxes
     return AlertDialog(
       backgroundColor: T.surface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(T.rCard)),

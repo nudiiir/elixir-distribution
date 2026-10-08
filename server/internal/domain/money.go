@@ -1,5 +1,7 @@
 package domain
 
+import "sync/atomic"
+
 // All money is int64 centimes; quantities are int64 milli-units;
 // percentages are int64 percent*100 (19% == 1900).
 
@@ -58,11 +60,33 @@ func Timbre(totalTTC int64) int64 {
 	return t
 }
 
-// TimbreApplies reports whether stamp duty is due for the given document type
-// and payment method.
-func TimbreApplies(docType, paymentMethod string) bool {
+// timbreOff mirrors the shop setting `timbre_enabled` = '0' for the callers
+// that compute previews without a transaction at hand (draft totals, POS
+// checks). The posting engine reads the setting itself, in its transaction.
+var timbreOff atomic.Bool
+
+// SetTimbreEnabled updates the cached `timbre_enabled` setting.
+func SetTimbreEnabled(on bool) { timbreOff.Store(!on) }
+
+// TimbreEnabled reports the cached `timbre_enabled` setting (default on).
+func TimbreEnabled() bool { return !timbreOff.Load() }
+
+// TimbreSettingOn reads `timbre_enabled` from the database (default on).
+func TimbreSettingOn(q Querier) bool { return SettingBool(q, "timbre_enabled", true) }
+
+// RefreshSettingsCache reloads the cached settings (call after a settings save).
+func RefreshSettingsCache(q Querier) { SetTimbreEnabled(TimbreSettingOn(q)) }
+
+// timbreDue is the legal rule alone: cash-paid sale tickets and invoices.
+func timbreDue(docType, paymentMethod string) bool {
 	if docType != SaleInvoice && docType != SaleTicket {
 		return false
 	}
 	return paymentMethod == "cash"
+}
+
+// TimbreApplies reports whether stamp duty is due for the given document type
+// and payment method — never when the shop switched the timbre off.
+func TimbreApplies(docType, paymentMethod string) bool {
+	return TimbreEnabled() && timbreDue(docType, paymentMethod)
 }

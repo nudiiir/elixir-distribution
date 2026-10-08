@@ -30,13 +30,21 @@ type Partner struct {
 	OverReceiptPct int64   `json:"over_receipt_pct"` // tolérance de sur-réception, pct x100
 	Active         bool    `json:"active"`
 	Balance        int64   `json:"balance"` // positive = the partner owes us
-	CreatedAt      string  `json:"created_at"`
+	// Groupe de clients : tarif et remise appliqués quand le client est choisi.
+	GroupID          *string `json:"group_id"`
+	GroupName        *string `json:"group_name"`
+	GroupPriceLevel  *string `json:"group_price_level"`  // retail | wholesale, nil = no group
+	GroupDiscountPct int64   `json:"group_discount_pct"` // pct x100, 0 = none
+	CreatedAt        string  `json:"created_at"`
 	UpdatedAt      string  `json:"updated_at"`
 }
 
 const partnerCols = `p.id, p.kind, p.name, p.phone, p.email, p.address, p.nif, p.nis, p.rc, p.ai,
 	p.credit_limit, p.notes, p.price_level, p.min_shelf_days, p.over_receipt_pct, p.active,
 	COALESCE((SELECT SUM(amount) FROM partner_ledger pl WHERE pl.partner_id = p.id), 0),
+	p.group_id, (SELECT g.name FROM customer_groups g WHERE g.id = p.group_id),
+	(SELECT g.price_level FROM customer_groups g WHERE g.id = p.group_id),
+	COALESCE((SELECT g.discount_pct FROM customer_groups g WHERE g.id = p.group_id), 0),
 	p.created_at, p.updated_at`
 
 func scanPartner(row interface{ Scan(...any) error }) (Partner, error) {
@@ -45,7 +53,8 @@ func scanPartner(row interface{ Scan(...any) error }) (Partner, error) {
 	err := row.Scan(&p.ID, &p.Kind, &p.Name, &p.Phone, &p.Email, &p.Address,
 		&p.NIF, &p.NIS, &p.RC, &p.AI, &p.CreditLimit, &p.Notes, &p.PriceLevel,
 		&p.MinShelfDays, &p.OverReceiptPct, &active,
-		&p.Balance, &p.CreatedAt, &p.UpdatedAt)
+		&p.Balance, &p.GroupID, &p.GroupName, &p.GroupPriceLevel, &p.GroupDiscountPct,
+		&p.CreatedAt, &p.UpdatedAt)
 	p.Active = active == 1
 	return p, err
 }
@@ -69,6 +78,10 @@ func (s *Server) listPartners(w http.ResponseWriter, r *http.Request) {
 	if kind == "customer" || kind == "supplier" {
 		where += " AND kind IN (?, 'both')"
 		args = append(args, kind)
+	}
+	if g := r.URL.Query().Get("group_id"); g != "" {
+		where += " AND p.group_id = ?"
+		args = append(args, g)
 	}
 	args = append(args, limit, offset)
 
@@ -107,6 +120,8 @@ type partnerInput struct {
 	MinShelfDays   *int64  `json:"min_shelf_days"`
 	OverReceiptPct *int64  `json:"over_receipt_pct"`
 	Active         *bool   `json:"active"`
+	// GroupID: absent = unchanged (update) / none (create); "" = leave the group.
+	GroupID *string `json:"group_id"`
 }
 
 func orInt(v *int64, def int64) int64 {
@@ -153,14 +168,22 @@ func (s *Server) createPartner(w http.ResponseWriter, r *http.Request) {
 	if in.Active != nil {
 		active = *in.Active
 	}
+	// Plafond de crédit : un client sans plafond propre (NULL ou 0) suit le
+	// plafond par défaut du magasin (`default_credit_limit`, lu à la caisse) —
+	// changer ce réglage vaut donc pour tous ces clients, nouveaux compris.
+	groupID, msg := s.partnerGroup(in.GroupID)
+	if msg != "" {
+		writeErr(w, http.StatusBadRequest, msg)
+		return
+	}
 	_, err := s.db.Exec(`INSERT INTO partners (id, kind, name, phone, email, address,
 			nif, nis, rc, ai, credit_limit, notes, price_level, min_shelf_days,
-			over_receipt_pct, active, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			over_receipt_pct, active, group_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, in.Kind, in.Name, in.Phone, in.Email, in.Address,
 		in.NIF, in.NIS, in.RC, in.AI, in.CreditLimit, in.Notes, in.PriceLevel,
 		orInt(in.MinShelfDays, 0), orInt(in.OverReceiptPct, 500),
-		b2i(active), now, now)
+		b2i(active), groupID, now, now)
 	if err != nil {
 		writeErr(w, http.StatusConflict, err.Error())
 		return
@@ -220,7 +243,31 @@ func (s *Server) updatePartner(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "partner not found")
 		return
 	}
+	if in.GroupID != nil { // absent = unchanged
+		groupID, msg := s.partnerGroup(in.GroupID)
+		if msg != "" {
+			writeErr(w, http.StatusBadRequest, msg)
+			return
+		}
+		if _, err := s.db.Exec(`UPDATE partners SET group_id = ? WHERE id = ?`, groupID, id); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
 	s.getPartnerByID(w, id)
+}
+
+// partnerGroup checks a group id sent by the form: nil/"" = no group.
+func (s *Server) partnerGroup(id *string) (any, string) {
+	if id == nil || strings.TrimSpace(*id) == "" {
+		return nil, ""
+	}
+	var n int
+	s.db.QueryRow(`SELECT COUNT(*) FROM customer_groups WHERE id = ?`, *id).Scan(&n)
+	if n == 0 {
+		return nil, "groupe de clients introuvable"
+	}
+	return *id, ""
 }
 
 // partnerBalance returns the partner's current balance from the ledger.

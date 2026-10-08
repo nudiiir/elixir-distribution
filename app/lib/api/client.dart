@@ -4,17 +4,33 @@ import 'package:http/http.dart' as http;
 
 import 'analytics_models.dart';
 import 'cloud.dart';
+import 'config_models.dart';
 import 'models.dart';
 import 'shell_models.dart';
 import 'stock_models.dart';
 
+export 'config_models.dart';
 export 'shell_models.dart';
 export 'stock_models.dart';
 
 class ApiException implements Exception {
   final int status;
   final String message;
-  ApiException(this.status, this.message);
+
+  /// 403 that a manager code (« Code du gérant ») can unlock — see
+  /// `util/approval.dart` `withApproval`.
+  final bool needsApproval;
+
+  /// The right that needs approval (« discount », « sales.validate »…).
+  final String? action;
+
+  /// Amount the approval is about (centimes, or pct × 100 for a discount).
+  final int amount;
+
+  /// Name of the field the error is about (shown under that field).
+  final String? field;
+  ApiException(this.status, this.message,
+      {this.needsApproval = false, this.action, this.amount = 0, this.field});
   @override
   String toString() => message;
 }
@@ -33,10 +49,19 @@ class ApiClient {
   /// Called on any 401 so the app can drop back to the login screen.
   void Function()? onUnauthorized;
 
-  Map<String, String> get _headers => {
-        'Content-Type': 'application/json',
-        if (token != null) 'Authorization': 'Bearer $token',
-      };
+  /// Manager-code token for the NEXT request only (header X-Approval): set by
+  /// `withApproval`, cleared as soon as one request has carried it.
+  String? approvalToken;
+
+  Map<String, String> get _headers {
+    final approval = approvalToken;
+    approvalToken = null;
+    return {
+      'Content-Type': 'application/json',
+      if (token != null) 'Authorization': 'Bearer $token',
+      'X-Approval': ?approval,
+    };
+  }
 
   /// Headers for widgets that fetch on their own (Image.network).
   Map<String, String> get authHeaders =>
@@ -71,7 +96,11 @@ class ApiClient {
       final msg = body is Map && body['error'] != null
           ? body['error'] as String
           : 'HTTP ${res.statusCode}';
-      throw ApiException(res.statusCode, msg);
+      throw ApiException(res.statusCode, msg,
+          needsApproval: body is Map && body['needs_approval'] == true,
+          action: body is Map ? body['action'] as String? : null,
+          amount: body is Map ? (body['amount'] as num?)?.toInt() ?? 0 : 0,
+          field: body is Map ? body['field'] as String? : null);
     }
     return body;
   }
@@ -82,11 +111,16 @@ class ApiClient {
         {'username': username, 'password': password});
     final session = Session(j['token'] as String, User.fromJson(j['user']));
     token = session.token;
+    user = session.user;
     return session;
   }
 
+  /// The logged-in user (set by login / pinLogin / me) — lets widgets that
+  /// only get the client gate their buttons with `api.user?.can(key)`.
+  User? user;
+
   Future<User> me() async =>
-      User.fromJson(await _get('/api/v1/auth/me'));
+      user = User.fromJson(await _get('/api/v1/auth/me'));
 
   Future<List<User>> users() async {
     final j = await _get('/api/v1/users');
@@ -99,6 +133,53 @@ class ApiClient {
         : await _put('/api/v1/users/$id', data);
     return User.fromJson(j);
   }
+
+  // ---- Rôles, code caisse, code du gérant (Users agent) ----
+
+  Future<List<Role>> roles() async {
+    final j = await _get('/api/v1/roles');
+    return [for (final e in j['items'] as List) Role.fromJson(e as Map<String, dynamic>)];
+  }
+
+  /// Creates ([id] null) or updates a role: {name, description, perms, limits, scope}.
+  Future<Role> saveRole(Map<String, dynamic> data, {String? id}) async {
+    final j = id == null
+        ? await _post('/api/v1/roles', data)
+        : await _put('/api/v1/roles/$id', data);
+    return Role.fromJson(j as Map<String, dynamic>);
+  }
+
+  Future<void> deleteRole(String id) => _delete('/api/v1/roles/$id');
+
+  Future<Role> copyRole(String id) async =>
+      Role.fromJson(await _post('/api/v1/roles/$id/copy') as Map<String, dynamic>);
+
+  /// Sets (4–6 digits) or removes ([pin] empty) a user's code caisse.
+  Future<User> setUserPin(String id, String pin) async =>
+      User.fromJson(await _put('/api/v1/users/$id/pin', {'pin': pin}));
+
+  /// Ends every session of that user (all machines).
+  Future<void> logoutAll(String id) => _post('/api/v1/users/$id/logout-all');
+
+  /// Active users with a code caisse (« Changer de caissier »).
+  Future<List<PinUser>> pinUsers() async {
+    final j = await _get('/api/v1/auth/pin-users');
+    return [for (final e in j['items'] as List) PinUser.fromJson(e as Map<String, dynamic>)];
+  }
+
+  /// Logs in with a code caisse; installs the new token on this client.
+  Future<Session> pinLogin(String userId, String pin) async {
+    final j = await _post('/api/v1/auth/pin-login', {'user_id': userId, 'pin': pin});
+    final session = Session(j['token'] as String, User.fromJson(j['user']));
+    token = session.token;
+    user = session.user;
+    return session;
+  }
+
+  /// Manager code: returns a single-use token (2 minutes) for [action].
+  Future<Approval> approve(String pin, String action, {int amount = 0}) async =>
+      Approval.fromJson(await _post('/api/v1/auth/approve',
+          {'pin': pin, 'action': action, if (amount > 0) 'amount': amount}) as Map<String, dynamic>);
 
   /// What needs attention today (alerts bell of the top bar).
   Future<List<AlertItem>> alerts() async {
@@ -189,8 +270,23 @@ class ApiClient {
     return [for (final e in j['items'] as List) Warehouse.fromJson(e)];
   }
 
-  Future<Warehouse> createWarehouse(String name) async =>
-      Warehouse.fromJson(await _post('/api/v1/warehouses', {'name': name}));
+  Future<Warehouse> createWarehouse(String name,
+          {String address = '', String phone = ''}) async =>
+      Warehouse.fromJson(await _post('/api/v1/warehouses',
+          {'name': name, 'address': address, 'phone': phone}));
+
+  /// Renames a depot and changes its address / phone.
+  Future<Warehouse> updateWarehouse(String id,
+          {required String name, String address = '', String phone = ''}) async =>
+      Warehouse.fromJson(await _put('/api/v1/warehouses/$id',
+          {'name': name, 'address': address, 'phone': phone}));
+
+  Future<Warehouse> setDefaultWarehouse(String id) async =>
+      Warehouse.fromJson(await _post('/api/v1/warehouses/$id/default'));
+
+  /// Refused (409, reason in the message) when the depot still has stock,
+  /// documents, is the default or the last one.
+  Future<void> deleteWarehouse(String id) => _delete('/api/v1/warehouses/$id');
 
   /// [full] = one row per active stocked product (zeros included), summed
   /// over the depots unless [warehouseId] is given — the Stock screen mode.
@@ -814,6 +910,94 @@ class ApiClient {
     return [for (final e in j['items'] as List) AuditEntry.fromJson(e)];
   }
 
+  /// Journal d'activité with filters. [action] = exact key or a prefix
+  /// ending with '.' ("document."). [from]/[to] = UTC ISO timestamps
+  /// ([to] exclusive) or YYYY-MM-DD (inclusive). Also returns the distinct
+  /// action keys present in the journal.
+  Future<(List<AuditEntry>, List<String>)> auditSearch({
+    int limit = 500,
+    String? userId,
+    String? action,
+    String? from,
+    String? to,
+    String? q,
+  }) async {
+    final j = await _get('/api/v1/audit', {
+      'limit': '$limit',
+      'user_id': ?userId,
+      'action': ?action,
+      'from': ?from,
+      'to': ?to,
+      if (q != null && q.trim().isNotEmpty) 'q': q.trim(),
+    });
+    return (
+      [for (final e in j['items'] as List) AuditEntry.fromJson(e)],
+      [for (final e in (j['actions'] as List? ?? const [])) e.toString()],
+    );
+  }
+
+  // ---- Settings work: system, logo, restore, maintenance ----
+
+  /// Server version (+ data folder for admins).
+  Future<Map<String, dynamic>> systemInfo() async =>
+      (await _get('/api/v1/system/info')) as Map<String, dynamic>;
+
+  /// Logo URL for Image.network (pass [authHeaders]); [rev] = setting
+  /// `logo_rev` (0 = no logo).
+  String companyLogoUrl(int rev) => '$baseUrl/api/v1/settings/logo?v=$rev';
+
+  /// The company logo (PNG/JPEG bytes), or null when none is set. Meant for
+  /// the PDF builders (invoice A4, ticket).
+  Future<List<int>?> companyLogoBytes() async {
+    final res = await _client.get(_u('/api/v1/settings/logo'), headers: authHeaders);
+    if (res.statusCode == 404) return null;
+    if (res.statusCode >= 400) _handle(res);
+    return res.bodyBytes;
+  }
+
+  /// Uploads the logo (PNG/JPEG ≤ 1 Mo); returns the new `logo_rev`.
+  Future<int> uploadCompanyLogo(List<int> bytes, String mime) async {
+    final res = await _client.post(_u('/api/v1/settings/logo'),
+        headers: {...authHeaders, 'Content-Type': mime}, body: bytes);
+    final j = _handle(res) as Map<String, dynamic>;
+    return (j['logo_rev'] as num?)?.toInt() ?? 0;
+  }
+
+  Future<void> deleteCompanyLogo() => _delete('/api/v1/settings/logo');
+
+  /// Backups + pending / last restore.
+  Future<BackupsStatus> backupsStatus() async =>
+      BackupsStatus.fromJson(await _get('/api/v1/backups') as Map<String, dynamic>);
+
+  /// Records a restore applied at the next server start.
+  Future<void> scheduleRestore(String name) async {
+    await _post('/api/v1/backups/${Uri.encodeComponent(name)}/restore',
+        {'confirm': 'RESTAURER'});
+  }
+
+  Future<void> cancelRestore() => _delete('/api/v1/backups/restore');
+
+  /// ZIP of CSVs of all the shop data.
+  Future<List<int>> exportAllData() async {
+    final res = await _client.get(_u('/api/v1/maintenance/export'), headers: authHeaders);
+    if (res.statusCode >= 400) _handle(res);
+    return res.bodyBytes;
+  }
+
+  /// scope = 'transactions' | 'all'. Returns the name of the backup taken
+  /// first and the rows removed per table.
+  Future<(String, Map<String, int>)> resetData(String scope) async {
+    final j = await _post('/api/v1/maintenance/reset',
+        {'scope': scope, 'confirm': 'RÉINITIALISER'}) as Map<String, dynamic>;
+    return (
+      (j['backup'] as String?) ?? '',
+      {
+        for (final e in (j['deleted'] as Map<String, dynamic>? ?? {}).entries)
+          e.key: (e.value as num).toInt()
+      },
+    );
+  }
+
   // ---- Print templates ----
 
   Future<List<Template>> templates({String? kind}) async {
@@ -869,6 +1053,62 @@ class ApiClient {
   Future<String> runBackup() async {
     final j = await _post('/api/v1/backups/run');
     return (j['path'] as String?) ?? '';
+  }
+
+  // ---- Configuration: numbering, customer groups, loyalty ----
+
+  Future<List<NumberingRow>> numbering({int? year}) async {
+    final j = await _get('/api/v1/config/numbering', {if (year != null) 'year': '$year'});
+    return [for (final e in j['items'] as List) NumberingRow.fromJson(e)];
+  }
+
+  /// Saves one type's numbering; [nextNumber] null = leave the counter.
+  Future<NumberingRow> saveNumbering(String docType,
+      {required String prefix,
+      required bool includeYear,
+      required int digits,
+      required bool resetYearly,
+      int? nextNumber,
+      int? year}) async =>
+      NumberingRow.fromJson(await _put('/api/v1/config/numbering/$docType', {
+        'prefix': prefix,
+        'include_year': includeYear,
+        'digits': digits,
+        'reset_yearly': resetYearly,
+        'next_number': ?nextNumber,
+        'year': ?year,
+      }));
+
+  Future<List<CustomerGroup>> customerGroups() async {
+    final j = await _get('/api/v1/customer-groups');
+    return [for (final e in j['items'] as List) CustomerGroup.fromJson(e)];
+  }
+
+  Future<CustomerGroup> saveCustomerGroup(
+      {String? id, required String name, required String priceLevel, required int discountPct}) async {
+    final body = {'name': name, 'price_level': priceLevel, 'discount_pct': discountPct};
+    return CustomerGroup.fromJson(id == null
+        ? await _post('/api/v1/customer-groups', body)
+        : await _put('/api/v1/customer-groups/$id', body));
+  }
+
+  Future<void> deleteCustomerGroup(String id) => _delete('/api/v1/customer-groups/$id');
+
+  /// A customer's points: balance, value in centimes, history.
+  Future<LoyaltyAccount> partnerLoyalty(String partnerId) async =>
+      LoyaltyAccount.fromJson(await _get('/api/v1/partners/$partnerId/loyalty'));
+
+  /// Uses [points] of the customer's balance; the returned `value` (centimes)
+  /// is what the sale takes off. Cancel with [cancelLoyaltyRedemption] if the
+  /// sale is abandoned.
+  Future<LoyaltyRedemption> redeemLoyalty(String partnerId, int points, {String? documentId}) async =>
+      LoyaltyRedemption.fromJson(await _post('/api/v1/partners/$partnerId/loyalty/redeem',
+          {'points': points, 'document_id': ?documentId}));
+
+  /// Gives the points back; returns the new balance.
+  Future<int> cancelLoyaltyRedemption(String redemptionId) async {
+    final j = await _post('/api/v1/loyalty/redemptions/$redemptionId/cancel');
+    return (j['balance'] as num?)?.toInt() ?? 0;
   }
 }
 

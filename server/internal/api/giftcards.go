@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -66,6 +67,15 @@ func (s *Server) cardExpired(c *GiftCard) bool {
 	return *c.ExpiresAt < domain.NowISO()[:10]
 }
 
+// expiredCardMsg: « cette carte cadeau a expiré le 12/03/2026 ».
+func expiredCardMsg(expiresAt string) string {
+	d := expiresAt
+	if t, err := time.Parse("2006-01-02", expiresAt); err == nil {
+		d = t.Format("02/01/2006")
+	}
+	return "cette carte cadeau a expiré le " + d + " : elle ne peut plus être utilisée"
+}
+
 func (s *Server) listGiftCards(w http.ResponseWriter, r *http.Request) {
 	if !s.can(r, "pos") && !s.can(r, "settings") {
 		forbid(w)
@@ -120,6 +130,14 @@ func (s *Server) createGiftCard(w http.ResponseWriter, r *http.Request) {
 	if code == "" {
 		writeErr(w, http.StatusInternalServerError, "génération du code impossible")
 		return
+	}
+	// Validité par défaut (Paramètres › Clients et fidélité) : 0 = illimitée.
+	if in.ExpiresAt == nil || strings.TrimSpace(*in.ExpiresAt) == "" {
+		in.ExpiresAt = nil
+		if days := domain.SettingInt(s.db, "gift_card_validity_days", 365); days > 0 {
+			exp := time.Now().AddDate(0, 0, int(days)).Format("2006-01-02")
+			in.ExpiresAt = &exp
+		}
 	}
 	u := authFrom(r)
 	id, now := domain.NewID(), domain.NowISO()
@@ -202,7 +220,7 @@ func (s *Server) redeemGiftCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.cardExpired(&c) {
-		writeErr(w, http.StatusConflict, "carte expirée")
+		writeErr(w, http.StatusConflict, expiredCardMsg(*c.ExpiresAt))
 		return
 	}
 	if c.Balance < in.Amount {

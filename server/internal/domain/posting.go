@@ -81,6 +81,11 @@ func auditTx(tx *sql.Tx, userID, action, entity, entityID, detail string) {
 //   - prix de vente saisi sur la ligne appliqué au produit, journalisé ;
 //   - durée de vie minimale par fournisseur, acceptation courte durée loguée ;
 //   - facture fournisseur en double (même fournisseur + même n°) refusée.
+// UserMayOversell, set by the API layer, reports whether the posting user has
+// the « negative_stock » right (sell beyond what is on hand) even when the
+// shop setting allow_negative_stock is off. Nil = only the setting counts.
+var UserMayOversell func(tx *sql.Tx, userID string) bool
+
 func Post(db *sql.DB, docID, userID string) (string, error) {
 	tx, err := db.Begin()
 	if err != nil {
@@ -214,14 +219,17 @@ func Post(db *sql.DB, docID, userID string) (string, error) {
 		}
 		split = sp
 	}
+	// Droit de timbre : désactivable dans Paramètres › Taxes (timbre_enabled).
+	timbreOn := TimbreSettingOn(tx)
+	goodsTTC := totalTTC // ce que le client paie pour la marchandise (fidélité)
 	if split != nil {
-		t, err := split.settle(totalTTC, d.partnerID.Valid)
+		t, err := split.settleTimbre(totalTTC, d.partnerID.Valid, timbreOn)
 		if err != nil {
 			return "", err
 		}
 		timbre = t
 		totalTTC += timbre
-	} else if TimbreApplies(d.docType, d.paymentMethod.String) {
+	} else if timbreOn && timbreDue(d.docType, d.paymentMethod.String) {
 		timbre = Timbre(totalTTC)
 		totalTTC += timbre
 	}
@@ -325,7 +333,7 @@ func Post(db *sql.DB, docID, userID string) (string, error) {
 			}
 		}
 
-		allowNeg := allowNegativeStock(tx)
+		allowNeg := allowNegativeStock(tx) || (UserMayOversell != nil && UserMayOversell(tx, userID))
 		salesFamily := d.docType == SaleTicket || d.docType == SaleInvoice ||
 			d.docType == DeliveryNote || d.docType == SaleCreditNote
 
@@ -589,6 +597,11 @@ func Post(db *sql.DB, docID, userID string) (string, error) {
 			NewID(), d.partnerID.String, ledgerAmount, ledgerKind, docID, now); err != nil {
 			return "", err
 		}
+	}
+
+	// ---- Fidélité : points gagnés sur la vente ------------------------------
+	if err := earnLoyalty(tx, d.docType, d.partnerID, docID, goodsTTC, userID, now); err != nil {
+		return "", err
 	}
 
 	// ---- Flip to posted ---------------------------------------------------
@@ -924,6 +937,11 @@ func Void(db *sql.DB, docID, userID, reason string) error {
 	}
 	auditTx(tx, userID, "document.void", "document", docID, detail)
 
+	// Fidélité : points gagnés repris, points utilisés rendus.
+	if err := voidLoyalty(tx, docID, userID, now); err != nil {
+		return err
+	}
+
 	return tx.Commit()
 }
 
@@ -1032,28 +1050,10 @@ func VerifyStock(db *sql.DB, repair bool) ([]StockDivergence, error) {
 	return out, nil
 }
 
+// nextNumber draws the document number; the format comes from the numbering
+// settings (numbering.go), today's « FV-2026-000124 » by default.
 func nextNumber(tx *sql.Tx, docType, docDate string) (string, error) {
-	year := 0
-	if len(docDate) >= 4 {
-		fmt.Sscanf(docDate[:4], "%d", &year)
-	}
-	if year == 0 {
-		return "", fmt.Errorf("invalid doc_date %q", docDate)
-	}
-	if _, err := tx.Exec(`INSERT INTO sequences (doc_type, year, next_number) VALUES (?, ?, 1)
-		ON CONFLICT (doc_type, year) DO NOTHING`, docType, year); err != nil {
-		return "", err
-	}
-	var n int64
-	if err := tx.QueryRow(`SELECT next_number FROM sequences WHERE doc_type=? AND year=?`,
-		docType, year).Scan(&n); err != nil {
-		return "", err
-	}
-	if _, err := tx.Exec(`UPDATE sequences SET next_number = next_number + 1
-		WHERE doc_type=? AND year=?`, docType, year); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%s-%d-%06d", NumberPrefix[docType], year, n), nil
+	return nextNumberFmt(tx, docType, docDate)
 }
 
 func currentAvgCost(tx *sql.Tx, productID, warehouseID string) int64 {
@@ -1194,11 +1194,19 @@ func SplitTimbre(totalTTC, nonCash int64) (cashGoods, timbre int64) {
 
 // settle checks that the rows cover the ticket exactly and returns the timbre.
 func (sp *splitPayment) settle(totalTTC int64, hasPartner bool) (int64, error) {
+	return sp.settleTimbre(totalTTC, hasPartner, true)
+}
+
+// settleTimbre is settle with the shop's timbre switch (timbre_enabled).
+func (sp *splitPayment) settleTimbre(totalTTC int64, hasPartner, timbreOn bool) (int64, error) {
 	if sp.credit > 0 && !hasPartner {
 		return 0, &PostError{"un paiement à crédit exige un client"}
 	}
 	nonCash := sp.credit + sp.other
 	cashGoods, timbre := SplitTimbre(totalTTC, nonCash)
+	if !timbreOn {
+		timbre = 0
+	}
 	if cashGoods < 0 {
 		return 0, &PostError{fmt.Sprintf(
 			"les paiements hors espèces (%s DA) dépassent le total du ticket (%s DA)",

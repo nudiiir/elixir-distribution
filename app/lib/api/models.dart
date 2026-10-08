@@ -6,6 +6,23 @@ class User {
   final bool active;
   final Map<String, bool> perms;
 
+  /// Editable role (Paramètres › Rôles et permissions).
+  final String roleId;
+  final String roleName;
+
+  /// max_discount_pct (×100), max_credit (centimes), approval_above
+  /// (centimes) — 0 = no limit.
+  final Map<String, int> limits;
+
+  /// 'all' | 'own' (his own documents) | 'warehouse' (his depots).
+  final String scope;
+  final List<String> warehouseIds;
+  final String? defaultWarehouseId;
+  final bool hasPin;
+  final String phone;
+  final String email;
+  final String? lastLoginAt;
+
   User.fromJson(Map<String, dynamic> j)
       : id = j['id'] as String,
         username = j['username'] as String,
@@ -15,16 +32,95 @@ class User {
         perms = {
           for (final e in (j['perms'] as Map<String, dynamic>? ?? {}).entries)
             e.key: e.value == true
-        };
+        },
+        roleId = (j['role_id'] as String?) ?? '',
+        roleName = (j['role_name'] as String?) ?? '',
+        limits = {
+          for (final e in (j['limits'] as Map<String, dynamic>? ?? {}).entries)
+            e.key: (e.value as num?)?.toInt() ?? 0
+        },
+        scope = (j['scope'] as String?) ?? 'all',
+        warehouseIds = [
+          for (final e in (j['warehouse_ids'] as List? ?? const [])) e as String
+        ],
+        defaultWarehouseId = j['default_warehouse_id'] as String?,
+        hasPin = j['has_pin'] == true,
+        phone = (j['phone'] as String?) ?? '',
+        email = (j['email'] as String?) ?? '',
+        lastLoginAt = j['last_login_at'] as String?;
 
+  /// Any permission key: module (`sales`), action (`sales.validate`) or
+  /// special right (`discount`, `void_document`…).
   bool can(String perm) => perms[perm] == true;
   bool get isAdmin => role == 'admin';
 
-  String get roleLabel => switch (role) {
-        'admin' => 'Administrateur',
-        'manager' => 'Gérant',
-        _ => 'Caissier',
-      };
+  /// A limit of the role (0 = no limit).
+  int limit(String name) => limits[name] ?? 0;
+
+  String get displayName => fullName.isEmpty ? username : fullName;
+
+  String get roleLabel => roleName.isNotEmpty
+      ? roleName
+      : switch (role) {
+          'admin' => 'Administrateur',
+          'manager' => 'Gérant',
+          _ => 'Caissier',
+        };
+}
+
+/// An editable role: permission set + limits + data scope.
+class Role {
+  final String id;
+  final String name;
+  final String description;
+  final Map<String, bool> perms;
+  final Map<String, int> limits;
+  final String scope; // all | own | warehouse
+  final bool isSystem;
+  final int userCount;
+
+  Role.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as String,
+        name = (j['name'] as String?) ?? '',
+        description = (j['description'] as String?) ?? '',
+        perms = {
+          for (final e in (j['perms'] as Map<String, dynamic>? ?? {}).entries)
+            e.key: e.value == true
+        },
+        limits = {
+          for (final e in (j['limits'] as Map<String, dynamic>? ?? {}).entries)
+            e.key: (e.value as num?)?.toInt() ?? 0
+        },
+        scope = (j['scope'] as String?) ?? 'all',
+        isSystem = j['is_system'] == true,
+        userCount = (j['user_count'] as num?)?.toInt() ?? 0;
+}
+
+/// A user who can log in with a code caisse.
+class PinUser {
+  final String id;
+  final String username;
+  final String fullName;
+  final String roleName;
+  PinUser.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as String,
+        username = (j['username'] as String?) ?? '',
+        fullName = (j['full_name'] as String?) ?? '',
+        roleName = (j['role_name'] as String?) ?? '';
+  String get displayName => fullName.isEmpty ? username : fullName;
+}
+
+/// Answer of POST /auth/approve.
+class Approval {
+  final String token;
+  final String approverId;
+  final String approverName;
+  final int expiresIn;
+  Approval.fromJson(Map<String, dynamic> j)
+      : token = j['approval_token'] as String,
+        approverId = (j['approver_id'] as String?) ?? '',
+        approverName = (j['approver_name'] as String?) ?? '',
+        expiresIn = (j['expires_in'] as num?)?.toInt() ?? 120;
 }
 
 class Session {
@@ -204,11 +300,15 @@ class Warehouse {
   final String id;
   final String name;
   final bool isDefault;
+  final String address;
+  final String phone;
 
   Warehouse.fromJson(Map<String, dynamic> j)
       : id = j['id'] as String,
         name = j['name'] as String,
-        isDefault = j['is_default'] == true;
+        isDefault = j['is_default'] == true,
+        address = (j['address'] as String?) ?? '',
+        phone = (j['phone'] as String?) ?? '';
 }
 
 class Partner {
@@ -229,6 +329,15 @@ class Partner {
   final int overReceiptPct; // tolérance de sur-réception, pct x100
   final int balance; // positive = the partner owes us
   final bool active;
+  // Groupe de clients (Paramètres › Clients et fidélité). When set, the
+  // group's price level and discount apply as soon as the customer is chosen.
+  final String? groupId;
+  final String? groupName;
+  final String? groupPriceLevel; // retail | wholesale, null = no group
+  final int groupDiscountPct; // ×100, 0 = none
+
+  /// Price level to sell at: the group's when the customer has one.
+  String get effectivePriceLevel => groupPriceLevel ?? priceLevel;
 
   Partner.fromJson(Map<String, dynamic> j)
       : id = j['id'] as String,
@@ -247,7 +356,11 @@ class Partner {
         minShelfDays = (j['min_shelf_days'] as num?)?.toInt() ?? 0,
         overReceiptPct = (j['over_receipt_pct'] as num?)?.toInt() ?? 500,
         balance = (j['balance'] as num?)?.toInt() ?? 0,
-        active = j['active'] == true;
+        active = j['active'] == true,
+        groupId = j['group_id'] as String?,
+        groupName = j['group_name'] as String?,
+        groupPriceLevel = j['group_price_level'] as String?,
+        groupDiscountPct = (j['group_discount_pct'] as num?)?.toInt() ?? 0;
 }
 
 class DocLine {
@@ -605,16 +718,59 @@ class Lot {
 }
 
 class AuditEntry {
+  final String id;
+  final String? userId;
   final String username;
+  final String fullName;
   final String action;
+  final String entity;
+  final String? entityId;
   final String? detail;
   final String createdAt;
 
   AuditEntry.fromJson(Map<String, dynamic> j)
-      : username = (j['username'] as String?) ?? '',
+      : id = (j['id'] as String?) ?? '',
+        userId = j['user_id'] as String?,
+        username = (j['username'] as String?) ?? '',
+        fullName = (j['full_name'] as String?) ?? '',
         action = (j['action'] as String?) ?? '',
+        entity = (j['entity'] as String?) ?? '',
+        entityId = j['entity_id'] as String?,
         detail = j['detail'] as String?,
         createdAt = (j['created_at'] as String?) ?? '';
+}
+
+/// What the last startup restore did (or why it failed).
+class LastRestore {
+  final String backup;
+  final String before;
+  final String at;
+  final String error;
+
+  LastRestore.fromJson(Map<String, dynamic> j)
+      : backup = (j['backup'] as String?) ?? '',
+        before = (j['before'] as String?) ?? '',
+        at = (j['at'] as String?) ?? '',
+        error = (j['error'] as String?) ?? '';
+}
+
+/// GET /backups: the copies, where they live, the pending restore.
+class BackupsStatus {
+  final String dir;
+  final List<BackupInfo> items;
+  final String pendingRestore; // '' = none
+  final LastRestore? lastRestore;
+
+  BackupsStatus.fromJson(Map<String, dynamic> j)
+      : dir = (j['dir'] as String?) ?? '',
+        items = [
+          for (final e in (j['items'] as List? ?? const []))
+            BackupInfo.fromJson(e as Map<String, dynamic>)
+        ],
+        pendingRestore = (j['pending_restore'] as String?) ?? '',
+        lastRestore = j['last_restore'] is Map<String, dynamic>
+            ? LastRestore.fromJson(j['last_restore'] as Map<String, dynamic>)
+            : null;
 }
 
 class BreakdownRow {
@@ -639,10 +795,14 @@ class BackupInfo {
   final int sizeBytes;
   final String modTime;
 
+  /// auto (daily / manual) | before_restore | before_reset
+  final String kind;
+
   BackupInfo.fromJson(Map<String, dynamic> j)
       : name = j['name'] as String,
         sizeBytes = (j['size_bytes'] as num?)?.toInt() ?? 0,
-        modTime = (j['mod_time'] as String?) ?? '';
+        modTime = (j['mod_time'] as String?) ?? '',
+        kind = (j['kind'] as String?) ?? 'auto';
 }
 
 class GiftCard {

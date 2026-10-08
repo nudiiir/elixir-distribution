@@ -80,6 +80,7 @@ func (s *Server) stockMovements(w http.ResponseWriter, r *http.Request) {
 // never stocked appear with 0 (so « Rupture » is complete) — aggregated over
 // the warehouses unless warehouse_id is given. No cap.
 func (s *Server) stockLevels(w http.ResponseWriter, r *http.Request) {
+	applyWarehouseScope(r) // users limited to their depots (ux_users.go)
 	q := r.URL.Query()
 	viewCost := s.can(r, "view_cost")
 	if q.Get("full") == "1" {

@@ -36,6 +36,13 @@ func (p *program) run() {
 			log.Fatalf("create db dir: %v", err)
 		}
 	}
+	// A restore chosen in Paramètres → Sauvegardes is applied now, before the
+	// database is opened (the current base is saved to backups/ first).
+	if name, err := store.ApplyPendingRestore(p.dbPath); err != nil {
+		log.Printf("restore FAILED (current database kept): %v", err)
+	} else if name != "" {
+		log.Printf("restore applied: %s", name)
+	}
 	db, err := store.Open(p.dbPath)
 	if err != nil {
 		log.Fatalf("open db: %v", err)

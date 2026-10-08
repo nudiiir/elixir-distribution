@@ -91,6 +91,7 @@ class _PartnerDetailPageState extends State<PartnerDetailPage> {
   PartnerOpenItems? _open;
   List<DocSummary> _docs = const [];
   List<InstallmentPlan> _plans = const [];
+  LoyaltyAccount? _loyalty;
   bool _docsLoading = true;
   bool _busy = false;
   bool _changed = false;
@@ -128,6 +129,10 @@ class _PartnerDetailPageState extends State<PartnerDetailPage> {
       try {
         final plans = await widget.api.installmentPlans(partnerId: _p.id);
         if (mounted) setState(() => _plans = plans);
+      } catch (_) {}
+      try {
+        final l = await widget.api.partnerLoyalty(_p.id);
+        if (mounted) setState(() => _loyalty = l);
       } catch (_) {}
     }
   }
@@ -271,10 +276,63 @@ class _PartnerDetailPageState extends State<PartnerDetailPage> {
           ('RC', _p.rc ?? ''),
           ('Article d’imposition (AI)', _p.ai ?? ''),
           if (_isCustomer)
-            ('Tarif', _p.priceLevel == 'wholesale' ? 'Demi-gros' : 'Détail'),
+            ('Tarif', _p.effectivePriceLevel == 'wholesale' ? 'Demi-gros' : 'Détail'),
+          if (_isCustomer && _p.groupName != null)
+            ('Groupe',
+                '${_p.groupName}${_p.groupDiscountPct > 0 ? ' — remise ${_fmtPct(_p.groupDiscountPct)} %' : ''}'),
+          if (_isCustomer)
+            ('Plafond de crédit',
+                (_p.creditLimit ?? 0) > 0
+                    ? fmtDA(_p.creditLimit!)
+                    : Features.instance.defaultCreditLimit > 0
+                        ? '${fmtDA(Features.instance.defaultCreditLimit)} (plafond du magasin)'
+                        : 'Aucun'),
           if ((_p.notes ?? '').isNotEmpty) ('Notes', _p.notes!),
         ]),
       );
+
+  Widget _loyaltySection() {
+    final l = _loyalty!;
+    return PageSection(
+      title: 'Points de fidélité',
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('${l.balance} point${l.balance.abs() > 1 ? 's' : ''}', style: T.monoBig),
+        const SizedBox(height: 6),
+        Text(
+            l.balance <= 0
+                ? 'Pas encore de points : chaque achat en rapporte.'
+                : 'Valeur : ${fmtDA(l.value)} de réduction. '
+                    '${l.canRedeem ? 'Utilisables à la caisse.' : 'Utilisables à partir de ${l.minRedeem} points.'}',
+            style: T.body.copyWith(fontWeight: FontWeight.w600)),
+        if (l.history.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          for (final h in l.history.take(8))
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(children: [
+                SizedBox(width: 150, child: Text(_shortDate(h.createdAt), style: T.bodyMuted)),
+                SizedBox(width: 120, child: Text(h.kindLabel, style: T.body)),
+                Expanded(child: Text(h.number ?? h.note ?? '', style: T.monoSmall)),
+                Text('${h.points > 0 ? '+' : ''}${h.points}',
+                    style: T.monoBody.copyWith(color: h.points >= 0 ? T.mintDark : T.warnDark)),
+              ]),
+            ),
+          if (l.history.length > 8)
+            Text('… et ${l.history.length - 8} mouvements plus anciens', style: T.small),
+        ],
+      ]),
+    );
+  }
+
+  static String _shortDate(String iso) {
+    final d = DateTime.tryParse(iso)?.toLocal();
+    if (d == null) return iso;
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${two(d.day)}/${two(d.month)}/${d.year}';
+  }
+
+  static String _fmtPct(int x100) =>
+      x100 % 100 == 0 ? '${x100 ~/ 100}' : (x100 / 100).toString().replaceAll('.', ',');
 
   Widget _balanceSection() {
     final color = _p.balance > 0
@@ -611,6 +669,8 @@ class _PartnerDetailPageState extends State<PartnerDetailPage> {
       ],
       body: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         _balanceSection(),
+        if (_isCustomer && _loyalty != null && (_loyalty!.enabled || _loyalty!.balance != 0))
+          _loyaltySection(),
         _contactSection(),
         _openItemsSection(),
         _docsSection(),
@@ -648,6 +708,11 @@ class _PartnerFormPageState extends State<PartnerFormPage> {
   late final _notes = TextEditingController(text: widget.existing?.notes ?? '');
   late String _kind = widget.existing?.kind ?? widget.initialKind;
   late String _priceLevel = widget.existing?.priceLevel ?? 'retail';
+  // Groupe de clients + plafond de crédit propre (vide = plafond du magasin).
+  late String? _groupId = widget.existing?.groupId;
+  List<CustomerGroup> _groups = const [];
+  late final _creditLimit = TextEditingController(
+      text: (widget.existing?.creditLimit ?? 0) > 0 ? editDA(widget.existing!.creditLimit!) : '');
   bool _busy = false;
   Map<String, String> _err = const {};
   final _nameFocus = FocusNode();
@@ -655,6 +720,9 @@ class _PartnerFormPageState extends State<PartnerFormPage> {
   @override
   void initState() {
     super.initState();
+    widget.api.customerGroups().then((g) {
+      if (mounted) setState(() => _groups = g);
+    }).catchError((_) {});
     // The page frame autofocuses for Échap: put the cursor in « Nom ».
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && widget.existing == null) _nameFocus.requestFocus();
@@ -663,7 +731,7 @@ class _PartnerFormPageState extends State<PartnerFormPage> {
 
   @override
   void dispose() {
-    for (final c in [_name, _phone, _address, _nif, _nis, _rc, _ai, _notes]) {
+    for (final c in [_name, _phone, _address, _nif, _nis, _rc, _ai, _notes, _creditLimit]) {
       c.dispose();
     }
     _nameFocus.dispose();
@@ -678,6 +746,8 @@ class _PartnerFormPageState extends State<PartnerFormPage> {
     if (nis.isNotEmpty && !RegExp(r'^\d{12,20}$').hasMatch(nis)) {
       e['nis'] = 'Le NIS ne contient que des chiffres (12 à 20).';
     }
+    final credit = _creditLimit.text.trim().isEmpty ? 0 : parseDA(_creditLimit.text);
+    if (credit == null || credit < 0) e['credit'] = 'Montant invalide.';
     setState(() => _err = e);
     if (e.isNotEmpty) return;
     setState(() => _busy = true);
@@ -695,6 +765,12 @@ class _PartnerFormPageState extends State<PartnerFormPage> {
         'ai': v(_ai),
         'notes': v(_notes),
         'price_level': _kind == 'supplier' ? 'retail' : _priceLevel,
+        // null = suit le plafond par défaut du magasin.
+        'credit_limit': _kind == 'supplier' || (credit ?? 0) == 0 ? null : credit,
+        'group_id': _kind == 'supplier' ? '' : (_groupId ?? ''),
+        // Réglages fournisseur gardés tels quels (le formulaire ne les montre pas).
+        if (widget.existing != null) 'min_shelf_days': widget.existing!.minShelfDays,
+        if (widget.existing != null) 'over_receipt_pct': widget.existing!.overReceiptPct,
       }, id: widget.existing?.id);
       if (!mounted) return;
       final word = partnerKindWord(_kind);
@@ -854,7 +930,64 @@ class _PartnerFormPageState extends State<PartnerFormPage> {
                 ('Demi-gros', 'wholesale'),
               ], _priceLevel, (v) => _priceLevel = v),
               const SizedBox(height: 6),
-              Text('Les prix proposés sur ses factures.', style: T.small),
+              Text(
+                  _groupId != null && _groups.any((g) => g.id == _groupId)
+                      ? 'Les prix proposés sur ses factures. Son groupe impose son propre tarif.'
+                      : 'Les prix proposés sur ses factures.',
+                  style: T.small),
+            ]),
+          ),
+        if (_kind != 'supplier')
+          PageSection(
+            title: 'Groupe et crédit',
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Groupe de clients', style: T.label),
+              const SizedBox(height: 5),
+              SizedBox(
+                width: 380,
+                child: DropdownButtonFormField<String?>(
+                  initialValue: _groups.any((g) => g.id == _groupId) ? _groupId : null,
+                  key: ValueKey('grp-${_groups.length}'),
+                  isExpanded: true,
+                  decoration: InputDecoration(
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(T.rInner)),
+                  ),
+                  items: [
+                    DropdownMenuItem<String?>(value: null, child: Text('Aucun groupe', style: T.body)),
+                    for (final g in _groups)
+                      DropdownMenuItem<String?>(
+                        value: g.id,
+                        child: Text(
+                            '${g.name} — ${g.priceLevel == 'wholesale' ? 'demi-gros' : 'détail'}'
+                            '${g.discountPct > 0 ? ', remise ${(g.discountPct / 100).toString().replaceAll('.0', '').replaceAll('.', ',')} %' : ''}',
+                            style: T.body),
+                      ),
+                  ],
+                  onChanged: (v) => setState(() => _groupId = v),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                  _groups.isEmpty
+                      ? 'Aucun groupe pour l’instant : créez-en dans Paramètres › Clients et fidélité.'
+                      : 'Le tarif et la remise du groupe s’appliquent dès que ce client est choisi sur une vente.',
+                  style: T.small),
+              const SizedBox(height: 14),
+              SizedBox(
+                width: 380,
+                child: FormFieldBlock(
+                  label: 'Plafond de crédit (DA)',
+                  controller: _creditLimit,
+                  error: _err['credit'],
+                  keyboard: const TextInputType.numberWithOptions(decimal: true),
+                  helper: Features.instance.defaultCreditLimit > 0
+                      ? 'Vide = plafond du magasin (${fmtDA(Features.instance.defaultCreditLimit)}).'
+                      : 'Dette maximale autorisée. Vide = pas de plafond.',
+                  onSubmitted: _save,
+                ),
+              ),
             ]),
           ),
         PageSection(

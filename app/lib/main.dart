@@ -13,6 +13,7 @@ import 'shell/app_shell.dart';
 import 'theme/tokens.dart';
 import 'util/config.dart';
 import 'util/prefs.dart';
+import 'util/user_prefs.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -52,6 +53,7 @@ class _ElixirAppState extends State<ElixirApp> {
   final _api = ApiClient();
   LocalConfig _config = LocalConfig();
   Session? _session;
+  String? _openModule; // module to open right after a cashier switch
   bool _restoring = true;
 
   @override
@@ -77,6 +79,7 @@ class _ElixirAppState extends State<ElixirApp> {
           _api.token = tok;
           final user = await _api.me();
           _session = Session(tok, user);
+          _applyUserPrefs(user.id);
         }
       }
     } catch (_) {
@@ -86,8 +89,18 @@ class _ElixirAppState extends State<ElixirApp> {
     if (mounted) setState(() => _restoring = false);
   }
 
-  Future<void> _onLoggedIn(Session session) async {
-    setState(() => _session = session);
+  /// « Mes préférences » (text size…) of the user now on this PC.
+  void _applyUserPrefs(String? userId) {
+    UiPrefs.instance.user = userId ?? 'default';
+    UserPrefs.instance.reload();
+  }
+
+  Future<void> _onLoggedIn(Session session, {String? openModule}) async {
+    _applyUserPrefs(session.user.id);
+    setState(() {
+      _session = session;
+      _openModule = openModule;
+    });
     try {
       final f = _sessionFile();
       await f.parent.create(recursive: true);
@@ -97,6 +110,7 @@ class _ElixirAppState extends State<ElixirApp> {
 
   Future<void> _logout() async {
     _api.token = null;
+    _applyUserPrefs(null);
     setState(() => _session = null);
     try {
       final f = _sessionFile();
@@ -125,6 +139,8 @@ class _ElixirAppState extends State<ElixirApp> {
         config: _config,
         session: _session!,
         onLogout: _logout,
+        openModule: _openModule,
+        onSwitchSession: (s) => _onLoggedIn(s, openModule: 'pos'),
       );
     }
     return MaterialApp(
@@ -138,6 +154,14 @@ class _ElixirAppState extends State<ElixirApp> {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
+      // Text size chosen in « Mes préférences », applied live everywhere.
+      builder: (context, child) => ValueListenableBuilder<double>(
+        valueListenable: UserPrefs.instance.textScale,
+        builder: (context, scale, _) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(textScaler: TextScaler.linear(scale)),
+          child: child ?? const SizedBox.shrink(),
+        ),
+      ),
       home: home,
     );
   }

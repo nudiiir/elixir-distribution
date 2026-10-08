@@ -8,6 +8,7 @@ import '../../templates/template_defaults.dart';
 import '../../templates/template_model.dart';
 import '../../templates/template_render.dart';
 import '../../theme/tokens.dart';
+import '../../util/approval.dart';
 import '../../util/feedback.dart';
 import '../../util/file_dialog.dart';
 import '../../util/invoice_pdf.dart';
@@ -178,9 +179,11 @@ class _DocDetailPageState extends State<DocDetailPage> {
             'En cas d’erreur, on l’annule (une trace est gardée).',
         confirmLabel: 'Valider',
         icon: Icons.task_alt_rounded);
-    if (!ok) return;
+    if (!ok || !mounted) return;
     await _run(() async {
-      final posted = await widget.api.postDocument(widget.docId);
+      // Sans « Valider » (ou au-delà d'une limite) : code du gérant.
+      final posted = await withApproval(
+          context, widget.api, () => widget.api.postDocument(widget.docId));
       _changed = true;
       await _load();
       if (!mounted) return;
@@ -525,7 +528,10 @@ class _DocDetailPageState extends State<DocDetailPage> {
               'SALE_INVOICE' || 'PURCHASE_INVOICE' => 'Annuler la facture',
               _ => 'Annuler le document',
             },
-            icon: Icons.undo_rounded,
+            // Lock = the manager code will be asked (no void_document right).
+            icon: canDocAlone(widget.api.user, d.docType, 'void')
+                ? Icons.undo_rounded
+                : Icons.lock_outline_rounded,
             danger: true,
             onPressed: guard(_void)),
       if (draft)
@@ -537,7 +543,9 @@ class _DocDetailPageState extends State<DocDetailPage> {
       if (primary == 'post')
         PageAction(
             label: _busy ? 'Validation…' : 'Valider',
-            icon: Icons.task_alt_rounded,
+            icon: canDocAlone(widget.api.user, d.docType, 'validate')
+                ? Icons.task_alt_rounded
+                : Icons.lock_outline_rounded,
             primary: true,
             onPressed: guard(_post)),
     ];

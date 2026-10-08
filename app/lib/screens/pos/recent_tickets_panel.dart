@@ -107,7 +107,10 @@ class _RecentTicketsPanelState extends State<RecentTicketsPanel> {
                       text:
                           'Aucun ticket dans cette session.\nLes ventes encaissées apparaîtront ici.',
                       actions: [
-                        ('Retour à la caisse', () => Navigator.of(context).pop()),
+                        (
+                          'Retour à la caisse',
+                          () => Navigator.of(context).pop(),
+                        ),
                       ],
                     )
                   : ListView.separated(

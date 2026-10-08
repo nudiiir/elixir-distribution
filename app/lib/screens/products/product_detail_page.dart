@@ -428,7 +428,7 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
               label: 'Étiquettes',
               icon: Icons.qr_code_2_rounded,
               onPressed: () => _labels(p)),
-          if (!p.isService)
+          if (!p.isService && (widget.api.user?.can('stock_adjust') ?? true))
             PageAction(
                 label: 'Ajuster le stock',
                 icon: Icons.tune_rounded,
