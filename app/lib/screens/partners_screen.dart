@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
+import '../api/crm_api.dart';
 import '../api/models.dart';
 import '../theme/tokens.dart';
 import '../util/analysis_links.dart';
@@ -13,6 +14,10 @@ import '../widgets/doc_editor.dart';
 import '../widgets/doc_list.dart' show DocChip, popToModuleRoot;
 import '../widgets/list_toolbar.dart';
 import '../widgets/ui.dart';
+import 'crm/bulk_actions.dart';
+import 'crm/crm_common.dart';
+import 'crm/send_message.dart';
+import 'crm/tags_page.dart';
 import 'partners/partner_pages.dart';
 
 const _prefs = 'partners';
@@ -38,6 +43,21 @@ class _PartnersScreenState extends State<PartnersScreen> {
   bool _loading = true;
   String? _error;
 
+  // Filtres distribution / CRM (côté serveur, périmètre « own » respecté).
+  String? _clientType;
+  String? _crmStatus;
+  String? _repId;
+  String? _wilaya;
+  String? _routeId;
+  String? _tagId;
+  List<CrmUser> _users = const [];
+  List<CrmRoute> _routes = const [];
+  List<CrmTag> _tags = const [];
+  static const _pageSize = 500;
+  bool _more = false; // the server may have more rows
+
+  bool get _crm => crmView(widget.api);
+
   @override
   void initState() {
     super.initState();
@@ -45,8 +65,12 @@ class _PartnersScreenState extends State<PartnersScreen> {
     _kind = k == 'customer' || k == 'supplier' ? k : null;
     final b = UiPrefs.instance.get<String>(_prefs, 'balance');
     _balance = const ['any', 'owes_us', 'we_owe'].contains(b) ? b : null;
+    _clientType = UiPrefs.instance.get<String>(_prefs, 'client_type');
+    _crmStatus = UiPrefs.instance.get<String>(_prefs, 'crm_status');
+    _wilaya = UiPrefs.instance.get<String>(_prefs, 'wilaya');
     widget.command?.addListener(_onCommand);
     if (widget.command?.value == null) _load();
+    _loadLookups();
     WidgetsBinding.instance.addPostFrameCallback((_) => _onCommand());
   }
 
@@ -94,11 +118,11 @@ class _PartnersScreenState extends State<PartnersScreen> {
       _error = null;
     });
     try {
-      final items = await widget.api
-          .partners(q: _searchCtrl.text.trim(), kind: _kind, limit: 500);
+      final items = await _fetch(0);
       if (mounted) {
         setState(() {
           _items = items;
+          _more = items.length >= _pageSize;
           _loading = false;
         });
       }
@@ -111,6 +135,118 @@ class _PartnersScreenState extends State<PartnersScreen> {
       }
     }
   }
+
+  Future<List<Partner>> _fetch(int offset) => widget.api.crmPartners(
+        q: _searchCtrl.text.trim(),
+        kind: _kind,
+        clientType: _clientType,
+        crmStatus: _crmStatus,
+        repUserId: _repId,
+        wilaya: _wilaya,
+        routeId: _routeId,
+        tagId: _tagId,
+        limit: _pageSize,
+        offset: offset,
+      );
+
+  Future<void> _loadMore() async {
+    setState(() => _loading = true);
+    try {
+      final more = await _fetch(_items.length);
+      if (mounted) {
+        setState(() {
+          _items = [..._items, ...more];
+          _more = more.length >= _pageSize;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Impossible de charger la suite : $e');
+    }
+    if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _loadLookups() async {
+    CrmDirectory.users(widget.api).then((u) {
+      if (mounted) setState(() => _users = u);
+    }).catchError((_) {});
+    CrmDirectory.routes(widget.api).then((r) {
+      if (mounted) setState(() => _routes = r);
+    });
+    CrmDirectory.tags(widget.api, refresh: true).then((t) {
+      if (mounted) setState(() => _tags = t);
+    });
+  }
+
+  void _setCrm(void Function() change, [String? prefKey, String? value]) {
+    setState(change);
+    if (prefKey != null) UiPrefs.instance.set(_prefs, prefKey, value);
+    _load();
+  }
+
+  void _clearAll() {
+    _searchCtrl.clear();
+    _balance = null;
+    for (final k in ['balance', 'kind', 'client_type', 'crm_status', 'wilaya']) {
+      UiPrefs.instance.set(_prefs, k, null);
+    }
+    _setCrm(() {
+      _kind = null;
+      _clientType = null;
+      _crmStatus = null;
+      _repId = null;
+      _wilaya = null;
+      _routeId = null;
+      _tagId = null;
+    });
+  }
+
+  List<ActiveFilter> get _activeFilters => [
+        if (_clientType != null)
+          ActiveFilter('Type : ${clientTypeLabels[_clientType] ?? _clientType}',
+              () => _setCrm(() => _clientType = null, 'client_type', null)),
+        if (_crmStatus != null)
+          ActiveFilter('Statut : ${crmStatusLabels[_crmStatus] ?? _crmStatus}',
+              () => _setCrm(() => _crmStatus = null, 'crm_status', null)),
+        if (_repId != null)
+          ActiveFilter('Commercial : ${_users.where((u) => u.id == _repId).firstOrNull?.name ?? '…'}',
+              () => _setCrm(() => _repId = null)),
+        if (_wilaya != null)
+          ActiveFilter('Wilaya : ${wilayaLabel(_wilaya!)}', () => _setCrm(() => _wilaya = null, 'wilaya', null)),
+        if (_routeId != null)
+          ActiveFilter('Tournée : ${_routes.where((r) => r.id == _routeId).firstOrNull?.name ?? '…'}',
+              () => _setCrm(() => _routeId = null)),
+        if (_tagId != null)
+          ActiveFilter('Étiquette : ${_tags.where((t) => t.id == _tagId).firstOrNull?.name ?? '…'}',
+              () => _setCrm(() => _tagId = null)),
+      ];
+
+  List<BulkClient> _bulk(List<Partner> rows) => [
+        for (final p in rows)
+          if (p.kind != 'supplier') BulkClient(id: p.id, name: p.name, tagIds: p.tagIds, repUserId: p.repUserId),
+      ];
+
+  List<BulkAction<Partner>> get _bulkActions => [
+        if (_crm && crmCan(widget.api, 'partners.edit'))
+          BulkAction('Attribuer un commercial', Icons.badge_outlined, (rows) async {
+            final done = await bulkAssignRep(context, widget.api, _bulk(rows));
+            if (done) _load();
+            return done;
+          }),
+        if (crmEditFiche(widget.api))
+          BulkAction('Ajouter une étiquette', Icons.sell_outlined, (rows) async {
+            final done = await bulkAddTag(context, widget.api, _bulk(rows));
+            if (done) _load();
+            return done;
+          }),
+        if (crmEdit(widget.api))
+          BulkAction('Créer une tâche', Icons.add_task_rounded,
+              (rows) => bulkCreateTasks(context, widget.api, _bulk(rows))),
+        if (_crm)
+          BulkAction('Message WhatsApp', Icons.chat_outlined, (rows) async {
+            await bulkWhatsApp(context, widget.api, _bulk(rows));
+            return false;
+          }),
+      ];
 
   void _setKind(String? k) {
     setState(() => _kind = k);
@@ -174,6 +310,9 @@ class _PartnersScreenState extends State<PartnersScreen> {
   List<RowAction<Partner>> _rowMenu(Partner p) => [
         RowAction('Ouvrir', Icons.open_in_new_rounded, _open),
         RowAction('Modifier', Icons.edit_outlined, _edit),
+        if (p.kind != 'supplier' && (_crm || crmCan(widget.api, 'orders.view')))
+          RowAction('Envoyer un message', Icons.chat_outlined,
+              (p) => showSendMessagePanel(context, widget.api, partnerId: p.id, partnerName: p.name)),
         if (p.kind != 'supplier')
           RowAction('Encaisser', Icons.payments_outlined,
               (p) => _pay(p, outgoing: false)),
@@ -191,7 +330,7 @@ class _PartnersScreenState extends State<PartnersScreen> {
   @override
   Widget build(BuildContext context) {
     final searching = _searchCtrl.text.trim().isNotEmpty;
-    final filtered = searching || _kind != null || _balance != null;
+    final filtered = searching || _kind != null || _balance != null || _activeFilters.isNotEmpty;
     final newLabel =
         _newKind == 'supplier' ? 'Nouveau fournisseur' : 'Nouveau client';
     return Padding(
@@ -212,6 +351,10 @@ class _PartnersScreenState extends State<PartnersScreen> {
                 MenuEntry('Nouveau fournisseur',
                     Icons.store_mall_directory_outlined,
                     () => _create('supplier')),
+              if (_kind != 'supplier')
+                MenuEntry('Gérer les étiquettes', Icons.sell_outlined, () async {
+                  if (await openTagsPage(context, widget.api)) _loadLookups();
+                }),
               if (AnalysisLinks.available)
                 MenuEntry('Analyser : qui vous doit', Icons.insights_rounded,
                     () => AnalysisLinks.launch(AnalysisLinks.receivables())),
@@ -266,8 +409,62 @@ class _PartnersScreenState extends State<PartnersScreen> {
                 ],
                 onChanged: _setBalance,
               ),
+              if (_kind != 'supplier') ...[
+                FilterField<String>(
+                  label: 'Type de client',
+                  value: _clientType,
+                  options: [for (final e in clientTypeLabels.entries) (e.key, e.value)],
+                  onChanged: (v) => _setCrm(() => _clientType = v, 'client_type', v),
+                ),
+                FilterField<String>(
+                  label: 'Statut',
+                  value: _crmStatus,
+                  options: [for (final e in crmStatusLabels.entries) (e.key, e.value)],
+                  onChanged: (v) => _setCrm(() => _crmStatus = v, 'crm_status', v),
+                ),
+                if (_users.isNotEmpty)
+                  FilterField<String>(
+                    label: 'Commercial',
+                    value: _repId,
+                    options: [for (final u in _users) (u.id, u.name)],
+                    onChanged: (v) => _setCrm(() => _repId = v),
+                  ),
+                FilterField<String>(
+                  label: 'Wilaya',
+                  value: _wilaya,
+                  allLabel: 'Toutes',
+                  options: [for (final (c, n) in wilayas) (n, '$c · $n')],
+                  onChanged: (v) => _setCrm(() => _wilaya = v, 'wilaya', v),
+                ),
+                if (_routes.isNotEmpty)
+                  FilterField<String>(
+                    label: 'Tournée',
+                    value: _routeId,
+                    allLabel: 'Toutes',
+                    options: [for (final r in _routes) (r.id, r.name)],
+                    onChanged: (v) => _setCrm(() => _routeId = v),
+                  ),
+                if (_tags.isNotEmpty)
+                  FilterField<String>(
+                    label: 'Étiquette',
+                    value: _tagId,
+                    allLabel: 'Toutes',
+                    options: [for (final t in _tags) (t.id, t.name)],
+                    onChanged: (v) => _setCrm(() => _tagId = v),
+                  ),
+              ],
             ]),
+            active: _activeFilters,
+            onClearAll: _clearAll,
           ),
+          if (_more)
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Row(children: [
+                Text('Les ${_items.length} premiers sont affichés.', style: T.small),
+                TextButton(onPressed: _loading ? null : _loadMore, child: const Text('Charger les suivants')),
+              ]),
+            ),
           const SizedBox(height: 14),
           Expanded(
             child: DataListView<Partner>(
@@ -278,6 +475,7 @@ class _PartnersScreenState extends State<PartnersScreen> {
               onRetry: _load,
               rowId: (p) => p.id,
               rowMenu: _rowMenu,
+              bulkActions: _bulkActions,
               onTap: _open,
               exportTitle: _title,
               exportBaseName: 'clients-fournisseurs',
@@ -290,11 +488,7 @@ class _PartnersScreenState extends State<PartnersScreen> {
                         : 'Aucun client pour l’instant.',
                 actions: [
                   if (filtered)
-                    ('Effacer les filtres', () {
-                      _searchCtrl.clear();
-                      _setBalance(null);
-                      _setKind(null);
-                    }),
+                    ('Effacer les filtres', _clearAll),
                   (newLabel, () => _create(_newKind)),
                 ],
               ),
@@ -334,8 +528,9 @@ class _PartnersScreenState extends State<PartnersScreen> {
                 ),
                 ColumnSpec(
                   id: 'kind',
-                  label: 'Type',
+                  label: 'Client ou fournisseur',
                   width: 190,
+                  visibleByDefault: false,
                   sortKey: (p) => p.kind,
                   exportValue: (p) => partnerKindWord(p.kind),
                   cell: (context, p) => Align(
@@ -348,6 +543,70 @@ class _PartnersScreenState extends State<PartnersScreen> {
                         },
                         bg: T.cream,
                         fg: T.muted),
+                  ),
+                ),
+                ColumnSpec(
+                  id: 'client_type',
+                  label: 'Type de client',
+                  width: 150,
+                  sortKey: (p) => clientTypeLabels[p.clientType] ?? p.clientType,
+                  exportValue: (p) => p.kind == 'supplier' ? '' : (clientTypeLabels[p.clientType] ?? p.clientType),
+                  cell: (context, p) => Text(
+                      p.kind == 'supplier' ? '—' : (clientTypeLabels[p.clientType] ?? p.clientType),
+                      style: T.small.copyWith(color: T.ink),
+                      overflow: TextOverflow.ellipsis),
+                ),
+                ColumnSpec(
+                  id: 'crm_status',
+                  label: 'Statut',
+                  width: 120,
+                  sortKey: (p) => p.crmStatus,
+                  exportValue: (p) => p.kind == 'supplier' ? '' : (crmStatusLabels[p.crmStatus] ?? p.crmStatus),
+                  cell: (context, p) => p.kind == 'supplier'
+                      ? const Text('—', style: T.small)
+                      : Align(alignment: AlignmentDirectional.centerStart, child: CrmStatusChip(p.crmStatus)),
+                ),
+                ColumnSpec(
+                  id: 'rep',
+                  label: 'Commercial',
+                  flex: 2,
+                  sortKey: (p) => p.repName.toLowerCase(),
+                  exportValue: (p) => p.repName,
+                  cell: (context, p) => Text(p.repName.isEmpty ? '—' : p.repName,
+                      style: T.small.copyWith(color: T.ink), maxLines: 1, overflow: TextOverflow.ellipsis),
+                ),
+                ColumnSpec(
+                  id: 'wilaya',
+                  label: 'Wilaya',
+                  width: 160,
+                  sortKey: (p) => p.wilaya.toLowerCase(),
+                  exportValue: (p) => p.wilaya,
+                  cell: (context, p) => Text(
+                      p.wilaya.isEmpty ? '—' : (p.commune.isEmpty ? p.wilaya : '${p.wilaya} · ${p.commune}'),
+                      style: T.small.copyWith(color: T.ink),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis),
+                ),
+                ColumnSpec(
+                  id: 'route',
+                  label: 'Tournée',
+                  width: 150,
+                  visibleByDefault: false,
+                  sortKey: (p) => p.routeName.toLowerCase(),
+                  exportValue: (p) => p.routeName,
+                  cell: (context, p) => Text(p.routeName.isEmpty ? '—' : p.routeName,
+                      style: T.small.copyWith(color: T.ink), maxLines: 1, overflow: TextOverflow.ellipsis),
+                ),
+                ColumnSpec(
+                  id: 'tags',
+                  label: 'Étiquettes',
+                  flex: 2,
+                  exportValue: (p) => [for (final t in _tags) if (p.tagIds.contains(t.id)) t.name].join(', '),
+                  cell: (context, p) => ClipRect(
+                    child: Wrap(spacing: 4, runSpacing: 4, clipBehavior: Clip.hardEdge, children: [
+                      for (final t in _tags)
+                        if (p.tagIds.contains(t.id)) TagChip(name: t.name, colour: t.colour),
+                    ]),
                   ),
                 ),
                 ColumnSpec(

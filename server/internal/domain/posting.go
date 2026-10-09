@@ -92,9 +92,22 @@ func Post(db *sql.DB, docID, userID string) (string, error) {
 		return "", err
 	}
 	defer tx.Rollback()
+	number, err := PostTx(tx, docID, userID)
+	if err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return number, nil
+}
 
+// PostTx is Post inside a transaction owned by the caller (customer orders
+// post their delivery note, invoice and payments atomically with the order
+// change). Nothing is committed here.
+func PostTx(tx *sql.Tx, docID, userID string) (string, error) {
 	var d docRow
-	err = tx.QueryRow(`SELECT id, doc_type, status, doc_date, partner_id, warehouse_id,
+	err := tx.QueryRow(`SELECT id, doc_type, status, doc_date, partner_id, warehouse_id,
 			dest_warehouse_id, ref_document_id, payment_method, amount,
 			supplier_ref, reason, freight_cost, accept_short_dated, accept_over_receipt
 		FROM documents WHERE id = ?`, docID).Scan(
@@ -613,10 +626,6 @@ func Post(db *sql.DB, docID, userID string) (string, error) {
 		nullIfEmpty(userID), now, now, docID); err != nil {
 		return "", err
 	}
-
-	if err := tx.Commit(); err != nil {
-		return "", err
-	}
 	return number, nil
 }
 
@@ -802,10 +811,17 @@ func Void(db *sql.DB, docID, userID, reason string) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := VoidTx(tx, docID, userID, reason); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
 
+// VoidTx is Void inside a transaction owned by the caller.
+func VoidTx(tx *sql.Tx, docID, userID, reason string) error {
 	var d docRow
 	var number sql.NullString
-	err = tx.QueryRow(`SELECT id, doc_type, status, doc_date, partner_id, warehouse_id,
+	err := tx.QueryRow(`SELECT id, doc_type, status, doc_date, partner_id, warehouse_id,
 			dest_warehouse_id, ref_document_id, number FROM documents WHERE id = ?`, docID).Scan(
 		&d.id, &d.docType, &d.status, &d.docDate, &d.partnerID, &d.warehouseID,
 		&d.destWarehouseID, &d.refDocID, &number)
@@ -938,11 +954,7 @@ func Void(db *sql.DB, docID, userID, reason string) error {
 	auditTx(tx, userID, "document.void", "document", docID, detail)
 
 	// Fidélité : points gagnés repris, points utilisés rendus.
-	if err := voidLoyalty(tx, docID, userID, now); err != nil {
-		return err
-	}
-
-	return tx.Commit()
+	return voidLoyalty(tx, docID, userID, now)
 }
 
 // StockDivergence reports one cache row that no longer matches the ledger.

@@ -360,7 +360,52 @@ class Partner {
         groupId = j['group_id'] as String?,
         groupName = j['group_name'] as String?,
         groupPriceLevel = j['group_price_level'] as String?,
-        groupDiscountPct = (j['group_discount_pct'] as num?)?.toInt() ?? 0;
+        groupDiscountPct = (j['group_discount_pct'] as num?)?.toInt() ?? 0,
+        clientType = (j['client_type'] as String?) ?? 'other',
+        crmStatus = (j['crm_status'] as String?) ?? 'active',
+        repUserId = j['rep_user_id'] as String?,
+        repName = (j['rep_name'] as String?) ?? '',
+        routeId = j['route_id'] as String?,
+        routeName = (j['route_name'] as String?) ?? '',
+        wilaya = (j['wilaya'] as String?) ?? '',
+        commune = (j['commune'] as String?) ?? '',
+        latitude = (j['latitude'] as num?)?.toDouble(),
+        longitude = (j['longitude'] as num?)?.toDouble(),
+        openingHours = (j['opening_hours'] as String?) ?? '',
+        licenseNo = (j['license_no'] as String?) ?? '',
+        whatsapp = (j['whatsapp'] as String?) ?? '',
+        website = (j['website'] as String?) ?? '',
+        source = (j['source'] as String?) ?? 'manual',
+        paymentTermsDays = (j['payment_terms_days'] as num?)?.toInt(),
+        tagIds = [for (final t in (j['tag_ids'] as List? ?? const [])) '$t'],
+        createdAt = (j['created_at'] as String?) ?? '';
+
+  // ---- Distribution / CRM (docs/API_DISTRIBUTION.md §5.1) ----
+  /// supermarket | restaurant | hotel | wholesaler | retailer | individual | other
+  final String clientType;
+
+  /// prospect | active | dormant | blocked
+  final String crmStatus;
+  final String? repUserId; // commercial assigné
+  final String repName;
+  final String? routeId; // tournée
+  final String routeName;
+  final String wilaya;
+  final String commune;
+  final double? latitude;
+  final double? longitude;
+  final String openingHours;
+  final String licenseNo; // n° d'agrément / licence
+  final String whatsapp;
+  final String website;
+
+  /// manual | web | import | rep | portal
+  final String source;
+
+  /// null = délai par défaut du magasin.
+  final int? paymentTermsDays;
+  final List<String> tagIds;
+  final String createdAt;
 }
 
 class DocLine {

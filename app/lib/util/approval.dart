@@ -24,6 +24,7 @@ const rightSentences = <String, String>{
   'stock_adjust': 'ajuster le stock ou faire un inventaire',
   'import_data': 'importer des données',
   'export_data': 'exporter des données',
+  'orders.override_credit': 'valider une commande malgré le compte du client',
 };
 
 const _actionWords = <String, String>{

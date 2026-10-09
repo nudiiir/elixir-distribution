@@ -73,6 +73,8 @@ var rightLabels = map[string]string{
 var actionLabels = map[string]string{
 	"view": "voir", "create": "créer", "edit": "modifier", "cancel": "annuler",
 	"validate": "valider", "export": "exporter", "print": "imprimer",
+	"manage": "gérer", "override_credit": "passer outre le contrôle de crédit",
+	"all_customers": "voir tous les clients",
 }
 
 var moduleLabels = map[string]string{
@@ -80,6 +82,8 @@ var moduleLabels = map[string]string{
 	"purchases": "les achats", "stock": "le stock", "products": "les produits",
 	"partners": "les clients et fournisseurs", "assistant": "l'assistant",
 	"reports": "les rapports", "webstore": "la boutique en ligne", "settings": "les paramètres",
+	"orders": "les commandes clients", "deliveries": "les livraisons", "crm": "la relation client",
+	"pricing": "les tarifs",
 }
 
 func rightLabel(key string) string {

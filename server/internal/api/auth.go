@@ -61,6 +61,8 @@ var Modules = []string{
 	"dashboard", "pos", "sales", "purchases", "stock",
 	"products", "partners", "assistant", "reports",
 	"webstore", "settings",
+	// Distribution (0016) : commandes clients, livraisons, relation client, tarifs.
+	"orders", "deliveries", "crm", "pricing",
 }
 
 // ModuleActions lists, per module, the actions of the permission grid.
@@ -76,6 +78,13 @@ var ModuleActions = map[string][]string{
 	"stock":     {"view", "create", "edit", "cancel", "validate", "export", "print"},
 	"products":  {"view", "create", "edit", "export", "print"},
 	"partners":  {"view", "create", "edit", "export", "print"},
+	// orders.manage : saisir, préparer, livrer, facturer ; orders.validate :
+	// valider (contrôle crédit) ; orders.override_credit : passer outre l'alerte.
+	"orders":     {"view", "manage", "validate", "override_credit"},
+	"deliveries": {"view", "manage"},
+	// crm.all_customers : un rôle au périmètre « own » voit quand même tous les clients.
+	"crm":     {"view", "edit", "all_customers"},
+	"pricing": {"view", "edit"},
 }
 
 // SpecialRights are the « droits particuliers » of a role.

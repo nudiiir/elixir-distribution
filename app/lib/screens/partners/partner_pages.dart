@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../api/client.dart';
+import '../../api/crm_api.dart';
+import '../../api/dist_api.dart' show CustomerOrder;
 import '../../api/models.dart';
 import '../../theme/tokens.dart';
 import '../../util/features.dart';
@@ -12,6 +14,16 @@ import '../../widgets/app_page.dart';
 import '../../widgets/doc_editor.dart';
 import '../../widgets/doc_list.dart';
 import '../../widgets/ui.dart';
+import '../crm/crm_common.dart';
+import '../crm/send_message.dart';
+import '../orders/order_form_page.dart';
+import '../orders/orders_screen.dart' show openOrderDetail;
+import '../pricing/product_pricing_page.dart' show openClientPricing;
+import 'partner_crm_tabs.dart';
+import 'partner_orders_tab.dart';
+
+/// Tabs of the client 360 page.
+enum PartnerTab { overview, orders, timeline, contacts, tasks, activities, files, tags }
 
 /// « client » / « fournisseur » / « client et fournisseur ».
 String partnerKindWord(String kind) => switch (kind) {
@@ -41,13 +53,27 @@ String partnerBalanceSentence(Partner p) {
   return 'Compte à jour : personne ne doit rien.';
 }
 
-/// Opens the partner detail page. Returns true if something changed.
+/// Opens the partner detail page (optionally on a given [tab]). Returns true
+/// if something changed.
 Future<bool> openPartnerDetail(
-    BuildContext context, ApiClient api, Partner partner) async {
+    BuildContext context, ApiClient api, Partner partner, {PartnerTab? tab}) async {
   final changed = await Navigator.of(context).push<bool>(MaterialPageRoute(
-    builder: (_) => PartnerDetailPage(api: api, partner: partner),
+    builder: (_) => PartnerDetailPage(api: api, partner: partner, initialTab: tab),
   ));
   return changed == true;
+}
+
+/// Same, from a partner id only (task lists, segments…).
+Future<bool> openPartnerDetailById(BuildContext context, ApiClient api, String partnerId,
+    {PartnerTab? tab}) async {
+  try {
+    final p = await api.getPartner(partnerId);
+    if (!context.mounted) return false;
+    return openPartnerDetail(context, api, p, tab: tab);
+  } catch (e) {
+    if (context.mounted) showToast(context, errText(e), kind: ToastKind.error);
+    return false;
+  }
 }
 
 /// Opens the create / edit page. Returns the saved partner, or null.
@@ -78,9 +104,10 @@ Future<bool> showPartnerPaymentDialog(
 
 class PartnerDetailPage extends StatefulWidget {
   const PartnerDetailPage(
-      {super.key, required this.api, required this.partner});
+      {super.key, required this.api, required this.partner, this.initialTab});
   final ApiClient api;
   final Partner partner;
+  final PartnerTab? initialTab;
 
   @override
   State<PartnerDetailPage> createState() => _PartnerDetailPageState();
@@ -95,14 +122,44 @@ class _PartnerDetailPageState extends State<PartnerDetailPage> {
   bool _docsLoading = true;
   bool _busy = false;
   bool _changed = false;
+  late PartnerTab _tab = widget.initialTab ?? PartnerTab.overview;
+  List<CrmTag> _allTags = const [];
+  int _refresh = 0;
 
   bool get _isCustomer => _p.kind != 'supplier';
   bool get _isSupplier => _p.kind != 'customer';
+
+  /// CRM reading (KPI, timeline, contacts, files work with partners.view too).
+  bool get _crm => crmView(widget.api);
+
+  /// Messages: crm.view | orders.view.
+  bool get _canMessage => _crm || crmCan(widget.api, 'orders.view');
+
+  /// Customer orders: list (orders.view), create (orders.manage).
+  bool get _canOrders => crmCan(widget.api, 'orders');
+  bool get _canNewOrder => _canOrders && crmCan(widget.api, 'orders.manage');
+
+  /// Special prices / quotas of this client.
+  bool get _canPricing => crmCan(widget.api, 'pricing');
+
+  List<(PartnerTab, String)> get _tabs => [
+        (PartnerTab.overview, 'Vue d’ensemble'),
+        if (_isCustomer && _canOrders) (PartnerTab.orders, 'Commandes'),
+        if (_isCustomer) (PartnerTab.timeline, 'Chronologie'),
+        (PartnerTab.contacts, 'Contacts'),
+        if (_isCustomer && _crm) (PartnerTab.tasks, 'Tâches'),
+        if (_isCustomer && _crm) (PartnerTab.activities, 'Activités'),
+        (PartnerTab.files, 'Pièces'),
+        if (_isCustomer) (PartnerTab.tags, 'Étiquettes'),
+      ];
 
   @override
   void initState() {
     super.initState();
     _load();
+    CrmDirectory.tags(widget.api).then((t) {
+      if (mounted) setState(() => _allTags = t);
+    });
   }
 
   Future<void> _load() async {
@@ -110,6 +167,7 @@ class _PartnerDetailPageState extends State<PartnerDetailPage> {
       final p = await widget.api.getPartner(_p.id);
       if (mounted) setState(() => _p = p);
     } catch (_) {}
+    if (mounted) setState(() => _refresh++);
     try {
       final o = await widget.api.partnerOpenItems(_p.id);
       if (mounted) setState(() => _open = o);
@@ -167,6 +225,40 @@ class _PartnerDetailPageState extends State<PartnerDetailPage> {
     if (changed == true && mounted) {
       _changed = true;
       _load();
+    }
+  }
+
+  Future<void> _message() async {
+    final sent = await showSendMessagePanel(context, widget.api,
+        partnerId: _p.id, partnerName: _p.name, templateCode: _p.balance > 0 ? 'payment_reminder' : null);
+    if (sent && mounted) setState(() => _refresh++);
+  }
+
+  /// « Nouvelle commande » : the order form, already on this client; once
+  /// saved, the order page opens.
+  Future<void> _newOrder() async {
+    final user = widget.api.user;
+    if (user == null) return;
+    final created = await Navigator.of(context).push<CustomerOrder>(MaterialPageRoute(
+      builder: (_) => OrderFormPage(api: widget.api, user: user, initialPartner: _p),
+    ));
+    if (created == null || !mounted) return;
+    _changed = true;
+    setState(() {
+      _tab = PartnerTab.orders;
+      _refresh++;
+    });
+    await openOrderDetail(context, widget.api, user, created.id);
+    if (mounted) setState(() => _refresh++);
+  }
+
+  Future<void> _activity() async {
+    final a = await openActivityForm(context, widget.api, partnerId: _p.id, partnerName: _p.name);
+    if (a != null && mounted) {
+      setState(() {
+        _tab = PartnerTab.activities;
+        _refresh++;
+      });
     }
   }
 
@@ -265,11 +357,45 @@ class _PartnerDetailPageState extends State<PartnerDetailPage> {
 
   // ---- sections ----
 
+  Widget _crmSection() {
+    final p = _p;
+    final terms = p.paymentTermsDays == null
+        ? 'Délai du magasin'
+        : (p.paymentTermsDays == 0 ? 'Comptant' : '${p.paymentTermsDays} jours');
+    return PageSection(
+      title: 'Relation client',
+      trailing: p.latitude != null && p.longitude != null
+          ? TextButton.icon(
+              onPressed: () => openMaps(context, p.latitude!, p.longitude!),
+              icon: const Icon(Icons.map_outlined, size: 18),
+              label: const Text('Ouvrir dans Maps'))
+          : null,
+      child: FactGrid(columns: 3, facts: [
+        ('Type de client', clientTypeLabels[p.clientType] ?? p.clientType),
+        ('Statut', crmStatusLabels[p.crmStatus] ?? p.crmStatus),
+        ('Commercial', p.repName),
+        ('Tournée', p.routeName),
+        ('Wilaya', wilayaLabel(p.wilaya)),
+        ('Commune', p.commune),
+        ('Horaires', p.openingHours),
+        ('N° d’agrément / licence', p.licenseNo),
+        ('Délai de paiement', terms),
+        ('Origine', partnerSourceLabels[p.source] ?? p.source),
+        ('Position GPS',
+            p.latitude != null && p.longitude != null ? '${p.latitude}, ${p.longitude}' : ''),
+        if (p.createdAt.isNotEmpty) ('Client depuis le', crmDate(p.createdAt)),
+      ]),
+    );
+  }
+
   Widget _contactSection() => PageSection(
         title: 'Coordonnées',
         child: FactGrid(columns: 3, facts: [
           ('Type', partnerKindWord(_p.kind)),
           ('Téléphone', _p.phone ?? ''),
+          ('WhatsApp', _p.whatsapp),
+          ('E-mail', _p.email ?? ''),
+          ('Site web', _p.website),
           ('Adresse', _p.address ?? ''),
           ('NIF', _p.nif ?? ''),
           ('NIS', _p.nis ?? ''),
@@ -608,22 +734,89 @@ class _PartnerDetailPageState extends State<PartnerDetailPage> {
     );
   }
 
+  Widget _subtitle() {
+    final p = _p;
+    final tags = [for (final t in _allTags) if (p.tagIds.contains(t.id)) t];
+    return Wrap(spacing: 8, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+      Text(
+          [
+            _isCustomer && p.clientType != 'other'
+                ? (clientTypeLabels[p.clientType] ?? p.clientType)
+                : partnerKindWord(p.kind)[0].toUpperCase() + partnerKindWord(p.kind).substring(1),
+            if ((p.phone ?? '').isNotEmpty) p.phone!,
+            if (p.wilaya.isNotEmpty) p.commune.isEmpty ? p.wilaya : '${p.commune}, ${p.wilaya}',
+            if (p.repName.isNotEmpty) 'Commercial : ${p.repName}',
+          ].join(' · '),
+          style: T.bodyMuted),
+      if (_isCustomer && p.crmStatus != 'active') CrmStatusChip(p.crmStatus),
+      for (final t in tags) TagChip(name: t.name, colour: t.colour),
+    ]);
+  }
+
+  Widget _tabBar() => SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(children: [
+          for (final (t, label) in _tabs)
+            CrmTab(label: label, selected: _tab == t, onTap: () => setState(() => _tab = t)),
+        ]),
+      );
+
+  Widget _tabBody() {
+    final p = _p;
+    switch (_tab) {
+      case PartnerTab.overview:
+        return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          _balanceSection(),
+          if (_isCustomer) PartnerKpisSection(api: widget.api, partnerId: p.id, refresh: _refresh),
+          if (_isCustomer && _loyalty != null && (_loyalty!.enabled || _loyalty!.balance != 0))
+            _loyaltySection(),
+          _contactSection(),
+          if (_isCustomer) _crmSection(),
+          _openItemsSection(),
+          _docsSection(),
+          if (_isCustomer && (_plans.isNotEmpty || p.balance > 0)) _plansSection(),
+        ]);
+      case PartnerTab.orders:
+        return PartnerOrdersTab(
+            key: ValueKey('or$_refresh'),
+            api: widget.api,
+            partnerId: p.id,
+            onNewOrder: _canNewOrder ? _newOrder : null);
+      case PartnerTab.timeline:
+        return PartnerTimelineTab(key: ValueKey('tl$_refresh'), api: widget.api, partnerId: p.id);
+      case PartnerTab.contacts:
+        return PartnerContactsTab(api: widget.api, partner: p);
+      case PartnerTab.tasks:
+        return PartnerTasksTab(key: ValueKey('tk$_refresh'), api: widget.api, partner: p);
+      case PartnerTab.activities:
+        return PartnerActivitiesTab(key: ValueKey('ac$_refresh'), api: widget.api, partner: p);
+      case PartnerTab.files:
+        return PartnerFilesTab(api: widget.api, partner: p);
+      case PartnerTab.tags:
+        return PartnerTagsTab(
+            api: widget.api,
+            partner: p,
+            onPartner: (np) {
+              _changed = true;
+              setState(() => _p = np);
+              CrmDirectory.tags(widget.api, refresh: true).then((t) {
+                if (mounted) setState(() => _allTags = t);
+              });
+            });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = _p;
+    if (!_tabs.any((t) => t.$1 == _tab)) _tab = PartnerTab.overview;
     return AppPage(
       crumbs: [
         Crumb(partnerListLabel(p.kind), _back),
         Crumb(p.name),
       ],
       title: p.name,
-      subtitle: Text(
-          [
-            partnerKindWord(p.kind)[0].toUpperCase() +
-                partnerKindWord(p.kind).substring(1),
-            if ((p.phone ?? '').isNotEmpty) p.phone!,
-          ].join(' · '),
-          style: T.bodyMuted),
+      subtitle: _subtitle(),
       onBack: _back,
       actions: [
         Flexible(
@@ -633,6 +826,26 @@ class _PartnerDetailPageState extends State<PartnerDetailPage> {
                   label: 'Encaisser',
                   icon: Icons.payments_outlined,
                   onPressed: () => _pay(outgoing: false)),
+            if (_isCustomer && _canNewOrder)
+              PageAction(
+                  label: 'Nouvelle commande',
+                  icon: Icons.add_shopping_cart_rounded,
+                  onPressed: _newOrder),
+            if (_isCustomer && _canPricing)
+              PageAction(
+                  label: 'Prix spéciaux',
+                  icon: Icons.sell_outlined,
+                  onPressed: () => openClientPricing(context, widget.api, _p.id, _p.name)),
+            if (_isCustomer && _canMessage)
+              PageAction(
+                  label: 'Envoyer un message',
+                  icon: Icons.chat_outlined,
+                  onPressed: _message),
+            if (_isCustomer && crmEdit(widget.api))
+              PageAction(
+                  label: 'Noter une activité',
+                  icon: Icons.edit_note_rounded,
+                  onPressed: _activity),
             if (_isSupplier)
               PageAction(
                   label: 'Payer',
@@ -668,14 +881,9 @@ class _PartnerDetailPageState extends State<PartnerDetailPage> {
         ),
       ],
       body: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        _balanceSection(),
-        if (_isCustomer && _loyalty != null && (_loyalty!.enabled || _loyalty!.balance != 0))
-          _loyaltySection(),
-        _contactSection(),
-        _openItemsSection(),
-        _docsSection(),
-        if (_isCustomer && (_plans.isNotEmpty || _p.balance > 0))
-          _plansSection(),
+        _tabBar(),
+        const SizedBox(height: 16),
+        _tabBody(),
       ]),
     );
   }
@@ -717,12 +925,40 @@ class _PartnerFormPageState extends State<PartnerFormPage> {
   Map<String, String> _err = const {};
   final _nameFocus = FocusNode();
 
+  // ---- Fiche distribution / CRM ----
+  late final _email = TextEditingController(text: widget.existing?.email ?? '');
+  late final _whatsapp = TextEditingController(text: widget.existing?.whatsapp ?? '');
+  late final _website = TextEditingController(text: widget.existing?.website ?? '');
+  late final _commune = TextEditingController(text: widget.existing?.commune ?? '');
+  late final _hours = TextEditingController(text: widget.existing?.openingHours ?? '');
+  late final _license = TextEditingController(text: widget.existing?.licenseNo ?? '');
+  late final _gps = TextEditingController(
+      text: widget.existing?.latitude != null && widget.existing?.longitude != null
+          ? '${widget.existing!.latitude}, ${widget.existing!.longitude}'
+          : '');
+  late final _terms = TextEditingController(
+      text: widget.existing?.paymentTermsDays == null ? '' : '${widget.existing!.paymentTermsDays}');
+  late String _clientType = widget.existing?.clientType ?? 'supermarket';
+  late String _crmStatus = widget.existing?.crmStatus ?? 'active';
+  late String _source = widget.existing?.source ?? 'manual';
+  late String? _wilaya = (widget.existing?.wilaya ?? '').isEmpty ? null : widget.existing!.wilaya;
+  late String? _repId = widget.existing?.repUserId;
+  late String? _routeId = widget.existing?.routeId;
+  List<CrmUser> _users = const [];
+  List<CrmRoute> _routes = const [];
+
   @override
   void initState() {
     super.initState();
     widget.api.customerGroups().then((g) {
       if (mounted) setState(() => _groups = g);
     }).catchError((_) {});
+    CrmDirectory.users(widget.api).then((u) {
+      if (mounted) setState(() => _users = u);
+    }).catchError((_) {});
+    CrmDirectory.routes(widget.api).then((r) {
+      if (mounted) setState(() => _routes = r);
+    });
     // The page frame autofocuses for Échap: put the cursor in « Nom ».
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && widget.existing == null) _nameFocus.requestFocus();
@@ -731,7 +967,10 @@ class _PartnerFormPageState extends State<PartnerFormPage> {
 
   @override
   void dispose() {
-    for (final c in [_name, _phone, _address, _nif, _nis, _rc, _ai, _notes, _creditLimit]) {
+    for (final c in [
+      _name, _phone, _address, _nif, _nis, _rc, _ai, _notes, _creditLimit,
+      _email, _whatsapp, _website, _commune, _hours, _license, _gps, _terms,
+    ]) {
       c.dispose();
     }
     _nameFocus.dispose();
@@ -748,13 +987,42 @@ class _PartnerFormPageState extends State<PartnerFormPage> {
     }
     final credit = _creditLimit.text.trim().isEmpty ? 0 : parseDA(_creditLimit.text);
     if (credit == null || credit < 0) e['credit'] = 'Montant invalide.';
+    final email = _email.text.trim();
+    if (email.isNotEmpty && !RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
+      e['email'] = 'Adresse e-mail invalide.';
+    }
+    final gps = parseGps(_gps.text);
+    if (_gps.text.trim().isNotEmpty && gps == null) {
+      e['gps'] = 'Écrivez « latitude, longitude », ex. 36.7525, 3.0420.';
+    }
+    final termsText = _terms.text.trim();
+    final terms = termsText.isEmpty ? -1 : int.tryParse(termsText);
+    if (terms == null || terms < -1 || terms > 3650) e['terms'] = 'Nombre de jours invalide.';
     setState(() => _err = e);
     if (e.isNotEmpty) return;
     setState(() => _busy = true);
     String? v(TextEditingController c) =>
         c.text.trim().isEmpty ? null : c.text.trim();
+    final isClient = _kind != 'supplier';
     try {
       final saved = await widget.api.savePartner({
+        'email': v(_email),
+        'whatsapp': _whatsapp.text.trim(),
+        'website': _website.text.trim(),
+        'wilaya': _wilaya ?? '',
+        'commune': _commune.text.trim(),
+        'opening_hours': _hours.text.trim(),
+        'license_no': _license.text.trim(),
+        if (gps != null) 'latitude': gps.$1,
+        if (gps != null) 'longitude': gps.$2,
+        if (isClient) ...{
+          'client_type': _clientType,
+          'crm_status': _crmStatus,
+          'source': _source,
+          'rep_user_id': _repId ?? '',
+          'route_id': _routeId ?? '',
+          'payment_terms_days': terms,
+        },
         'kind': _kind,
         'name': _name.text.trim(),
         'phone': v(_phone),
@@ -787,7 +1055,11 @@ class _PartnerFormPageState extends State<PartnerFormPage> {
                 ? 'name'
                 : m.contains('nif')
                     ? 'nif'
-                    : 'form': ex.message
+                    : m.contains('latitude') || m.contains('longitude')
+                        ? 'gps'
+                        : m.contains('délai')
+                            ? 'terms'
+                            : 'form': ex.message
           });
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -875,8 +1147,175 @@ class _PartnerFormPageState extends State<PartnerFormPage> {
                 helper: 'Ex. 0550 12 34 56',
                 keyboard: TextInputType.phone,
                 onSubmitted: _save),
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Expanded(
+                  child: FormFieldBlock(
+                      label: 'WhatsApp',
+                      controller: _whatsapp,
+                      helper: 'Vide = même numéro que le téléphone',
+                      keyboard: TextInputType.phone,
+                      onSubmitted: _save)),
+              const SizedBox(width: 14),
+              Expanded(
+                  child: FormFieldBlock(
+                      label: 'E-mail',
+                      controller: _email,
+                      error: _err['email'],
+                      keyboard: TextInputType.emailAddress,
+                      onSubmitted: _save)),
+            ]),
             FormFieldBlock(
-                label: 'Adresse', controller: _address, onSubmitted: _save),
+                label: 'Site web', controller: _website, hint: 'www.exemple.dz', onSubmitted: _save),
+          ]),
+        ),
+        if (_kind != 'supplier')
+          PageSection(
+            title: 'Relation client',
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(
+                  child: DropdownBlock<String>(
+                    label: 'Type de client',
+                    value: _clientType,
+                    options: [for (final e in clientTypeLabels.entries) (e.key, e.value)],
+                    onChanged: (v) => setState(() => _clientType = v ?? 'other'),
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: DropdownBlock<String>(
+                    label: 'Origine du client',
+                    value: _source,
+                    options: [for (final e in partnerSourceLabels.entries) (e.key, e.value)],
+                    onChanged: (v) => setState(() => _source = v ?? 'manual'),
+                  ),
+                ),
+              ]),
+              Text('Statut', style: T.label),
+              const SizedBox(height: 6),
+              ChoiceRow<String>(
+                options: [for (final e in crmStatusLabels.entries) (e.key, e.value)],
+                value: _crmStatus,
+                onSelect: (v) => setState(() => _crmStatus = v),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                  _crmStatus == 'blocked'
+                      ? 'Bloqué : ses commandes demandent une autorisation à la validation.'
+                      : _crmStatus == 'prospect'
+                          ? 'Prospect : pas encore client, à démarcher.'
+                          : _crmStatus == 'dormant'
+                              ? 'Inactif : n’achète plus, à relancer.'
+                              : 'Actif : achète régulièrement.',
+                  style: T.small),
+              const SizedBox(height: 14),
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(
+                  child: DropdownBlock<String>(
+                    label: 'Commercial',
+                    value: _repId,
+                    noneLabel: 'Aucun',
+                    options: [
+                      for (final u in _users) (u.id, u.name),
+                      if (_repId != null && !_users.any((u) => u.id == _repId))
+                        (_repId!, widget.existing?.repName ?? 'Commercial actuel'),
+                    ],
+                    onChanged: (v) => setState(() => _repId = v),
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: DropdownBlock<String>(
+                    label: 'Tournée de livraison',
+                    value: _routeId,
+                    noneLabel: 'Aucune',
+                    helper: _routes.isEmpty ? 'Les tournées se créent dans Livraisons.' : null,
+                    options: [
+                      for (final r in _routes) if (r.active || r.id == _routeId) (r.id, r.name),
+                      if (_routeId != null && !_routes.any((r) => r.id == _routeId))
+                        (_routeId!, widget.existing?.routeName ?? 'Tournée actuelle'),
+                    ],
+                    onChanged: (v) => setState(() => _routeId = v),
+                  ),
+                ),
+              ]),
+              SizedBox(
+                width: 380,
+                child: FormFieldBlock(
+                  label: 'Délai de paiement (jours)',
+                  controller: _terms,
+                  error: _err['terms'],
+                  keyboard: TextInputType.number,
+                  helper: 'Vide = délai du magasin. 0 = paiement comptant.',
+                  onSubmitted: _save,
+                ),
+              ),
+            ]),
+          ),
+        PageSection(
+          title: 'Adresse et localisation',
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            FormFieldBlock(label: 'Adresse', controller: _address, onSubmitted: _save),
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Expanded(
+                child: DropdownBlock<String>(
+                  label: 'Wilaya',
+                  value: _wilaya,
+                  noneLabel: 'Non renseignée',
+                  options: [
+                    for (final (c, n) in wilayas) (n, '$c · $n'),
+                    if (_wilaya != null && !wilayas.any((w) => w.$2 == _wilaya)) (_wilaya!, _wilaya!),
+                  ],
+                  onChanged: (v) => setState(() => _wilaya = v),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(child: FormFieldBlock(label: 'Commune', controller: _commune, onSubmitted: _save)),
+            ]),
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Expanded(
+                child: FormFieldBlock(
+                  label: 'Position GPS',
+                  controller: _gps,
+                  error: _err['gps'],
+                  hint: '36.7525, 3.0420',
+                  helper: 'Dans Google Maps : clic droit sur le lieu → copiez les chiffres et collez-les ici.',
+                  onSubmitted: _save,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Padding(
+                padding: const EdgeInsets.only(top: 22),
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(minimumSize: const Size(0, 44)),
+                  onPressed: () {
+                    final g = parseGps(_gps.text);
+                    if (g == null) {
+                      setState(() => _err = {..._err, 'gps': 'Position GPS absente ou invalide.'});
+                    } else {
+                      openMaps(context, g.$1, g.$2);
+                    }
+                  },
+                  icon: const Icon(Icons.map_outlined, size: 18),
+                  label: const Text('Ouvrir dans Maps'),
+                ),
+              ),
+            ]),
+          ]),
+        ),
+        PageSection(
+          title: 'Horaires et agrément',
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            FormFieldBlock(
+                label: 'Horaires d’ouverture',
+                controller: _hours,
+                hint: 'Ex. 8h–20h, fermé le vendredi',
+                onSubmitted: _save),
+            FormFieldBlock(
+                label: 'N° d’agrément / licence',
+                controller: _license,
+                helper: 'N° d’agrément ou d’autorisation, si le client en a un.',
+                onSubmitted: _save),
           ]),
         ),
         PageSection(

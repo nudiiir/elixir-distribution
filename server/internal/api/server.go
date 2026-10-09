@@ -162,6 +162,8 @@ func New(db *sql.DB, dbPath string, eng *analytics.Engine) http.Handler {
 		s.routesUsersUX(r)
 		s.routesSettingsUX(r)
 		s.routesConfigUX(r)
+		// Distribution : commandes clients, tarifs, livraisons, CRM, messages.
+		s.routesDistribution(r)
 
 		r.Get("/cloud/status", s.cloudStatus)
 		r.Post("/cloud/connect", s.cloudConnect)

@@ -68,3 +68,33 @@ Number format: `{PREFIX}-{YYYY}-{NNNNNN}` assigned **at posting** from `sequence
 One code path (`internal/domain/posting.go`) does all of the above: validate draft → begin transaction → assign number → write stock_ledger + update stock_levels → write partner_ledger → set `status='posted'`, `posted_at`, `posted_by` → commit. **No other code writes ledger rows.** Modules (P1 delivery COD ledger included) reuse it.
 
 Deferred from P0 posting (tables ready, logic later): INVENTORY_COUNT delta computation, payment *allocation* against specific invoices (currently balance-level), multi-payment on one document.
+
+`domain.PostTx` / `domain.VoidTx` are the same engine inside a transaction owned by the caller: customer orders post their BL, invoice and payments atomically with the order's status change.
+
+## Distribution (migrations 0016–0017)
+
+Customer orders are **not documents** (the `documents.doc_type` CHECK is unchanged): they live in their own tables and never touch a ledger themselves. What they generate — `DELIVERY_NOTE`, `SALE_INVOICE` (ref = the BL, so stock is not moved twice), `PAYMENT_IN` — goes through the posting engine. API contract: `docs/API_DISTRIBUTION.md`.
+
+| Table | Role |
+|---|---|
+| `customer_orders` | order header: number `CC-YYYY-NNNNNN` (sequence key `CUSTOMER_ORDER`), partner, source (manual/phone/whatsapp/rep/web/portal), `external_ref` (storefront id, unique per source), status new→validated→preparing→ready→shipping→delivered→invoiced / cancelled, flags `is_partial`, `has_backorder`, `credit_override`, `web_status_dirty`, warehouse, rep, route, priority, `payment_mode` (account/cod), delivery address/wilaya/commune, totals, shipping fee / global discount, links `delivery_note_id`, `invoice_id`, `payment_id` |
+| `customer_order_lines` | product, `qty_ordered/validated/prepared/delivered/backorder/free_milli`, unit_price HT, discount, VAT, line totals, `price_source`, promo rule, substitution and backorder links |
+| `customer_order_events` | status history and actions (from, to, user, note, at) |
+| `customer_order_picks` | preparation: line → lot, qty (paid + free), barcode, who |
+| `customer_prices` | special price HT per partner **or** customer group × product, min qty tier, date range |
+| `promo_rules` | free goods (« N + M », UG) or quantity discount; scope product/category/brand/all; audience all/group/partner; channel all/desk/web; dates |
+| `product_quotas` | max qty per customer per day/week/month (partner NULL = every customer) |
+| `vehicles`, `delivery_routes` | fleet; route templates (wilayas, communes, weekdays, default driver/vehicle) |
+| `delivery_runs`, `run_stops` | a day's run (planned/out/closed/cancelled, cash expected/collected/difference) and its stops (pending/delivered/partial/failed, COD expected/collected, payment document) |
+| `partner_contacts`, `tags`, `partner_tags`, `partner_files` | CRM: contacts (one primary), coloured tags, licence/registre scans (BLOB ≤ 5 MB) |
+| `crm_activities` | calls, visits (GPS), notes, WhatsApp/SMS/e-mail, meetings — by user, optional order/document |
+| `crm_tasks` | to-dos (call/visit/collect_payment/follow_up/other), assignee, due, status open/done/cancelled, source manual/auto_* with idempotency `auto_key` |
+| `crm_segments` | saved segment rules (JSON); built-in segments live in code |
+| `rep_targets` | monthly targets per sales rep (sales, orders, visits, new customers, collections) |
+| `message_templates`, `message_log` | WhatsApp/SMS/e-mail templates with `{{placeholders}}` (French defaults seeded) and what was prepared/sent |
+
+New `partners` columns: `client_type`, `crm_status`, `rep_user_id`, `route_id`, `wilaya`, `commune`, `latitude`, `longitude`, `opening_hours`, `license_no`, `whatsapp`, `website`, `source`, `payment_terms_days`.
+
+View `v_customer_order_lines` feeds the analytics source `customer_orders`. Role « Gérant » receives the new permission keys (`orders.*`, `deliveries.*`, `crm.*`, `pricing.*`).
+
+**Availability** (« disponible ») = `stock_levels.qty_milli` − Σ (validated + free) of other orders `validated|preparing|ready` without a BL. Order validation caps lines to it (remainder → backorder), enforces quotas, and checks the account (balance + open orders + this order vs credit limit, overdue invoices, blocked status) — overridable with `orders.override_credit`.

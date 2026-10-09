@@ -16,7 +16,7 @@ func (s *Server) routesShellUX(r chi.Router) {
 }
 
 type alertItem struct {
-	Kind     string   `json:"kind"`     // rupture | below_min | lot_expired | lot_expiring | overdue_invoice | overdue_installment
+	Kind     string   `json:"kind"`     // rupture | below_min | lot_expired | lot_expiring | overdue_invoice | overdue_installment | orders_new | tasks_overdue
 	Severity string   `json:"severity"` // critical | warning
 	Title    string   `json:"title"`
 	Count    int      `json:"count"`
@@ -98,6 +98,18 @@ func (s *Server) alerts(w http.ResponseWriter, r *http.Request) {
 			 JOIN partners pa ON pa.id = ip.partner_id
 			 WHERE d.paid < d.amount AND d.due_date < ?
 			 ORDER BY d.due_date`, today)
+	}
+	// Distribution: orders waiting for validation, overdue CRM tasks.
+	if hasRight(authFrom(r), "orders.view") {
+		sw, sa := orderScopeWhere(authFrom(r))
+		collect("orders_new", "warning", "%d commande(s) client à valider", "orders",
+			`SELECT o.number || ' — ' || p.name FROM customer_orders o JOIN partners p ON p.id = o.partner_id
+			 WHERE o.status = 'new'`+sw+` ORDER BY o.priority DESC, o.created_at`, sa...)
+	}
+	if hasRight(authFrom(r), "crm.view") {
+		collect("tasks_overdue", "warning", "%d tâche(s) en retard", "crm",
+			`SELECT title FROM crm_tasks WHERE status = 'open' AND assignee_id = ?
+			   AND due_at IS NOT NULL AND substr(due_at,1,10) < ? ORDER BY due_at`, uidOf(r), today)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }

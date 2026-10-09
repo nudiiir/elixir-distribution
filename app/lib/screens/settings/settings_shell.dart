@@ -10,6 +10,7 @@ import 'backups_section.dart';
 import 'cloud_section.dart';
 import 'company_section.dart';
 import 'customers_section.dart';
+import '../crm/messages_settings.dart';
 import 'documents_section.dart';
 import 'hardware_section.dart';
 import 'maintenance_section.dart';
@@ -98,6 +99,11 @@ final settingsEntries = <SettingsEntry>[
       subtitle: 'Groupes de clients, crédit, points, cartes cadeaux',
       keywords: 'client groupe tarif remise crédit plafond fidélité points carte cadeau',
       builder: (c) => CustomersSection(ctx: c)),
+  SettingsEntry(
+      id: 'messages', group: 'Ventes et documents', title: 'Messages', icon: Icons.chat_outlined,
+      subtitle: 'Modèles WhatsApp, SMS, e-mail ; envoi des e-mails',
+      keywords: 'message whatsapp sms email e-mail modèle smtp relance suivi commande',
+      builder: (c) => MessagesSection(ctx: c)),
   // ---- Produits
   SettingsEntry(
       id: 'products', group: 'Produits', title: 'Produits et stock', icon: Icons.inventory_2_outlined,

@@ -63,7 +63,16 @@ class WebStore {
         publishedAt = j['published_at'] as String?,
         productCount = (j['product_count'] as num?)?.toInt() ?? 0,
         visibleCount = (j['visible_count'] as num?)?.toInt() ?? 0,
-        pendingOrders = (j['pending_orders'] as num?)?.toInt() ?? 0;
+        pendingOrders = (j['pending_orders'] as num?)?.toInt() ?? 0,
+        // stock-web v3 (DESKTOP_API.md §2)
+        status = (j['status'] as String?) ?? 'active',
+        statusMessage = j['status_message'] as String?,
+        publicUrl = (j['public_url'] as String?) ?? (j['url'] as String?) ?? '',
+        previewUrl = j['preview_url'] as String?,
+        customDomain = j['custom_domain'] as String?,
+        domainStatus = (j['domain_status'] as String?) ?? 'none',
+        pendingQuotes = (j['pending_quotes'] as num?)?.toInt() ?? 0,
+        openAlerts = (j['open_alerts'] as num?)?.toInt() ?? 0;
 
   final String slug;
   final String name;
@@ -76,6 +85,14 @@ class WebStore {
   final int productCount;
   final int visibleCount;
   final int pendingOrders;
+  final String status; // active | paused | suspended
+  final String? statusMessage;
+  final String publicUrl; // custom domain if verified, else url
+  final String? previewUrl; // relative to webUrl
+  final String? customDomain;
+  final String domainStatus; // none | pending | verified
+  final int pendingQuotes;
+  final int openAlerts;
 }
 
 /// One published product with its merchant flags.
@@ -89,7 +106,10 @@ class WebStoreProduct {
         qtyMilli = (j['qty_milli'] as num?)?.toInt() ?? 0,
         visible = j['visible'] == true,
         hidePrice = j['hide_price'] == true,
-        featured = j['featured'] == true;
+        featured = j['featured'] == true,
+        brand = j['brand'] as String?,
+        packSize = j['pack_size'] as String?,
+        imageCount = (j['image_count'] as num?)?.toInt() ?? 0;
 
   final String productId;
   final String name;
@@ -97,6 +117,9 @@ class WebStoreProduct {
   final int priceCentimes;
   final int? promoPriceCentimes;
   final int qtyMilli;
+  final String? brand;
+  final String? packSize;
+  final int imageCount; // photos on the site
   bool visible;
   bool hidePrice;
   bool featured;

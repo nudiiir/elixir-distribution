@@ -1,7 +1,7 @@
 name: elixir_app
 description: "Elixir - gestion commerciale pour le commerce algerien."
 publish_to: 'none'
-version: 0.3.0+9
+version: 0.4.0+10
 
 environment:
   sdk: ^3.12.2
@@ -19,6 +19,11 @@ dependencies:
   window_manager: ^0.4.3
   win32: ^5.5.4
   ffi: ^2.1.3
+  # Boutique en ligne : redimensionnement JPEG des photos, empreinte SHA-256,
+  # ouverture du site dans le navigateur.
+  image: ^4.5.4
+  crypto: ^3.0.6
+  url_launcher: ^6.3.1
 
 dev_dependencies:
   flutter_test:

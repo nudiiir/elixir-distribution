@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -36,7 +35,25 @@ type Partner struct {
 	GroupPriceLevel  *string `json:"group_price_level"`  // retail | wholesale, nil = no group
 	GroupDiscountPct int64   `json:"group_discount_pct"` // pct x100, 0 = none
 	CreatedAt        string  `json:"created_at"`
-	UpdatedAt      string  `json:"updated_at"`
+	UpdatedAt        string  `json:"updated_at"`
+	// Distribution / CRM (0016).
+	ClientType       string   `json:"client_type"` // supermarket|restaurant|hotel|wholesaler|retailer|individual|other
+	CRMStatus        string   `json:"crm_status"`  // prospect|active|dormant|blocked
+	RepUserID        *string  `json:"rep_user_id"`
+	RepName          string   `json:"rep_name"`
+	RouteID          *string  `json:"route_id"`
+	RouteName        string   `json:"route_name"`
+	Wilaya           string   `json:"wilaya"`
+	Commune          string   `json:"commune"`
+	Latitude         *float64 `json:"latitude"`
+	Longitude        *float64 `json:"longitude"`
+	OpeningHours     string   `json:"opening_hours"`
+	LicenseNo        string   `json:"license_no"`
+	Whatsapp         string   `json:"whatsapp"`
+	Website          string   `json:"website"`
+	Source           string   `json:"source"` // manual|web|import|rep|portal
+	PaymentTermsDays *int64   `json:"payment_terms_days"`
+	TagIDs           []string `json:"tag_ids"`
 }
 
 const partnerCols = `p.id, p.kind, p.name, p.phone, p.email, p.address, p.nif, p.nis, p.rc, p.ai,
@@ -45,17 +62,28 @@ const partnerCols = `p.id, p.kind, p.name, p.phone, p.email, p.address, p.nif, p
 	p.group_id, (SELECT g.name FROM customer_groups g WHERE g.id = p.group_id),
 	(SELECT g.price_level FROM customer_groups g WHERE g.id = p.group_id),
 	COALESCE((SELECT g.discount_pct FROM customer_groups g WHERE g.id = p.group_id), 0),
-	p.created_at, p.updated_at`
+	p.created_at, p.updated_at,
+	p.client_type, p.crm_status, p.rep_user_id,
+	COALESCE((SELECT COALESCE(NULLIF(u.full_name,''), u.username) FROM users u WHERE u.id = p.rep_user_id), ''),
+	p.route_id, COALESCE((SELECT rt.name FROM delivery_routes rt WHERE rt.id = p.route_id), ''),
+	p.wilaya, p.commune, p.latitude, p.longitude, p.opening_hours, p.license_no, p.whatsapp, p.website,
+	p.source, p.payment_terms_days,
+	COALESCE((SELECT group_concat(pt.tag_id) FROM partner_tags pt WHERE pt.partner_id = p.id), '')`
 
 func scanPartner(row interface{ Scan(...any) error }) (Partner, error) {
 	var p Partner
 	var active int
+	var tags string
 	err := row.Scan(&p.ID, &p.Kind, &p.Name, &p.Phone, &p.Email, &p.Address,
 		&p.NIF, &p.NIS, &p.RC, &p.AI, &p.CreditLimit, &p.Notes, &p.PriceLevel,
 		&p.MinShelfDays, &p.OverReceiptPct, &active,
 		&p.Balance, &p.GroupID, &p.GroupName, &p.GroupPriceLevel, &p.GroupDiscountPct,
-		&p.CreatedAt, &p.UpdatedAt)
+		&p.CreatedAt, &p.UpdatedAt,
+		&p.ClientType, &p.CRMStatus, &p.RepUserID, &p.RepName, &p.RouteID, &p.RouteName,
+		&p.Wilaya, &p.Commune, &p.Latitude, &p.Longitude, &p.OpeningHours, &p.LicenseNo,
+		&p.Whatsapp, &p.Website, &p.Source, &p.PaymentTermsDays, &tags)
 	p.Active = active == 1
+	p.TagIDs = splitCSV(tags)
 	return p, err
 }
 
@@ -82,6 +110,22 @@ func (s *Server) listPartners(w http.ResponseWriter, r *http.Request) {
 	if g := r.URL.Query().Get("group_id"); g != "" {
 		where += " AND p.group_id = ?"
 		args = append(args, g)
+	}
+	// Distribution / CRM filters.
+	for param, col := range map[string]string{"client_type": "p.client_type", "crm_status": "p.crm_status",
+		"rep_user_id": "p.rep_user_id", "route_id": "p.route_id", "wilaya": "p.wilaya", "source": "p.source"} {
+		if v := r.URL.Query().Get(param); v != "" {
+			where += " AND " + col + " = ?"
+			args = append(args, v)
+		}
+	}
+	if t := r.URL.Query().Get("tag_id"); t != "" {
+		where += " AND p.id IN (SELECT partner_id FROM partner_tags WHERE tag_id = ?)"
+		args = append(args, t)
+	}
+	if sw, sa := partnerScopeWhere(authFrom(r), "p"); sw != "" {
+		where += sw
+		args = append(args, sa...)
 	}
 	args = append(args, limit, offset)
 
@@ -122,6 +166,23 @@ type partnerInput struct {
 	Active         *bool   `json:"active"`
 	// GroupID: absent = unchanged (update) / none (create); "" = leave the group.
 	GroupID *string `json:"group_id"`
+	// Distribution / CRM (0016). Absent = unchanged (update) / default (create).
+	// rep_user_id / route_id: "" = none. payment_terms_days: -1 = shop default.
+	ClientType       *string   `json:"client_type"`
+	CRMStatus        *string   `json:"crm_status"`
+	RepUserID        *string   `json:"rep_user_id"`
+	RouteID          *string   `json:"route_id"`
+	Wilaya           *string   `json:"wilaya"`
+	Commune          *string   `json:"commune"`
+	Latitude         *float64  `json:"latitude"`
+	Longitude        *float64  `json:"longitude"`
+	OpeningHours     *string   `json:"opening_hours"`
+	LicenseNo        *string   `json:"license_no"`
+	Whatsapp         *string   `json:"whatsapp"`
+	Website          *string   `json:"website"`
+	Source           *string   `json:"source"`
+	PaymentTermsDays *int64    `json:"payment_terms_days"`
+	TagIDs           *[]string `json:"tag_ids"`
 }
 
 func orInt(v *int64, def int64) int64 {
@@ -143,10 +204,10 @@ func (in *partnerInput) validate() string {
 	}
 	switch in.Kind {
 	case "customer", "supplier", "both":
-		return ""
 	default:
 		return "kind must be customer, supplier or both"
 	}
+	return in.validateCRM()
 }
 
 func (s *Server) createPartner(w http.ResponseWriter, r *http.Request) {
@@ -186,6 +247,10 @@ func (s *Server) createPartner(w http.ResponseWriter, r *http.Request) {
 		b2i(active), groupID, now, now)
 	if err != nil {
 		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	if msg := s.applyPartnerCRM(id, &in, true); msg != "" {
+		writeErr(w, http.StatusBadRequest, msg)
 		return
 	}
 	s.getPartnerByID(w, id)
@@ -254,6 +319,10 @@ func (s *Server) updatePartner(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if msg := s.applyPartnerCRM(id, &in, false); msg != "" {
+		writeErr(w, http.StatusBadRequest, msg)
+		return
+	}
 	s.getPartnerByID(w, id)
 }
 
@@ -284,16 +353,7 @@ func (s *Server) partnerBalance(w http.ResponseWriter, r *http.Request) {
 }
 
 // openItem is one invoice-like ledger entry with what is still open on it.
-type openItem struct {
-	DocumentID  string `json:"document_id"`
-	Number      string `json:"number"`
-	DocDate     string `json:"doc_date"`
-	DueDate     string `json:"due_date"`
-	Total       int64  `json:"total"`
-	Outstanding int64  `json:"outstanding"`
-	AgeDays     int    `json:"age_days"`
-	Overdue     bool   `json:"overdue"`
-}
+type openItem = domain.OpenItem
 
 // partnerSign: +1 reads the ledger as a receivable (customer), -1 as a
 // payable (supplier).
@@ -305,66 +365,9 @@ func partnerSign(kind string) int64 {
 }
 
 // ledgerFIFO matches payments and credit notes to the oldest invoices first
-// (FIFO) and returns EVERY invoice entry with what is still open on it, plus
-// the credit left unallocated. A settlement recorded before any open invoice
-// (prepayment) is carried and consumed by the next invoices. Cancelled
-// documents (and their void rows) are ignored entirely. The ledger itself
-// stays a plain running balance; this is the derived aging view.
+// (FIFO); see domain.LedgerFIFO.
 func ledgerFIFO(db *sql.DB, partnerID string, sgn int64) ([]*openItem, int64, error) {
-	rows, err := db.Query(`SELECT pl.amount, COALESCE(pl.document_id,''), COALESCE(d.number,''),
-			COALESCE(d.doc_date,''), COALESCE(d.due_date,'')
-		FROM partner_ledger pl LEFT JOIN documents d ON d.id = pl.document_id
-		WHERE pl.partner_id = ? AND COALESCE(d.status,'posted') <> 'cancelled'
-		ORDER BY pl.created_at, pl.id`, partnerID)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer rows.Close()
-	var items []*openItem
-	var credit int64 // settlements not (yet) allocated to an invoice
-	for rows.Next() {
-		var amt int64
-		var doc, num, date, due string
-		if err := rows.Scan(&amt, &doc, &num, &date, &due); err != nil {
-			return nil, 0, err
-		}
-		amt *= sgn
-		if amt > 0 {
-			it := &openItem{DocumentID: doc, Number: num, DocDate: date,
-				DueDate: due, Total: amt, Outstanding: amt}
-			if credit > 0 {
-				take := min(credit, amt)
-				it.Outstanding -= take
-				credit -= take
-			}
-			items = append(items, it)
-			continue
-		}
-		settle := -amt
-		for _, it := range items {
-			if settle == 0 {
-				break
-			}
-			take := min(it.Outstanding, settle)
-			it.Outstanding -= take
-			settle -= take
-		}
-		credit += settle
-	}
-	if err := rows.Err(); err != nil {
-		return nil, 0, err
-	}
-	today := time.Now()
-	for _, it := range items {
-		if t, err := time.Parse("2006-01-02", it.DocDate); err == nil {
-			it.AgeDays = int(today.Sub(t).Hours() / 24)
-		}
-		if t, err := time.Parse("2006-01-02", it.DueDate); err == nil &&
-			it.Outstanding > 0 && today.After(t.AddDate(0, 0, 1)) {
-			it.Overdue = true
-		}
-	}
-	return items, credit, nil
+	return domain.LedgerFIFO(db, partnerID, sgn)
 }
 
 // settleDocuments fills paid / remaining / payment_status on posted

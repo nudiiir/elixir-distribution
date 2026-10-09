@@ -30,6 +30,14 @@ const permModules = <PermModule>[
   PermModule('stock', 'Stock', ['view', 'create', 'edit', 'cancel', 'validate', 'export', 'print']),
   PermModule('products', 'Produits', ['view', 'create', 'edit', 'export', 'print']),
   PermModule('partners', 'Clients et fournisseurs', ['view', 'create', 'edit', 'export', 'print']),
+  // crm.view : tâches, activités, segments, objectifs, modèles de messages ;
+  // crm.edit : les modifier. crm.all_customers est un droit particulier.
+  PermModule('crm', 'Relation clients', ['view', 'edit']),
+  // orders.manage / orders.override_credit / deliveries.manage : droits
+  // particuliers ci-dessous (pas de colonne « Gérer » dans la grille).
+  PermModule('orders', 'Commandes clients', ['view', 'validate']),
+  PermModule('deliveries', 'Livraisons', ['view']),
+  PermModule('pricing', 'Tarifs et offres', ['view', 'edit']),
   PermModule('reports', 'Rapports', ['view', 'export', 'print']),
   PermModule('dashboard', 'Tableau de bord', ['view']),
   PermModule('assistant', 'Assistant', ['view']),
@@ -66,6 +74,14 @@ const specialRights = <SpecialRight>[
   SpecialRight('stock_adjust', 'Ajuster le stock', 'Peut corriger le stock et faire un inventaire.'),
   SpecialRight('import_data', 'Importer', 'Peut importer des produits, clients ou fournisseurs.'),
   SpecialRight('export_data', 'Exporter', 'Peut exporter des listes et des données.'),
+  SpecialRight('crm.all_customers', 'Voir tous les clients',
+      'Un commercial limité à « ses propres documents » voit quand même tous les clients, pas seulement les siens.'),
+  SpecialRight('orders.manage', 'Gérer les commandes clients',
+      'Peut saisir, modifier, préparer, livrer, facturer et annuler les commandes, et importer les commandes web.'),
+  SpecialRight('orders.override_credit', 'Valider malgré le compte du client',
+      'Peut valider une commande même si le client dépasse son plafond, a des factures en retard ou est bloqué.'),
+  SpecialRight('deliveries.manage', 'Gérer les livraisons',
+      'Peut planifier les tournées, saisir les résultats de livraison et clôturer la caisse des chauffeurs.'),
 ];
 
 const scopeLabels = <String, String>{

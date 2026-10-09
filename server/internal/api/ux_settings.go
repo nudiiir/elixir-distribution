@@ -235,6 +235,9 @@ var resetTxTables = []string{
 	"stock_ledger", "stock_levels", "partner_ledger", "caisse_sessions",
 	"gift_cards", "gift_card_uses", "installment_plans", "installment_dues",
 	"lots", "product_units", "repairs", "sequences",
+	// Distribution (0016/0017): orders and their deliveries are transactions.
+	"customer_orders", "customer_order_lines", "customer_order_events", "customer_order_picks",
+	"delivery_runs", "run_stops", "message_log",
 }
 
 var resetMasterTables = []string{

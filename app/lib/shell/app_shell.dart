@@ -12,6 +12,11 @@ import '../screens/analytics_screen.dart';
 import '../screens/designer_screen.dart';
 import '../screens/inbox_screen.dart';
 import '../screens/partners_screen.dart';
+import '../screens/crm/crm_screen.dart';
+import '../screens/deliveries/deliveries_screen.dart';
+import '../screens/orders/orders_screen.dart';
+import '../screens/pricing/pricing_screen.dart';
+import '../api/web_orders_sync.dart' show webOrdersHeartbeat;
 import '../screens/pos_screen.dart';
 import '../screens/products_screen.dart';
 import '../screens/purchases_screen.dart';
@@ -89,9 +94,32 @@ const _partnerSubs = [
   ('Nouveau client', 'new:customer', null),
   ('Nouveau fournisseur', 'new:supplier', null),
 ];
+const _crmSubs = [
+  ('Mes tâches', 'tab:tasks', null),
+  ('Segments', 'tab:segments', null),
+  ('Commerciaux', 'tab:reps', null),
+  ('Par wilaya', 'tab:wilayas', null),
+];
+const _orderSubs = [
+  ('Tableau', 'board', null),
+  ('Liste', 'list', null),
+  ('Nouvelle commande', 'new', null),
+  ('Reliquats', 'backorders', null),
+];
+const _deliverySubs = [
+  ('Tournées', 'runs', null),
+  ('Planifier une tournée', 'new', null),
+  ('Tournées types', 'routes', null),
+  ('Véhicules', 'vehicles', null),
+];
+const _pricingSubs = [
+  ('Prix spéciaux', 'special', null),
+  ('Offres et UG', 'promos', null),
+  ('Quotas', 'quotas', null),
+];
 
-/// Sidebar order, in six groups. Modules not ready yet (Livraison) are not
-/// listed at all rather than shown greyed out.
+/// Sidebar order, in six groups. Modules not ready yet are not listed at
+/// all rather than shown greyed out.
 const _allModules = [
   _Module('dashboard', Icons.grid_view_rounded, 'Tableau de bord', 'Accueil'),
   _Module('explorer', Icons.insights_rounded, 'Explorateur', 'Accueil',
@@ -99,6 +127,10 @@ const _allModules = [
   _Module('assistant', Icons.auto_awesome_outlined, 'Assistant', 'Accueil'),
   _Module('pos', Icons.point_of_sale_rounded, 'Caisse', 'Vente'),
   _Module('sales', Icons.receipt_long_outlined, 'Ventes', 'Vente', subs: _salesSubs),
+  _Module('orders', Icons.shopping_basket_outlined, 'Commandes clients', 'Vente',
+      subs: _orderSubs),
+  _Module('deliveries', Icons.route_outlined, 'Livraisons', 'Vente', subs: _deliverySubs),
+  _Module('pricing', Icons.sell_outlined, 'Tarifs et offres', 'Vente', subs: _pricingSubs),
   _Module('webstore', Icons.storefront_outlined, 'Boutique en ligne', 'Vente',
       feature: 'feature_webstore'),
   _Module('purchases', Icons.local_shipping_outlined, 'Achats', 'Achat',
@@ -110,6 +142,7 @@ const _allModules = [
   _Module('stock', Icons.inventory_2_outlined, 'Stock', 'Stock', subs: _stockSubs),
   _Module('partners', Icons.people_alt_outlined, 'Clients et fournisseurs', 'Tiers',
       subs: _partnerSubs),
+  _Module('crm', Icons.handshake_outlined, 'Relation clients', 'Tiers', subs: _crmSubs),
   _Module('reports', Icons.query_stats_rounded, 'Rapports', 'Pilotage'),
   _Module('designer', Icons.design_services_outlined, 'Modèles', 'Pilotage',
       perm: 'settings'),
@@ -224,9 +257,27 @@ class _AppShellState extends State<AppShell> {
       _webstoreTimer = Timer.periodic(
           const Duration(minutes: 5), (_) => _pushWebstoreStock());
     }
+    // Commandes web : import automatique (si activé) puis renvoi des statuts
+    // des commandes importées vers la boutique (page de suivi du client).
+    if (user.can('orders')) {
+      _webOrdersTimer = Timer.periodic(const Duration(minutes: 5), (_) => _webOrdersBeat());
+      Timer(const Duration(seconds: 20), _webOrdersBeat);
+    }
   }
 
   Timer? _webstoreTimer;
+  Timer? _webOrdersTimer;
+  bool _webOrdersRunning = false;
+
+  Future<void> _webOrdersBeat() async {
+    if (_webOrdersRunning || !mounted) return;
+    _webOrdersRunning = true;
+    try {
+      await webOrdersHeartbeat(widget.api, canManage: user.isAdmin || user.can('orders.manage'));
+    } finally {
+      _webOrdersRunning = false;
+    }
+  }
 
   Future<void> _pushWebstoreStock() async {
     try {
@@ -328,6 +379,7 @@ class _AppShellState extends State<AppShell> {
     _healthTimer?.cancel();
     _presenceTimer?.cancel();
     _webstoreTimer?.cancel();
+    _webOrdersTimer?.cancel();
     _alertsTimer?.cancel();
     AnalysisLinks.open = null;
     Features.instance.removeListener(_onFeatures);
@@ -401,6 +453,23 @@ class _AppShellState extends State<AppShell> {
     goTo(key);
     await Future<void>.delayed(Duration.zero);
     return _navKeys[key]?.currentState?.push(route);
+  }
+
+  /// Sidebar counts from the alerts (`tasks_overdue` → crm, `orders_new` → orders).
+  Map<String, int> get _sidebarBadges => {
+        for (final a in _alerts)
+          if ((a.kind == 'tasks_overdue' || a.kind == 'orders_new') && a.target.isNotEmpty) a.target: a.count,
+      };
+
+  /// Sidebar tasks that need more than the module's « voir » right.
+  static const _subPerms = {
+    'orders/new': 'orders.manage',
+    'deliveries/new': 'deliveries.manage',
+  };
+
+  bool _subAllowed(String module, String command) {
+    final p = _subPerms['$module/$command'];
+    return p == null || user.isAdmin || user.can(p);
   }
 
   bool _canOpen(String key) =>
@@ -491,12 +560,18 @@ class _AppShellState extends State<AppShell> {
         if (_canOpen('products'))
           ('Produit', Icons.category_outlined, '',
               () => goTo('products', command: 'new')),
+        if (_canOpen('orders') && (user.isAdmin || user.can('orders.manage')))
+          ('Commande client', Icons.shopping_basket_outlined, '', () => goTo('orders', command: 'new')),
+        if (_canOpen('deliveries') && (user.isAdmin || user.can('deliveries.manage')))
+          ('Tournée de livraison', Icons.route_outlined, '', () => goTo('deliveries', command: 'new')),
         if (_canOpen('partners')) ...[
           ('Client', Icons.person_add_alt_outlined, '',
               () => goTo('partners', command: 'new:customer')),
           ('Fournisseur', Icons.store_mall_directory_outlined, '',
               () => goTo('partners', command: 'new:supplier')),
         ],
+        if (_canOpen('crm') && (user.isAdmin || user.can('crm.edit')))
+          ('Tâche (relation client)', Icons.add_task_rounded, '', () => goTo('crm', command: 'new:task')),
       ];
 
   Future<void> _logout() async {
@@ -565,6 +640,11 @@ class _AppShellState extends State<AppShell> {
             searchRequest: _productsQuery,
             command: _commands['products']),
         'partners' => PartnersScreen(api: widget.api, command: _commands['partners']),
+        'orders' => OrdersScreen(api: widget.api, user: user, command: _commands['orders']),
+        'deliveries' => DeliveriesScreen(api: widget.api, user: user, command: _commands['deliveries']),
+        'pricing' => PricingScreen(api: widget.api, user: user, command: _commands['pricing']),
+        'crm' => CrmScreen(
+            api: widget.api, command: _commands['crm'], onTasksChanged: (_) => _loadAlerts()),
         'webstore' => WebstoreScreen(api: widget.api),
         'reports' => ReportsScreen(api: widget.api, session: widget.session),
         'assistant' => AssistantScreen(api: widget.api),
@@ -703,7 +783,9 @@ class _AppShellState extends State<AppShell> {
                   onSelect: (i) => goTo(_visible[i].key,
                       command: _visible[i].subs.isEmpty ? null : _visible[i].subs.first.$2),
                   onSub: (i, command) => goTo(_visible[i].key, command: command),
+                  subAllowed: _subAllowed,
                   onAssistant: () => goTo('assistant'),
+                  badges: _sidebarBadges,
                 ),
                 Expanded(
                   child: Stack(
@@ -965,7 +1047,15 @@ class _Sidebar extends StatefulWidget {
     required this.onSelect,
     required this.onSub,
     required this.onAssistant,
+    this.badges = const {},
+    this.subAllowed,
   });
+
+  /// False hides a task of a module (right missing).
+  final bool Function(String module, String command)? subAllowed;
+
+  /// Red count next to a module (tâches en retard, commandes à valider…).
+  final Map<String, int> badges;
   final List<_Module> modules;
   final bool Function(_Module) shown;
   final int index;
@@ -995,7 +1085,9 @@ class _SidebarState extends State<_Sidebar> {
     final selected = i == widget.index;
     final subs = [
       for (final s in item.subs)
-        if (s.$3 == null || Features.instance.flag(s.$3!)) s,
+        if ((s.$3 == null || Features.instance.flag(s.$3!)) &&
+            (widget.subAllowed?.call(item.key, s.$2) ?? true))
+          s,
     ];
     if (!selected || widget.collapsed || subs.isEmpty) return _moduleRow(i);
     final active = widget.activeSub[item.key] ?? subs.first.$2;
@@ -1070,6 +1162,15 @@ class _SidebarState extends State<_Sidebar> {
                         ),
                       ),
                     ),
+                    if ((widget.badges[item.key] ?? 0) > 0)
+                      Container(
+                        margin: const EdgeInsetsDirectional.only(end: 10),
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+                        decoration: BoxDecoration(color: T.danger, borderRadius: BorderRadius.circular(999)),
+                        child: Text('${widget.badges[item.key]}',
+                            style: const TextStyle(
+                                fontFamily: T.sans, fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white)),
+                      ),
                   ]),
           ),
         ]),

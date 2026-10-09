@@ -11,7 +11,8 @@ import (
 )
 
 // getSettings returns all settings as a flat {key: value} object.
-// The auth secret never leaves the server.
+// The auth secret and the SMTP password never leave the server; the latter is
+// reported as smtp_pass_set = '1' | '0'.
 func (s *Server) getSettings(w http.ResponseWriter, _ *http.Request) {
 	rows, err := s.db.Query(`SELECT key, value FROM settings WHERE key != 'auth_secret'`)
 	if err != nil {
@@ -26,7 +27,16 @@ func (s *Server) getSettings(w http.ResponseWriter, _ *http.Request) {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		if k == "smtp_pass" {
+			if v != "" {
+				out["smtp_pass_set"] = "1"
+			}
+			continue
+		}
 		out[k] = v
+	}
+	if _, ok := out["smtp_pass_set"]; !ok {
+		out["smtp_pass_set"] = "0"
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -43,6 +53,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	delete(in, "auth_secret")
+	delete(in, "smtp_pass_set") // derived, never stored
 	tx, err := s.db.Begin()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())

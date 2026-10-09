@@ -24,6 +24,7 @@ import '../../widgets/fiche_produit.dart'
 import '../../widgets/product_thumb.dart';
 import '../../widgets/ui.dart';
 import '../product_page.dart';
+import '../pricing/product_pricing_page.dart' show openProductPricing;
 
 /// Fiche produit — the page where the shopkeeper answers the question that
 /// decides whether he trusts the software: « why does it say 45 when I count
@@ -428,6 +429,11 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
               label: 'Étiquettes',
               icon: Icons.qr_code_2_rounded,
               onPressed: () => _labels(p)),
+          if (widget.api.user?.can('pricing') ?? false)
+            PageAction(
+                label: 'Tarifs et offres',
+                icon: Icons.sell_outlined,
+                onPressed: () => openProductPricing(context, widget.api, p)),
           if (!p.isService && (widget.api.user?.can('stock_adjust') ?? true))
             PageAction(
                 label: 'Ajuster le stock',
