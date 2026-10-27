@@ -30,8 +30,8 @@ class SearchHit {
   final DocSummary? doc;
 }
 
-/// Top-bar search with live results grouped by kind (produits, clients et
-/// fournisseurs, documents). ↑ ↓ to move, Entrée opens, Échap closes;
+/// Top-bar search with live results grouped by kind (products, customers and
+/// suppliers, documents). ↑ ↓ to move, Enter opens, Esc closes;
 /// Ctrl+K focuses it from anywhere (wired by the shell).
 class GlobalSearch extends StatefulWidget {
   const GlobalSearch({

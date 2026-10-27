@@ -7,10 +7,10 @@ import '../settings/users/switch_user_dialog.dart';
 
 /// Rights at the till (Paramètres › Rôles et permissions) and the manager
 /// code. One place so the till reads the same everywhere:
-/// - server-enforced actions (remise, prix, crédit, retour, rapport X/Z) run
+/// - server-enforced actions (discount, price, credit, return, X/Z report) run
 ///   inside [posWithApproval]: the server answers 403 needs_approval, the
 ///   manager types his code and the request is replayed with X-Approval;
-/// - till-only actions (ouvrir le tiroir, changer un prix) ask the code up
+/// - till-only actions (open the drawer, change a price) ask the code up
 ///   front with [posRequireRight].
 class PosRights {
   PosRights(this.user);
@@ -27,7 +27,7 @@ class PosRights {
   bool get closeTill => can('close_till');
   bool get viewToday => can('view_today');
 
-  /// Highest remise this user may give alone (percent × 100), null = no cap.
+  /// Highest discount this user may give alone (percent × 100), null = no cap.
   int? get maxDiscountPct =>
       user.isAdmin ? null : posUserLimit(user, 'max_discount_pct');
 }

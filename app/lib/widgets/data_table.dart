@@ -88,7 +88,7 @@ class DataListController<R> {
 /// The list-screen table archetype shared by every list of the app:
 /// sortable header (asc → desc → default), virtualized hoverable rows,
 /// optional selection with a bulk bar, ⋯ row menu + right-click, keyboard
-/// (↑ ↓ Entrée Espace Ctrl+A Échap), remembered visible columns and
+/// (↑ ↓ Enter Space Ctrl+A Esc), remembered visible columns and
 /// density, loading skeleton, error card, aggregate footer that follows the
 /// selection, and an « Exporter » menu (Excel, CSV, PDF, Imprimer).
 class DataListView<R> extends StatefulWidget {
@@ -163,7 +163,7 @@ class _DataListViewState<R> extends State<DataListView<R>> {
   bool _exporting = false;
   bool _compact = UserPrefs.instance.compactLists;
   int _page = 0;
-  int _pageSize = 50; // 0 = tout afficher
+  int _pageSize = 50; // 0 = show all
   Set<String> _hidden = {};
   final Set<String> _selected = {};
   int? _cursor;

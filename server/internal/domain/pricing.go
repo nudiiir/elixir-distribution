@@ -6,22 +6,22 @@ import (
 	"time"
 )
 
-// Tarification des commandes clients (distribution). Ordre de résolution du
-// prix unitaire d'une ligne :
+// Pricing of customer orders (distribution). Resolution order of a line's
+// unit price:
 //
-//  1. prix spécial du client (customer_prices.partner_id), le palier de
-//     quantité minimale le plus élevé atteint, période valide ;
-//  2. prix spécial du groupe du client (customer_prices.group_id), idem ;
-//  3. tarif du client (groupe s'il en a un, sinon fiche client) :
-//     demi-gros (price_wholesale) ou détail (price_retail), remplacé par le
-//     prix promo du produit s'il est actif et plus bas ; la remise du groupe
-//     s'applique alors (pas sur un prix spécial ni sur un prix promo) ;
-//  4. règles promotionnelles (promo_rules) actives pour le canal (desk|web),
-//     le public (tous / groupe / client) et la date : remise quantitative
-//     (gardée si supérieure à la remise déjà acquise) et UG « N achetés +
-//     M gratuits » (la règle la plus généreuse).
+//  1. customer's special price (customer_prices.partner_id), the highest
+//     minimum-quantity tier reached, within a valid period;
+//  2. special price of the customer's group (customer_prices.group_id), same;
+//  3. customer's price list (group if any, otherwise customer record):
+//     wholesale (price_wholesale) or retail (price_retail), replaced by the
+//     product's promo price when active and lower; the group discount
+//     then applies (not on a special price nor on a promo price);
+//  4. promotional rules (promo_rules) active for the channel (desk|web),
+//     the audience (all / group / customer) and the date: quantity discount
+//     (kept if higher than the discount already obtained) and free units « N achetés +
+//     M gratuits » (the most generous rule).
 //
-// Les prix produit sont TTC ; les prix spéciaux et les prix de ligne sont HT.
+// Product prices include VAT; special prices and line prices exclude VAT.
 
 // Price sources reported on order lines.
 const (

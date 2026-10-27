@@ -31,7 +31,7 @@ func (s *Server) routesProductsUX(r chi.Router) {
 // ---------------------------------------------------------------- photos
 
 const (
-	maxImageBytes    = 2 << 20 // 2 Mo par photo
+	maxImageBytes    = 2 << 20 // 2 MB per photo
 	maxImagesPerProd = 8
 	thumbSize        = 160
 )
@@ -253,8 +253,8 @@ func (s *Server) getProductImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", mime)
-	// Le client change ?v=<image_rev> à chaque modification : l'URL est
-	// immuable, elle peut donc rester en cache longtemps.
+	// The client changes ?v=<image_rev> on every modification: the URL is
+	// immutable, so it can stay cached for a long time.
 	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.WriteHeader(http.StatusOK)

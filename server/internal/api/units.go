@@ -11,7 +11,7 @@ import (
 	"elixir/server/internal/domain"
 )
 
-// Serialized inventory: one row per physical unit (IMEI, N° de série).
+// Serialized inventory: one row per physical unit (IMEI, serial no.).
 // Quantities still live in the stock ledger — units answer "which one, to whom".
 
 type ProductUnit struct {
@@ -194,7 +194,7 @@ func (s *Server) deleteUnit(w http.ResponseWriter, r *http.Request) {
 
 // sellUnit marks a serial as sold and links it to the sale. If the serial was
 // never registered, it is created directly as sold — a missing reception entry
-// must never block a sale at the caisse.
+// must never block a sale at the till.
 func (s *Server) sellUnit(w http.ResponseWriter, r *http.Request) {
 	if !s.can(r, "pos") && !s.can(r, "sales") {
 		forbid(w)

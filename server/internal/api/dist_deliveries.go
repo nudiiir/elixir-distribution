@@ -134,7 +134,7 @@ func (s *Server) deleteVehicle(w http.ResponseWriter, r *http.Request) {
 	s.deleteRow(w, r, "vehicles", "véhicule introuvable", "")
 }
 
-// ---- Routes (tournées types) -----------------------------------------------------------
+// ---- Routes (template routes) -----------------------------------------------------------
 
 type DeliveryRoute struct {
 	ID                  string   `json:"id"`

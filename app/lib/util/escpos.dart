@@ -111,7 +111,7 @@ List<int> buildTicket({
   required String cashierName,
   int? received,
   int? change,
-  List<PosPayment> payments = const [], // paiement mixte : une ligne par moyen
+  List<PosPayment> payments = const [], // mixed payment: one line per method
 }) {
   final p = EscPos();
 

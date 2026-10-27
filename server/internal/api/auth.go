@@ -34,7 +34,7 @@ type AuthUser struct {
 	Role     string          `json:"role"` // legacy: admin | manager | cashier
 	Active   bool            `json:"active"`
 	Perms    map[string]bool `json:"perms"`
-	// Rôle éditable (0013) : limites et périmètre de données voyagent avec l'utilisateur.
+	// Editable role (0013): limits and data scope travel with the user.
 	RoleID             string           `json:"role_id"`
 	RoleName           string           `json:"role_name"`
 	Limits             map[string]int64 `json:"limits"`
@@ -61,7 +61,7 @@ var Modules = []string{
 	"dashboard", "pos", "sales", "purchases", "stock",
 	"products", "partners", "assistant", "reports",
 	"webstore", "settings",
-	// Distribution (0016) : commandes clients, livraisons, relation client, tarifs.
+	// Distribution (0016): customer orders, deliveries, customer relations, price lists.
 	"orders", "deliveries", "crm", "pricing",
 }
 
@@ -78,11 +78,11 @@ var ModuleActions = map[string][]string{
 	"stock":     {"view", "create", "edit", "cancel", "validate", "export", "print"},
 	"products":  {"view", "create", "edit", "export", "print"},
 	"partners":  {"view", "create", "edit", "export", "print"},
-	// orders.manage : saisir, préparer, livrer, facturer ; orders.validate :
-	// valider (contrôle crédit) ; orders.override_credit : passer outre l'alerte.
+	// orders.manage: enter, prepare, deliver, invoice; orders.validate:
+	// validate (credit check); orders.override_credit: override the alert.
 	"orders":     {"view", "manage", "validate", "override_credit"},
 	"deliveries": {"view", "manage"},
-	// crm.all_customers : un rôle au périmètre « own » voit quand même tous les clients.
+	// crm.all_customers: a role with an « own » scope still sees all customers.
 	"crm":     {"view", "edit", "all_customers"},
 	"pricing": {"view", "edit"},
 }
@@ -94,7 +94,7 @@ var SpecialRights = []string{
 	"view_today", "stock_adjust", "import_data", "export_data",
 }
 
-// LimitKeys travel in roles.limits_json (0 = pas de limite).
+// LimitKeys travel in roles.limits_json (0 = no limit).
 var LimitKeys = []string{"max_discount_pct", "max_credit", "approval_above"}
 
 // AllPerms: every key a role can carry (module keys included for the legacy UI).
@@ -422,7 +422,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		ctx := context.WithValue(r.Context(), userKey, u)
-		// Code du gérant : the token is consumed by THIS request (single use).
+		// « Code du gérant »: the token is consumed by THIS request (single use).
 		if at := strings.TrimSpace(r.Header.Get("X-Approval")); at != "" {
 			if a := approvals.take(at); a != nil {
 				if approver, err := s.loadAuthUser(a.approverID); err == nil && approver.Active {
@@ -518,7 +518,7 @@ func docPermOK(u *AuthUser, docType string) bool {
 		return u.Perms["partners"]
 	case docType == domain.PaymentIn:
 		return u.Perms["partners"] || u.Perms["pos"]
-	default: // devis, tickets, factures, BL, avoirs
+	default: // quotes, tickets, invoices, delivery notes, credit notes
 		return u.Perms["sales"] || u.Perms["pos"]
 	}
 }

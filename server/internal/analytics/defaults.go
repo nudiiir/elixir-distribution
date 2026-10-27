@@ -8,7 +8,7 @@ import (
 	"elixir/server/internal/domain"
 )
 
-// defaultReport : vue livrée avec le logiciel (is_default=1, partagée).
+// defaultReport: view shipped with the software (is_default=1, shared).
 type defaultReport struct {
 	Name     string
 	Chart    string
@@ -18,7 +18,7 @@ type defaultReport struct {
 }
 
 var defaultReports = []defaultReport{
-	// ---- rangée de chiffres (l'ancien bandeau du tableau de bord)
+	// ---- row of figures (the old dashboard banner)
 	{Name: "Ventes aujourd'hui", Chart: "stat", W: 2, H: 2,
 		Spec: Request{Spec: Spec{Source: "sale_lines", Measures: []Measure{{Name: "ca_ttc"}}, Range: Range{Type: "today"}, Compare: "previous_period"}}},
 	{Name: "Tickets aujourd'hui", Chart: "stat", W: 2, H: 2,
@@ -54,7 +54,7 @@ var defaultReports = []defaultReport{
 		Spec: Request{Spec: Spec{Source: "stock_movements", Dimensions: []string{"movement_date:day", "product_name", "doc_type"},
 			Measures: []Measure{{Name: "net_qty"}}, Range: Range{Type: "last_n_days", N: 7}, Sort: []Sort{{Field: "d0", Dir: "desc"}}, Limit: 30,
 			ZeroFill: boolPtr(false)}}},
-	// ---- analyses du magasin
+	// ---- shop analyses
 	{Name: "Ventes par catégorie", Chart: "bar", W: 6, H: 4,
 		Spec: Request{Spec: Spec{Source: "sale_lines", Dimensions: []string{"category_name"},
 			Measures: []Measure{{Name: "ca_ttc"}, {Name: "margin_pct"}}, Range: Range{Type: "this_month"},
@@ -96,9 +96,9 @@ var defaultReports = []defaultReport{
 
 func boolPtr(b bool) *bool { return &b }
 
-// EnsureDefaults crée les vues et le tableau de bord par défaut s'ils
-// n'existent pas encore. Idempotent ; ne touche jamais les vues des
-// utilisateurs.
+// EnsureDefaults creates the default views and dashboard if they
+// do not exist yet. Idempotent; never touches users'
+// views.
 func EnsureDefaults(db *sql.DB) error {
 	var n int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM saved_reports WHERE is_default = 1`).Scan(&n); err != nil {

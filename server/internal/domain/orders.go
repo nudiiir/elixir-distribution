@@ -8,13 +8,13 @@ import (
 	"time"
 )
 
-// Commandes clients (distribution). Une commande n'est pas un document : elle
-// vit dans customer_orders / customer_order_lines et ne touche ni le stock ni
-// le compte client. Ce sont le BL (DELIVERY_NOTE), la facture (SALE_INVOICE)
-// et les encaissements (PAYMENT_IN) qu'elle génère qui passent par le moteur
-// de validation (PostTx), dans la même transaction que le changement de
-// statut. Chaque opération écrit un événement (customer_order_events) et
-// marque web_status_dirty quand la commande vient de la boutique web.
+// Customer orders (distribution). An order is not a document: it
+// lives in customer_orders / customer_order_lines and touches neither stock nor
+// the customer account. It is the delivery note (DELIVERY_NOTE), the invoice (SALE_INVOICE)
+// and the payments (PAYMENT_IN) it generates that go through the posting
+// engine (PostTx), in the same transaction as the status
+// change. Every operation writes an event (customer_order_events) and
+// marks web_status_dirty when the order comes from the web shop.
 
 // CustomerOrder is the numbering key of customer orders (settings
 // number_CUSTOMER_ORDER_prefix|year|digits|reset, prefix CC by default).
@@ -231,7 +231,7 @@ func setOrderStatus(tx *sql.Tx, o *orderHead, to, action, userID, note string) e
 
 // RecalcOrder recomputes line and order totals and the backorder flag. The
 // billed quantity of a line is the ordered one while the order is « new »,
-// the validated one afterwards (after the BL: the paid part that left).
+// the validated one afterwards (after the delivery note: the paid part that left).
 func RecalcOrder(tx *sql.Tx, orderID string) error {
 	o, err := loadOrderHead(tx, orderID)
 	if err != nil {
@@ -817,7 +817,7 @@ func DeleteOrderLine(tx *sql.Tx, orderID, lineID, userID string) error {
 	return OrderEvent(tx, orderID, "delete_line", "", "", userID, name+" : ligne supprimée")
 }
 
-// SubstituteLine replaces the product of a line (rupture → équivalent). The
+// SubstituteLine replaces the product of a line (out of stock → equivalent). The
 // old line keeps its history at zero quantity; the new one points back to it.
 func SubstituteLine(tx *sql.Tx, orderID, lineID, newProductID string, qty int64, keepPrice bool, userID string) (string, error) {
 	o, err := loadOrderHead(tx, orderID)
@@ -895,7 +895,7 @@ func StockQty(q Querier, productID, warehouseID string) int64 {
 	return n
 }
 
-// AvailableQty = stock − what other open orders reserved (« disponible à la vente »).
+// AvailableQty = stock − what other open orders reserved (« disponible à la vente », available to sell).
 func AvailableQty(q Querier, productID, warehouseID, excludeOrderID string) int64 {
 	return StockQty(q, productID, warehouseID) - ReservedQty(q, productID, warehouseID, excludeOrderID)
 }

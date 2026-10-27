@@ -7,19 +7,19 @@ import (
 	"strings"
 )
 
-// Numérotation des documents, réglable par type dans Paramètres › Documents et
-// numérotation. Clés de réglage (toutes facultatives — sans elles, le format
-// historique « FV-2026-000124 » reste inchangé) :
+// Document numbering, configurable per type in Paramètres › Documents et
+// numérotation. Setting keys (all optional — without them, the
+// historical format « FV-2026-000124 » stays unchanged):
 //
-//	number_<TYPE>_prefix  préfixe (vide = aucun)
-//	number_<TYPE>_year    '1' / '0' : l'année figure dans le numéro
-//	number_<TYPE>_digits  4 à 8 chiffres (complétés par des zéros)
-//	number_<TYPE>_reset   '1' / '0' : repart à 1 chaque année (exige l'année)
+//	number_<TYPE>_prefix  prefix (empty = none)
+//	number_<TYPE>_year    '1' / '0': the year appears in the number
+//	number_<TYPE>_digits  4 to 8 digits (zero-padded)
+//	number_<TYPE>_reset   '1' / '0': restarts at 1 every year (requires the year)
 //
-// Les compteurs vivent dans `sequences` : (doc_type, année) quand la
-// numérotation repart chaque année, (doc_type, 0) quand elle est continue.
-// Un numéro n'est attribué qu'à la validation et n'est jamais réutilisé : la
-// suite des documents validés reste continue, sans trou ni doublon.
+// The counters live in `sequences`: (doc_type, year) when the
+// numbering restarts every year, (doc_type, 0) when it is continuous.
+// A number is only assigned on posting and is never reused: the
+// sequence of posted documents stays continuous, with no gap or duplicate.
 
 // Querier is what both *sql.DB and *sql.Tx offer for one-row reads.
 type Querier interface {

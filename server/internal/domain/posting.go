@@ -72,15 +72,15 @@ func auditTx(tx *sql.Tx, userID, action, entity, entityID, detail string) {
 // and document totals, assigns the gapless sequential number, writes stock and
 // partner ledger entries, and flips the document to posted. Returns the number.
 //
-// Réception fournisseur — règles de la spécification :
-//   - fournisseur obligatoire ;
-//   - lot obligatoire quand suivi_lot, DLC obligatoire quand suivi_peremption ;
-//   - gratuités et frais d'approche pliés dans le coût effectif ;
-//   - conversion d'unité (carton → pièces) au niveau de la ligne ;
-//   - mise à jour du reliquat des lignes du bon de commande lié ;
-//   - prix de vente saisi sur la ligne appliqué au produit, journalisé ;
-//   - durée de vie minimale par fournisseur, acceptation courte durée loguée ;
-//   - facture fournisseur en double (même fournisseur + même n°) refusée.
+// Supplier receipt — rules from the specification:
+//   - supplier required;
+//   - lot required when suivi_lot, expiry date required when suivi_peremption;
+//   - free units and landed costs folded into the effective cost;
+//   - unit conversion (carton → pieces) at line level;
+//   - update of the remaining quantity on the linked purchase order lines;
+//   - selling price entered on the line applied to the product, logged;
+//   - minimum shelf life per supplier, short-life acceptance logged;
+//   - duplicate supplier invoice (same supplier + same no.) refused.
 // UserMayOversell, set by the API layer, reports whether the posting user has
 // the « negative_stock » right (sell beyond what is on hand) even when the
 // shop setting allow_negative_stock is off. Nil = only the setting counts.
@@ -147,9 +147,9 @@ func PostTx(tx *sql.Tx, docID, userID string) (string, error) {
 		}
 	}
 
-	// Facture saisie à la main alors que la réception correspondante existe
-	// déjà (même fournisseur, même n° fournisseur, pas encore facturée) : le
-	// stock entrerait deux fois. On exige le rattachement à la réception.
+	// Invoice entered by hand while the matching receipt already exists
+	// (same supplier, same supplier no., not yet invoiced): the stock would
+	// come in twice. Linking it to the receipt is required.
 	if d.docType == PurchaseInvoice && !d.refDocID.Valid && d.partnerID.Valid &&
 		strings.TrimSpace(d.supplierRef.String) != "" {
 		var rcpt string
@@ -223,7 +223,7 @@ func PostTx(tx *sql.Tx, docID, userID string) (string, error) {
 	}
 
 	var timbre int64
-	// Paiement mixte : des lignes document_payments remplacent le mode unique.
+	// Mixed payment: document_payments rows replace the single method.
 	var split *splitPayment
 	if d.docType == SaleTicket || d.docType == SaleInvoice {
 		sp, err := loadSplitPayment(tx, docID)
@@ -232,9 +232,9 @@ func PostTx(tx *sql.Tx, docID, userID string) (string, error) {
 		}
 		split = sp
 	}
-	// Droit de timbre : désactivable dans Paramètres › Taxes (timbre_enabled).
+	// Stamp duty: can be turned off in Paramètres › Taxes (timbre_enabled).
 	timbreOn := TimbreSettingOn(tx)
-	goodsTTC := totalTTC // ce que le client paie pour la marchandise (fidélité)
+	goodsTTC := totalTTC // what the customer pays for the goods (loyalty)
 	if split != nil {
 		t, err := split.settleTimbre(totalTTC, d.partnerID.Valid, timbreOn)
 		if err != nil {
@@ -318,8 +318,8 @@ func PostTx(tx *sql.Tx, docID, userID string) (string, error) {
 			return nil
 		}
 
-		// Frais d'approche : alloués aux lignes au prorata de la valeur HT.
-		// Le reliquat d'arrondi va à la dernière ligne allouée.
+		// Landed costs: allocated to lines pro rata to their net (HT) value.
+		// The rounding remainder goes to the last allocated line.
 		freightAlloc := map[string]int64{}
 		if isCostBearing(d.docType) && d.freight > 0 {
 			var allocatableHT int64
@@ -356,15 +356,15 @@ func PostTx(tx *sql.Tx, docID, userID string) (string, error) {
 			}
 			pid := l.productID.String
 			if productIsService(tx, pid) {
-				continue // un service est facturé, jamais stocké
+				continue // a service is invoiced, never stocked
 			}
 
 			var delta, unitCost, lineCostBase int64
 			updateAvg := isCostBearing(d.docType)
 			if isCostBearing(d.docType) {
-				// Coût effectif : (net HT + frais alloués) / (qté + gratuit),
-				// en unités de base. Les gratuités entrent en stock sans valeur
-				// ajoutée : elles diluent le coût unitaire.
+				// Effective cost: (net HT + allocated costs) / (qty + free units),
+				// in base units. Free units enter stock with no added value:
+				// they dilute the unit cost.
 				units := l.baseQty + l.baseFree
 				if units == 0 {
 					continue
@@ -377,8 +377,8 @@ func PostTx(tx *sql.Tx, docID, userID string) (string, error) {
 					continue
 				}
 				unitCost = currentAvgCost(tx, pid, d.warehouseID.String)
-				// Un retour client rentre au coût auquel la vente l'a sorti,
-				// pas au CMUP du jour : la marge nette reste juste.
+				// A customer return comes back at the cost the sale took it out at,
+				// not today's weighted average cost: net margin stays correct.
 				if d.docType == SaleCreditNote && d.refDocID.Valid {
 					if c, ok := refLineCost(tx, d.refDocID.String, pid); ok {
 						unitCost = c
@@ -389,10 +389,10 @@ func PostTx(tx *sql.Tx, docID, userID string) (string, error) {
 				if l.skipBase > 0 {
 					lineCostBase = roundDiv(l.skipBase*l.refCost+(l.baseQty-l.skipBase)*unitCost, l.baseQty)
 				}
-				// Un ajustement ENTRANT est valorisé : au coût déclaré sur la
-				// ligne (stock initial) ou, à défaut, au CMUP courant — dans
-				// les deux cas l'écriture porte son coût, ce qui rend le
-				// rejeu du journal déterministe.
+				// An INBOUND adjustment is valued: at the cost declared on the
+				// line (opening stock) or, failing that, at the current weighted average cost — in
+				// both cases the entry carries its cost, which makes
+				// ledger replay deterministic.
 				if d.docType == StockAdjustment && delta > 0 {
 					if l.unitPrice > 0 {
 						unitCost = l.unitPrice
@@ -429,8 +429,8 @@ func PostTx(tx *sql.Tx, docID, userID string) (string, error) {
 				}
 			}
 
-			// Facture fournisseur sur réception : la part déjà entrée au prix de
-			// la réception est réévaluée si le prix facturé diffère.
+			// Supplier invoice on a receipt: the part already received at the receipt
+			// price is revalued if the invoiced price differs.
 			if isCostBearing(d.docType) && l.skipBase > 0 && unitCost != l.refCost {
 				if err := needWarehouse(); err != nil {
 					return "", err
@@ -443,15 +443,15 @@ func PostTx(tx *sql.Tx, docID, userID string) (string, error) {
 
 			lineCost := lineCostBase
 			if salesFamily {
-				// Coût porté PAR UNITÉ DE LA LIGNE (carton, pièce…) : les rapports
-				// multiplient qty_milli × unit_cost.
+				// Cost carried PER LINE UNIT (carton, piece…): the reports
+				// multiply qty_milli × unit_cost.
 				lineCost = roundDiv(lineCostBase*l.packFactor, 1000)
 			}
 			if _, err := tx.Exec(`UPDATE document_lines SET unit_cost=? WHERE id=?`, lineCost, l.id); err != nil {
 				return "", err
 			}
 
-			// Historique du dernier prix payé au fournisseur.
+			// History of the last price paid to the supplier.
 			if isCostBearing(d.docType) && d.partnerID.Valid &&
 				(l.skipBase == 0 || unitCost != l.refCost) {
 				if _, err := tx.Exec(`INSERT INTO supplier_prices
@@ -491,7 +491,7 @@ func PostTx(tx *sql.Tx, docID, userID string) (string, error) {
 			}
 			delta := l.qtyMilli - base
 			if current+delta < 0 {
-				// Le comptage contredit les mouvements postérieurs : on ramène à 0.
+				// The count contradicts later movements: bring it back to 0.
 				delta = -current
 			}
 			if delta == 0 {
@@ -509,14 +509,14 @@ func PostTx(tx *sql.Tx, docID, userID string) (string, error) {
 		}
 	}
 
-	// ---- Bon de commande lié : reliquat, sur-réception, statut ------------
+	// ---- Linked purchase order: remaining qty, over-receipt, status ------------
 	if d.docType == PurchaseReceipt && d.refDocID.Valid {
 		if err := applyToOrder(tx, &d, lines, userID, number, false); err != nil {
 			return "", err
 		}
 	}
 
-	// ---- Prix de vente saisi sur les lignes de réception ------------------
+	// ---- Selling price entered on receipt lines ------------------
 	if d.docType == PurchaseReceipt {
 		for _, l := range lines {
 			if !l.productID.Valid || !l.newSalePrice.Valid || l.newSalePrice.Int64 < 0 {
@@ -549,7 +549,7 @@ func PostTx(tx *sql.Tx, docID, userID string) (string, error) {
 	switch d.docType {
 	case SaleTicket, SaleInvoice:
 		if split != nil {
-			// Seule la part « crédit » d'un paiement mixte va au compte client.
+			// Only the « crédit » part of a mixed payment goes to the customer account.
 			if split.credit > 0 {
 				ledgerAmount, ledgerKind = split.credit, "invoice"
 			}
@@ -560,10 +560,10 @@ func PostTx(tx *sql.Tx, docID, userID string) (string, error) {
 			ledgerAmount, ledgerKind = totalTTC, "invoice"
 		}
 	case SaleCreditNote:
-		// Un avoir se règle d'UNE seule façon : remboursé en espèces/carte (le
-		// compte client n'est pas touché) OU porté au crédit du compte client.
-		// Si la vente d'origine était à crédit, l'avoir vient en déduction de la
-		// dette, jamais en espèces.
+		// A credit note is settled ONE way only: refunded in cash/card (the
+		// customer account is untouched) OR credited to the customer account.
+		// If the original sale was on credit, the credit note is deducted from the
+		// debt, never paid in cash.
 		method := d.paymentMethod.String
 		paidOut := method == "cash" || method == "cib" || method == "edahabia"
 		if d.refDocID.Valid {
@@ -571,8 +571,8 @@ func PostTx(tx *sql.Tx, docID, userID string) (string, error) {
 			tx.QueryRow(`SELECT payment_method FROM documents WHERE id = ?`, d.refDocID.String).
 				Scan(&refMethod)
 			if refMethod.String == "" {
-				// Vente d'origine en paiement mixte avec une part à crédit :
-				// le retour vient en déduction de la dette.
+				// Original sale paid mixed with a credit part:
+				// the return is deducted from the debt.
 				var n int
 				tx.QueryRow(`SELECT COUNT(*) FROM document_payments WHERE document_id = ? AND method = 'credit'`,
 					d.refDocID.String).Scan(&n)
@@ -612,7 +612,7 @@ func PostTx(tx *sql.Tx, docID, userID string) (string, error) {
 		}
 	}
 
-	// ---- Fidélité : points gagnés sur la vente ------------------------------
+	// ---- Loyalty: points earned on the sale ------------------------------
 	if err := earnLoyalty(tx, d.docType, d.partnerID, docID, goodsTTC, userID, now); err != nil {
 		return "", err
 	}
@@ -709,7 +709,7 @@ func applyToOrder(tx *sql.Tx, d *docRow, lines []lineRow, userID, number string,
 		return nil // linked to something else (or gone) — not an order
 	}
 
-	var tolerance int64 = 500 // 5 % par défaut
+	var tolerance int64 = 500 // 5 % by default
 	if d.partnerID.Valid {
 		var t sql.NullInt64
 		tx.QueryRow(`SELECT over_receipt_pct FROM partners WHERE id = ?`, d.partnerID.String).Scan(&t)
@@ -836,10 +836,10 @@ func VoidTx(tx *sql.Tx, docID, userID, reason string) error {
 	}
 	now := NowISO()
 
-	// Contrepassation du stock : une écriture inverse par écriture d'origine,
-	// au même coût. Annuler une sortie ne change pas le CUMP ; annuler une
-	// entrée valorisée (réception, facture, ajustement, arrivée de transfert)
-	// retire sa valeur de la moyenne pondérée.
+	// Stock reversal: one opposite entry per original entry,
+	// at the same cost. Voiding an outbound move does not change the weighted average cost; voiding a
+	// valued inbound move (receipt, invoice, adjustment, transfer arrival)
+	// removes its value from the weighted average.
 	rows, err := tx.Query(`SELECT product_id, warehouse_id, lot_id, qty_delta_milli, unit_cost, line_id
 		FROM stock_ledger WHERE document_id = ?`, docID)
 	if err != nil {
@@ -864,28 +864,28 @@ func VoidTx(tx *sql.Tx, docID, userID, reason string) error {
 	allowNeg := allowNegativeStock(tx)
 	valued := isCostBearing(d.docType) || d.docType == StockTransfer || d.docType == StockAdjustment
 	for _, m := range moves {
-		if m.delta == 0 { // réévaluation de prix : pas de quantité à contrepasser
+		if m.delta == 0 { // price revaluation: no quantity to reverse
 			continue
 		}
 		lineID := ""
 		if m.lineID.Valid {
 			lineID = m.lineID.String
 		}
-		// Défaire une entrée dont la marchandise est déjà sortie ferait passer
-		// le stock en négatif : on refuse (sauf réglage contraire).
+		// Undoing an inbound move whose goods have already gone out would take
+		// stock negative: refused (unless the setting allows it).
 		if m.delta > 0 && !allowNeg {
 			if err := checkOutflow(tx, m.productID, m.warehouseID, m.delta); err != nil {
 				return &PostError{"contrepassation impossible : " + err.Error()}
 			}
 		}
-		// Contrepasser une entrée valorisée retire aussi son coût du CUMP.
+		// Reversing a valued inbound move also removes its cost from the weighted average cost.
 		if err := applyMove(tx, m.productID, m.warehouseID, m.lotID, -m.delta, m.cost,
 			moveOpts{unwind: m.delta > 0 && valued, reversal: true}, docID, lineID, now); err != nil {
 			return err
 		}
 	}
 
-	// Contrepassation du compte partenaire.
+	// Partner account reversal.
 	prows, err := tx.Query(`SELECT partner_id, amount, kind FROM partner_ledger WHERE document_id = ?`, docID)
 	if err != nil {
 		return err
@@ -914,7 +914,7 @@ func VoidTx(tx *sql.Tx, docID, userID, reason string) error {
 		}
 	}
 
-	// Décrémenter le reliquat du bon de commande lié.
+	// Decrement the remaining qty on the linked purchase order.
 	if d.docType == PurchaseReceipt && d.refDocID.Valid {
 		lrows, err := tx.Query(`SELECT id, product_id, lot_id, qty_milli, unit_price, discount_pct,
 				vat_rate, qty_free_milli, pack_factor_milli, lot_number, expiry_date, new_sale_price
@@ -953,7 +953,7 @@ func VoidTx(tx *sql.Tx, docID, userID, reason string) error {
 	}
 	auditTx(tx, userID, "document.void", "document", docID, detail)
 
-	// Fidélité : points gagnés repris, points utilisés rendus.
+	// Loyalty: points earned are taken back, points used are returned.
 	return voidLoyalty(tx, docID, userID, now)
 }
 
@@ -997,15 +997,15 @@ func VerifyStock(db *sql.DB, repair bool) ([]StockDivergence, error) {
 			a = &acc{}
 			state[k] = a
 		}
-		// Même règle que le posting : seules les entrées valorisées
-		// (réception/facture d'achat, arrivée d'un transfert, ajustement
-		// entrant) recalculent la moyenne pondérée, au coût porté par la ligne.
+		// Same rule as posting: only valued inbound entries
+		// (purchase receipt/invoice, transfer arrival, inbound
+		// adjustment) recompute the weighted average, at the cost carried by the line.
 		valued := isCostBearing(dt) || dt == StockTransfer || dt == StockAdjustment
-		if avgAfter.Valid { // réévaluation : CUMP absolu, aucune quantité
+		if avgAfter.Valid { // revaluation: absolute weighted average cost, no quantity
 			a.avg = avgAfter.Int64
 			continue
 		}
-		if rev == 1 { // contrepassation : défait le CUMP d'une entrée valorisée
+		if rev == 1 { // reversal: undoes the weighted average cost of a valued inbound entry
 			if delta < 0 && valued {
 				a.avg = unwindAvg(a.qty, a.avg, -delta, cost)
 			}
@@ -1195,7 +1195,7 @@ func loadSplitPayment(tx *sql.Tx, docID string) (*splitPayment, error) {
 
 // SplitTimbre returns the stamp duty due on a mixed payment: the cash part of
 // the goods is what the non-cash methods leave of the total, and only that part
-// bears the timbre. The cash row(s) must then equal that part + the timbre.
+// bears the stamp duty. The cash row(s) must then equal that part + the stamp duty.
 func SplitTimbre(totalTTC, nonCash int64) (cashGoods, timbre int64) {
 	cashGoods = totalTTC - nonCash
 	if cashGoods > 0 {

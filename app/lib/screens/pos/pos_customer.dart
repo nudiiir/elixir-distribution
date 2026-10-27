@@ -5,7 +5,7 @@ import 'package:http/http.dart' as http;
 import '../../api/client.dart';
 
 /// What the till needs to know about the chosen customer beyond [Partner]:
-/// his group (tarif + remise, Paramètres › Clients et fidélité) and his
+/// his group (price list + discount, Paramètres › Clients et fidélité) and his
 /// loyalty points. Read straight from the server JSON so the till works with
 /// or without the newer Partner model fields.
 class PosCustomerInfo {

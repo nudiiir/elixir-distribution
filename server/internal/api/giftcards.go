@@ -131,7 +131,7 @@ func (s *Server) createGiftCard(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "génération du code impossible")
 		return
 	}
-	// Validité par défaut (Paramètres › Clients et fidélité) : 0 = illimitée.
+	// Default validity (Paramètres › Clients et fidélité): 0 = unlimited.
 	if in.ExpiresAt == nil || strings.TrimSpace(*in.ExpiresAt) == "" {
 		in.ExpiresAt = nil
 		if days := domain.SettingInt(s.db, "gift_card_validity_days", 365); days > 0 {
@@ -179,7 +179,7 @@ func (s *Server) getGiftCard(w http.ResponseWriter, r *http.Request) {
 }
 
 // redeemGiftCard debits the card. The amount must be fully covered — partial
-// tenders would mis-state the caisse, so v1 keeps it whole.
+// tenders would mis-state the till, so v1 keeps it whole.
 func (s *Server) redeemGiftCard(w http.ResponseWriter, r *http.Request) {
 	if !s.can(r, "pos") {
 		forbid(w)

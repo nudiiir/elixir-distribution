@@ -123,7 +123,7 @@ String wilayaLabel(String name) {
 }
 
 // ---------------------------------------------------------------------------
-// Fiche client
+// Customer record
 // ---------------------------------------------------------------------------
 
 class CrmTag {
@@ -300,7 +300,7 @@ class TimelinePage {
 }
 
 // ---------------------------------------------------------------------------
-// Activités et tâches
+// Activities and tasks
 // ---------------------------------------------------------------------------
 
 class CrmActivity {
@@ -565,7 +565,7 @@ class CrmUser {
   final String name;
 }
 
-/// Tournée type (GET /delivery-routes) — only what the CRM screens need.
+/// Delivery route template (« Tournée type », GET /delivery-routes) — only what the CRM screens need.
 class CrmRoute {
   CrmRoute.fromJson(Map<String, dynamic> j)
       : id = _s(j['id']),

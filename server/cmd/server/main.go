@@ -56,8 +56,8 @@ func (p *program) run() {
 	api.StartBackupScheduler(db, p.dbPath)
 	api.StartStockVerifier(db)
 
-	// Analyses : pool de lecture dédié (jamais devant la connexion d'écriture)
-	// + vues et tableau de bord par défaut.
+	// Analytics: dedicated read pool (never ahead of the write connection)
+	// + default views and dashboard.
 	ro, err := store.OpenReadOnly(p.dbPath, 2)
 	if err != nil {
 		log.Fatalf("open read-only pool: %v", err)

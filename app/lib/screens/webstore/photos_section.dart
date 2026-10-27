@@ -8,8 +8,8 @@ import '../../widgets/app_page.dart';
 import 'catalog_sync.dart';
 import 'web_common.dart';
 
-/// « Photos produits » : sends the product photos of the shop (fiche
-/// produit) to the online store. Only new or changed photos travel.
+/// « Photos produits » : sends the product photos of the shop (product
+/// record) to the online store. Only new or changed photos travel.
 class PhotosSection extends StatefulWidget {
   const PhotosSection({super.key, required this.ctx});
   final WebCtx ctx;

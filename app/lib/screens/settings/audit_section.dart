@@ -42,7 +42,7 @@ const _periods = <(String, String)>[
   ('month', 'Ce mois-ci'),
 ];
 
-/// Paramètres → Journal d'activité: who did what, when — filterable.
+/// Paramètres → Journal d'activité (activity log): who did what, when — filterable.
 class AuditSection extends StatefulWidget {
   const AuditSection({super.key, required this.ctx});
   final SettingsContext ctx;

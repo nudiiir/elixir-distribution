@@ -5,9 +5,9 @@ import (
 	"strings"
 )
 
-// GalleryItem : une question prête à l'emploi, avec sa spécification. Sert
-// à la fois de galerie dans l'explorateur et de repli hors ligne pour
-// l'assistant (appariement par mots-clés quand le cloud est injoignable).
+// GalleryItem: a ready-to-use question, with its specification. Serves
+// both as the gallery in the explorer and as the offline fallback for
+// the assistant (keyword matching when the cloud is unreachable).
 type GalleryItem struct {
 	Theme     string   `json:"theme"`
 	Title     string   `json:"title"`
@@ -17,7 +17,7 @@ type GalleryItem struct {
 }
 
 var gallery = []GalleryItem{
-	// ---------------------------------------------------------------- Ventes
+	// ---------------------------------------------------------------- Sales
 	{Theme: "Ventes", Title: "Chiffre d'affaires par jour ce mois", Keywords: []string{"ca", "chiffre", "affaires", "jour", "mois", "ventes", "evolution"}, ChartType: "line",
 		Spec: Request{Spec: Spec{Source: "sale_lines", Dimensions: []string{"doc_date:day"}, Measures: []Measure{{Name: "ca_ttc"}}, Range: Range{Type: "this_month"}, Compare: "previous_period"}}},
 	{Theme: "Ventes", Title: "Ventes des 6 derniers mois", Keywords: []string{"ventes", "mois", "six", "6", "tendance", "annee"}, ChartType: "bar",
@@ -65,7 +65,7 @@ var gallery = []GalleryItem{
 		Spec: Request{Spec: Spec{Source: "product_performance", Dimensions: []string{"product_name"}, Measures: []Measure{{Name: "qty_sold"}, {Name: "qty_on_hand"}, {Field: "days_of_stock", Agg: "avg"}}, Filters: []Filter{{Field: "has_stock", Op: "eq", Value: true}}, Range: Range{Type: "last_n_days", N: 90}, Sort: []Sort{{Field: "m2", Dir: "asc"}}, Limit: 50}}},
 	{Theme: "Stock", Title: "Entrées et sorties de stock par semaine", Keywords: []string{"mouvements", "entrees", "sorties", "semaine", "flux"}, ChartType: "bar",
 		Spec: Request{Spec: Spec{Source: "stock_movements", Dimensions: []string{"movement_date:week"}, Measures: []Measure{{Name: "qty_in"}, {Name: "qty_out"}}, Range: Range{Type: "last_n_months", N: 3}}}},
-	// ---------------------------------------------------------------- Achats
+	// ---------------------------------------------------------------- Purchases
 	{Theme: "Achats", Title: "Achats par fournisseur", Keywords: []string{"fournisseur", "fournisseurs", "grossiste", "achats", "repartition"}, ChartType: "donut",
 		Spec: Request{Spec: Spec{Source: "purchase_lines", Dimensions: []string{"supplier_name"}, Measures: []Measure{{Name: "total_ht"}}, Range: Range{Type: "last_n_months", N: 3}, Sort: []Sort{{Field: "m0", Dir: "desc"}}, Limit: 8}}},
 	{Theme: "Achats", Title: "Achats par mois", Keywords: []string{"achats", "mois", "evolution", "depenses"}, ChartType: "bar",
@@ -80,14 +80,14 @@ var gallery = []GalleryItem{
 			CombinedMeasures: []CombinedMeasure{{As: "ecoulement", Expr: "ventes.qty_vendue / nullif(achats.qty_achetee, 0)", Format: "percent"}}}},
 	{Theme: "Achats", Title: "Gratuités reçues par fournisseur", Keywords: []string{"gratuit", "gratuites", "ug", "bonus", "fournisseur"}, ChartType: "bar",
 		Spec: Request{Spec: Spec{Source: "purchase_lines", Dimensions: []string{"supplier_name"}, Measures: []Measure{{Name: "free_qty"}, {Name: "qty"}}, Range: Range{Type: "last_n_months", N: 6}, Sort: []Sort{{Field: "m0", Dir: "desc"}}}}},
-	// ---------------------------------------------------------------- Créances
+	// ---------------------------------------------------------------- Receivables
 	{Theme: "Créances", Title: "Crédits clients en cours", Keywords: []string{"credit", "credits", "clients", "doit", "doivent", "debiteur", "debiteurs", "dette", "impaye", "impayes", "creance", "creances", "solde"}, ChartType: "table",
 		Spec: Request{Spec: Spec{Source: "partner_ledger", Dimensions: []string{"partner_name"}, Measures: []Measure{{Name: "balance"}}, Filters: []Filter{{Field: "partner_kind", Op: "in", Value: []any{"customer", "both"}}}, Having: []Having{{Measure: "m0", Op: "gt", Value: 0}}, Range: Range{Type: "all"}, Sort: []Sort{{Field: "m0", Dir: "desc"}}, Limit: 30}}},
 	{Theme: "Créances", Title: "Dettes fournisseurs", Keywords: []string{"dette", "dettes", "fournisseur", "fournisseurs", "devons", "dois", "doit", "payer", "reste", "reglement"}, ChartType: "table",
 		Spec: Request{Spec: Spec{Source: "partner_ledger", Dimensions: []string{"partner_name"}, Measures: []Measure{{Name: "balance"}}, Filters: []Filter{{Field: "partner_kind", Op: "in", Value: []any{"supplier", "both"}}}, Having: []Having{{Measure: "m0", Op: "lt", Value: 0}}, Range: Range{Type: "all"}, Sort: []Sort{{Field: "m0", Dir: "asc"}}, Limit: 30}}},
 }
 
-// Gallery retourne la galerie (copie).
+// Gallery returns the gallery (copy).
 func Gallery() []GalleryItem {
 	out := make([]GalleryItem, len(gallery))
 	copy(out, gallery)
@@ -116,8 +116,8 @@ func normalize(s string) []string {
 	return out
 }
 
-// MatchGallery : repli hors ligne — la question la plus proche par
-// recouvrement de mots-clés. Retourne nil sous un score minimal.
+// MatchGallery: offline fallback — the closest question by
+// keyword overlap. Returns nil below a minimum score.
 func MatchGallery(question string) *GalleryItem {
 	words := normalize(question)
 	if len(words) == 0 {

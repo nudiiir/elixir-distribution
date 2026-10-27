@@ -1,10 +1,10 @@
 part of '../analytics_screen.dart';
 
-// =================================================================== module « Tableau de bord »
+// =================================================================== « Tableau de bord » module
 
-/// Module « Tableau de bord » : uniquement les tuiles. « Modifier » envoie la
-/// vue dans le module Explorateur ([onEdit]) ; « Ouvrir dans l'explorateur »
-/// y ouvre une copie ([onExplore] si le shell le fournit, sinon par
+/// « Tableau de bord » module: tiles only. « Modifier » sends the
+/// view to the Explorateur module ([onEdit]); « Ouvrir dans l'explorateur »
+/// opens a copy there ([onExplore] if the shell provides it, otherwise via
 /// [AnalyticsBus.pendingRequest]).
 class AnalyticsDashboardScreen extends StatefulWidget {
   const AnalyticsDashboardScreen({super.key, required this.api, required this.session, required this.onEdit, required this.onNew, this.onOpenModule, this.onExplore});
@@ -13,7 +13,7 @@ class AnalyticsDashboardScreen extends StatefulWidget {
   final void Function(SavedReport) onEdit;
   final VoidCallback onNew;
 
-  /// Ouvre l'explorateur avec une demande (copie d'une vue, titre, origine).
+  /// Opens the explorer with a request (copy of a view, title, origin).
   final void Function(ExplorerRequest request)? onExplore;
 
   /// Opens another module of the shell (« Bien démarrer » checklist):
@@ -50,8 +50,8 @@ class _AnalyticsDashboardScreenState extends State<AnalyticsDashboardScreen> {
     if (widget.onExplore != null) {
       widget.onExplore!(req);
     } else {
-      widget.onNew(); // ouvre l'explorateur (demande vide)…
-      AnalyticsBus.pendingRequest.value = req; // …puis y dépose la copie
+      widget.onNew(); // opens the explorer (empty request)…
+      AnalyticsBus.pendingRequest.value = req; // …then drops the copy there
     }
   }
 
@@ -97,21 +97,21 @@ class _DashboardViewState extends State<DashboardView> {
   Timer? _saveDebounce;
   Future<void>? _saving;
 
-  /// Révision du bus au dernier chargement : si elle a bougé, on relit avant
-  /// toute modification (sinon on écraserait une vue ajoutée par l'explorateur).
+  /// Bus revision at the last load: if it moved, re-read before
+  /// any change (otherwise we would overwrite a view added by the explorer).
   int _rev = -1;
-  bool _stale = false; // révision changée pendant un glisser
+  bool _stale = false; // revision changed during a drag
   bool _selfBump = false;
 
-  /// Vues retirées localement, pas encore enregistrées (la fusion ne doit
-  /// pas les faire revenir depuis la version serveur).
+  /// Views removed locally, not saved yet (the merge must not
+  /// bring them back from the server version).
   final Set<String> _removed = {};
 
-  // ---- interaction en cours (déplacement ou redimensionnement)
+  // ---- interaction in progress (move or resize)
   DashboardTile? _drag;
   Offset _dragDelta = Offset.zero;
   bool _resizing = false;
-  (int, int, int, int)? _ghost; // x, y, w, h cible
+  (int, int, int, int)? _ghost; // target x, y, w, h
 
   @override
   void initState() {
@@ -145,13 +145,13 @@ class _DashboardViewState extends State<DashboardView> {
     }
     if (_rev == AnalyticsBus.revision.value) return;
     if (_drag != null) {
-      _stale = true; // rechargé à la fin du geste
+      _stale = true; // reloaded at the end of the gesture
       return;
     }
     _flushThenLoad();
   }
 
-  /// Enregistre d'abord une disposition en attente, puis relit le serveur.
+  /// Saves any pending layout first, then re-reads the server.
   Future<void> _flushThenLoad() async {
     if (_saveDebounce?.isActive == true) {
       _saveDebounce!.cancel();
@@ -167,7 +167,7 @@ class _DashboardViewState extends State<DashboardView> {
     if (id == null || id == _current?.id) return;
     final d = _dashboards.where((x) => x.id == id).firstOrNull;
     if (d == null) {
-      _flushThenLoad(); // nouveau tableau de bord créé ailleurs
+      _flushThenLoad(); // new dashboard created elsewhere
       return;
     }
     _switchTo(d);
@@ -255,9 +255,9 @@ class _DashboardViewState extends State<DashboardView> {
     });
   }
 
-  /// Enregistre la disposition en FUSIONNANT avec la version serveur : les
-  /// tuiles ajoutées ailleurs (explorateur) et absentes d'ici sont gardées
-  /// et placées en bas, sauf celles que l'on vient de retirer.
+  /// Saves the layout by MERGING with the server version: tiles
+  /// added elsewhere (explorer) and missing here are kept
+  /// and placed at the bottom, except those just removed.
   Future<void> _doSaveLayout() async {
     final d = _current;
     if (d == null) return;
@@ -308,11 +308,11 @@ class _DashboardViewState extends State<DashboardView> {
     }
   }
 
-  // ---- grille : collisions et compactage vers le haut (comportement gridstack)
+  // ---- grid: collisions and upward compaction (gridstack behaviour)
   static bool _overlap(DashboardTile a, DashboardTile b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 
-  /// Pousse vers le bas les tuiles qui chevauchent [fixed] (ou entre elles),
-  /// puis remonte chaque tuile aussi haut que possible.
+  /// Pushes down the tiles that overlap [fixed] (or each other),
+  /// then moves each tile up as high as possible.
   void _resolve(List<DashboardTile> tiles, {DashboardTile? fixed}) {
     for (final t in tiles) {
       t.w = t.w.clamp(1, _kCols);
@@ -335,7 +335,7 @@ class _DashboardViewState extends State<DashboardView> {
       }
       placed.add(t);
     }
-    // compactage : chaque tuile remonte tant que rien ne la bloque
+    // compaction: each tile moves up as long as nothing blocks it
     final byY = List.of(tiles)..sort((a, b) => a.y != b.y ? a.y.compareTo(b.y) : a.x.compareTo(b.x));
     for (final t in byY) {
       if (t == fixed) continue;
@@ -349,7 +349,7 @@ class _DashboardViewState extends State<DashboardView> {
     }
   }
 
-  // ---- tableaux de bord
+  // ---- dashboards
   Future<void> _newDashboard() async {
     final name = await _askName(context, 'Nouveau tableau de bord');
     if (name == null) return;
@@ -407,7 +407,7 @@ class _DashboardViewState extends State<DashboardView> {
     }
   }
 
-  // ---- tuiles
+  // ---- tiles
   Future<void> _addExisting() async {
     final d = _current;
     if (d == null) return;
@@ -472,7 +472,7 @@ class _DashboardViewState extends State<DashboardView> {
     if (!ok) return;
     try {
       _saveDebounce?.cancel();
-      await widget.api.deleteReport(t.reportId); // le serveur la retire aussi des dispositions
+      await widget.api.deleteReport(t.reportId); // the server also removes it from the layouts
       if (!mounted) return;
       final d = _current;
       if (d != null) {
@@ -480,7 +480,7 @@ class _DashboardViewState extends State<DashboardView> {
           d.layout.removeWhere((x) => x.reportId == t.reportId);
           _resolve(d.layout);
         });
-        await _saveLayout(); // garde les déplacements en attente, sans la vue supprimée
+        await _saveLayout(); // keeps pending moves, without the deleted view
       }
       _bumpSelf();
       await _load();
@@ -493,10 +493,10 @@ class _DashboardViewState extends State<DashboardView> {
   void _exploreTile(SavedReport r) =>
       widget.onExplore(ExplorerRequest(seed: _deepCopy(r.spec), title: r.name, origin: 'Depuis le tableau de bord', chartType: r.chartType, encoding: _deepCopy(r.encoding)));
 
-  // ---- gestes
+  // ---- gestures
   void _onDragStart(DashboardTile t, {required bool resize}) {
     if (_rev != AnalyticsBus.revision.value) {
-      // une vue a été ajoutée ou supprimée ailleurs : relire avant de modifier
+      // a view was added or deleted elsewhere: re-read before editing
       _flushThenLoad();
       return;
     }
@@ -673,7 +673,7 @@ class _DashboardViewState extends State<DashboardView> {
               style: T.small,
             ),
           ],
-          // la liste « Bien démarrer » ne doit jamais écraser la grille sur un petit écran
+          // the « Bien démarrer » list must never cover the grid on a small screen
           ConstrainedBox(
             constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.42),
             child: SingleChildScrollView(
@@ -790,13 +790,13 @@ class _DashboardViewState extends State<DashboardView> {
   }
 }
 
-/// Bouton secondaire bordé avec icône ET libellé.
+/// Bordered secondary button with icon AND label.
 class _OutlineAction extends StatelessWidget {
   const _OutlineAction({required this.icon, required this.label, required this.onPressed, this.asChild = false});
   final IconData icon;
   final String label;
   final VoidCallback? onPressed;
-  final bool asChild; // dans un PopupMenuButton : simple apparence, pas de clic propre
+  final bool asChild; // inside a PopupMenuButton: appearance only, no click of its own
 
   @override
   Widget build(BuildContext context) {
@@ -955,7 +955,7 @@ class _Tile extends StatelessWidget {
           ),
       ],
     );
-    // poignée de déplacement = la zone de titre ; poignée de taille = coin bas droit
+    // drag handle = the title area; resize handle = bottom-right corner
     final handle = GestureDetector(
       behavior: HitTestBehavior.opaque,
       onPanStart: (_) => onMoveStart(),

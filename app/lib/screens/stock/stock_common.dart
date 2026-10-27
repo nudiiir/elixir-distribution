@@ -55,7 +55,7 @@ Future<bool> openStockDocument(
 }
 
 // ---------------------------------------------------------------------------
-// Dépôt
+// Depot
 // ---------------------------------------------------------------------------
 
 /// The « Dépôt » filter of a stock list (null when the shop has one depot).
@@ -250,7 +250,7 @@ class DepotDropdown extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Indicateurs
+// Indicators
 // ---------------------------------------------------------------------------
 
 class Kpi {
@@ -258,7 +258,7 @@ class Kpi {
   final String label;
   final String value;
   final String? hint;
-  final Color? tone; // couleur de la valeur (alerte), neutre par défaut
+  final Color? tone; // value colour (alert), neutral by default
   final VoidCallback? onTap;
 }
 
@@ -328,7 +328,7 @@ class _KpiCard extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Période
+// Period
 // ---------------------------------------------------------------------------
 
 /// A period of the stock lists — preset key or custom dates.
@@ -468,10 +468,10 @@ class PeriodButton extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Sélecteur de produit
+// Product picker
 // ---------------------------------------------------------------------------
 
-/// Search picker for one product (Entrée = premier résultat, ↑↓, Échap).
+/// Search picker for one product (Enter = first result, ↑↓, Esc).
 Future<Product?> pickProduct(BuildContext context, ApiClient api,
     {String title = 'Choisir un produit'}) {
   return showDialog<Product>(
@@ -626,7 +626,7 @@ class _ProductPickerState extends State<_ProductPicker> {
   }
 }
 
-/// Coloured state dot used by quantities (rupture = rouge, sous le min. = orange).
+/// Coloured state dot used by quantities (out of stock = red, below min. = orange).
 class StockDot extends StatelessWidget {
   const StockDot({super.key, required this.rupture, required this.underMin});
   final bool rupture;

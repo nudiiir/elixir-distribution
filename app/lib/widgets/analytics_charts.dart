@@ -9,12 +9,12 @@ import '../util/list_export.dart';
 import 'charts.dart';
 import 'ui.dart';
 
-/// Palette des séries (marque en tête, puis des teintes lisibles côte à côte).
+/// Series palette (brand colour first, then hues readable side by side).
 const kSeriesColors = <Color>[T.mint, Color(0xFF4A63B8), Color(0xFFE0A020), Color(0xFFB8556B), Color(0xFF7B61C9), Color(0xFF2FA0B8), Color(0xFFC97A1A), Color(0xFF6B8E23)];
 
 Color seriesColor(int i) => kSeriesColors[i % kSeriesColors.length];
 
-/// Formate une valeur selon le format déclaré par le serveur.
+/// Formats a value according to the format declared by the server.
 String fmtValue(dynamic v, String format) {
   if (v == null) return '—';
   switch (format) {
@@ -34,7 +34,7 @@ String fmtValue(dynamic v, String format) {
   return '$v';
 }
 
-/// Version courte pour les axes (12,5 k, 1,2 M…).
+/// Short version for axes (12,5 k, 1,2 M…).
 String fmtAxis(double v, String format) {
   var x = v;
   var suffix = '';
@@ -70,17 +70,17 @@ String _groupThousands(int n) {
   return (n < 0 ? '-' : '') + b.toString();
 }
 
-/// Encodage explicite d'un graphique (sauvegardé à part de la spec).
+/// Explicit encoding of a chart (saved separately from the spec).
 class ChartEncoding {
-  String? x; // clé de colonne dimension
-  String? series; // clé de colonne dimension (couleur)
-  List<String> y; // clés de colonnes mesure
+  String? x; // dimension column key
+  String? series; // dimension column key (colour)
+  List<String> y; // measure column keys
   bool stacked;
-  String? secondary; // mesure sur l'axe secondaire
+  String? secondary; // measure on the secondary axis
   bool showValues;
   bool showPrevious;
 
-  /// Couleurs conditionnelles des tables : clé de colonne mesure → règles.
+  /// Conditional colours of tables: measure column key → rules.
   Map<String, CondFormat> cond;
 
   ChartEncoding({this.x, this.series, List<String>? y, this.stacked = false, this.secondary, this.showValues = false, this.showPrevious = true, Map<String, CondFormat>? cond})
@@ -118,7 +118,7 @@ class ChartEncoding {
 
   ChartEncoding copy() => ChartEncoding.fromJson(toJson());
 
-  /// Complète l'encodage avec des valeurs par défaut cohérentes avec le résultat.
+  /// Completes the encoding with defaults consistent with the result.
   ChartEncoding resolved(AResult r) {
     final dims = r.dimensions;
     final meas = r.measures;
@@ -160,7 +160,7 @@ const kChartIcons = {
   'table': Icons.table_rows_rounded,
 };
 
-/// Choix automatique d'après la forme du résultat.
+/// Automatic choice based on the shape of the result.
 String autoChartType(AResult r) {
   final nd = r.dimensions.length;
   final nm = r.measures.length;
@@ -179,7 +179,7 @@ String autoChartType(AResult r) {
   return 'table';
 }
 
-/// Le type peut-il rendre cette forme ? Retourne null si oui, sinon la raison.
+/// Can the type render this shape? Returns null if so, otherwise the reason.
 String? chartTypeBlocker(String type, AResult r) {
   final nd = r.dimensions.length;
   final nm = r.measures.length;
@@ -202,9 +202,9 @@ String? chartTypeBlocker(String type, AResult r) {
   return null;
 }
 
-/// Rend le résultat avec le type et l'encodage donnés.
-/// [title] sert de titre aux exports des tables ; [onDrill] rend les valeurs
-/// de regroupement cliquables (détail).
+/// Renders the result with the given type and encoding.
+/// [title] is used as the title of table exports; [onDrill] makes grouping
+/// values clickable (drill-down).
 Widget buildChart(String type, AResult r, ChartEncoding enc, {bool compact = false, void Function(AColumn col, dynamic value)? onDrill, String title = 'Analyse'}) {
   if (r.rows.isEmpty) {
     return const EmptyState(icon: Icons.query_stats_rounded, text: 'Aucune donnée sur cette période');
@@ -225,10 +225,10 @@ Widget buildChart(String type, AResult r, ChartEncoding enc, {bool compact = fal
   return ResultTable(result: r, encoding: e, compact: compact, onDrill: onDrill, title: title);
 }
 
-// ---------------------------------------------------------------- valeurs affichées
+// ---------------------------------------------------------------- displayed values
 
-/// Valeur brute (centimes, millièmes, ratio) → valeur lue par l'utilisateur
-/// (DA, quantité, %). Les seuils des couleurs sont saisis dans cette unité.
+/// Raw value (centimes, thousandths, ratio) → value as read by the user
+/// (DA, quantity, %). Colour thresholds are entered in this unit.
 double displayNum(dynamic raw, String format) {
   final v = _toNum(raw);
   return switch (format) {
@@ -239,7 +239,7 @@ double displayNum(dynamic raw, String format) {
   };
 }
 
-/// Unité affichée à côté des seuils et dans les en-têtes d'export.
+/// Unit shown next to thresholds and in export headers.
 String unitWord(String format) => switch (format) {
   'currency' => 'DA',
   'quantity' => 'quantité',
@@ -247,9 +247,9 @@ String unitWord(String format) => switch (format) {
   _ => '',
 };
 
-// ---------------------------------------------------------------- couleurs conditionnelles
+// ---------------------------------------------------------------- conditional colours
 
-/// Couleurs proposées pour les règles (clé enregistrée → libellé, fond, texte).
+/// Colours offered for rules (stored key → label, background, text).
 const kCondColors = <String, (String, Color, Color)>{
   'red': ('Rouge', Color(0x33E5484D), T.dangerDark),
   'green': ('Vert', Color(0x3300CC99), T.mintDark),
@@ -257,7 +257,7 @@ const kCondColors = <String, (String, Color, Color)>{
   'blue': ('Bleu', Color(0x2E4A63B8), Color(0xFF34488F)),
 };
 
-/// Une règle « valeur op seuil → couleur ». [a]/[b] sont dans l'unité affichée.
+/// A rule « value op threshold → colour ». [a]/[b] are in the displayed unit.
 class CondRule {
   String op; // lt | lte | gt | gte | eq | between
   double a;
@@ -281,9 +281,9 @@ class CondRule {
 
 const kCondOps = <String, String>{'lt': 'inférieur à', 'lte': 'inférieur ou égal à', 'gt': 'supérieur à', 'gte': 'supérieur ou égal à', 'eq': 'égal à', 'between': 'entre'};
 
-/// Mise en forme conditionnelle d'une colonne mesure.
+/// Conditional formatting of a measure column.
 class CondFormat {
-  String scale; // none | up (plus haut = mieux) | down (plus bas = mieux) | neutral
+  String scale; // none | up (higher = better) | down (lower = better) | neutral
   bool bars;
   List<CondRule> rules;
   String top; // none | top | bottom
@@ -311,7 +311,7 @@ class CondFormat {
   bool get isEmpty => scale == 'none' && !bars && rules.isEmpty && top == 'none';
 }
 
-/// Statistiques d'une colonne (valeurs affichées) pour l'échelle et le top N.
+/// Statistics of a column (displayed values) for the scale and top N.
 class CondStats {
   CondStats(List<double> values, CondFormat f)
     : min = values.isEmpty ? 0 : values.reduce(math.min),
@@ -329,7 +329,7 @@ class CondStats {
   }
 }
 
-/// Aspect d'une cellule : fond, couleur et graisse du texte, barre (0..1, signe).
+/// Look of a cell: background, text colour and weight, bar (0..1, sign).
 class CellLook {
   const CellLook({this.bg, this.fg, this.bold = false, this.bar});
   final Color? bg, fg;
@@ -346,7 +346,7 @@ CellLook condLook(CondFormat? f, double v, CondStats? s) {
   Color? bg;
   Color? fg;
   var bold = false;
-  // échelle de couleur (la plus faible priorité)
+  // colour scale (lowest priority)
   if (f.scale != 'none' && s.max > s.min) {
     final t = ((v - s.min) / (s.max - s.min)).clamp(0.0, 1.0);
     if (f.scale == 'neutral') {
@@ -356,13 +356,13 @@ CellLook condLook(CondFormat? f, double v, CondStats? s) {
       bg = good < 0.5 ? Color.lerp(_kScaleLow, Colors.transparent, good * 2) : Color.lerp(Colors.transparent, _kScaleHigh, (good - 0.5) * 2);
     }
   }
-  // N premiers / derniers
+  // top / bottom N
   if (s.cut != null && (f.top == 'top' ? v >= s.cut! : v <= s.cut!)) {
     bg = f.top == 'top' ? const Color(0x3300CC99) : const Color(0x40E0A020);
     fg = f.top == 'top' ? T.mintDark : T.warnDark;
     bold = true;
   }
-  // règles : la première qui correspond gagne
+  // rules: the first match wins
   for (final r in f.rules) {
     if (r.matches(v)) {
       final c = kCondColors[r.color] ?? kCondColors['red']!;
@@ -377,7 +377,7 @@ CellLook condLook(CondFormat? f, double v, CondStats? s) {
   return CellLook(bg: bg, fg: fg, bold: bold, bar: bar);
 }
 
-/// Cellule numérique avec son aspect conditionnel (fond + barre de données).
+/// Numeric cell with its conditional look (background + data bar).
 class CondCell extends StatelessWidget {
   const CondCell({super.key, required this.text, required this.look, required this.style, this.width, this.height, this.padding = const EdgeInsets.symmetric(horizontal: 8)});
   final String text;
@@ -433,8 +433,8 @@ class CondCell extends StatelessWidget {
 
 // ---------------------------------------------------------------- export
 
-/// Exporte un résultat (lignes déjà filtrées/triées) en Excel, CSV ou PDF :
-/// valeurs en DA / quantité / % (des nombres dans Excel).
+/// Exports a result (rows already filtered/sorted) to Excel, CSV or PDF:
+/// values in DA / quantity / % (numbers in Excel).
 Future<String> exportResult(AResult r, List<List<dynamic>> rows, String title, ExportFormat f, {List<AColumn>? columns}) {
   final cols = columns ?? r.columns;
   final idx = [for (final c in cols) r.colIndex(c.key)];
@@ -468,7 +468,7 @@ Future<String> exportResult(AResult r, List<List<dynamic>> rows, String title, E
 
 num _round2(double v) => v == v.roundToDouble() ? v.round() : (v * 100).round() / 100;
 
-/// Bouton « Exporter ▾ » (Excel, CSV, PDF) commun aux tables.
+/// « Exporter ▾ » button (Excel, CSV, PDF) shared by tables.
 class ExportMenuButton extends StatelessWidget {
   const ExportMenuButton({super.key, required this.onExport, this.label = 'Exporter'});
   final Future<String> Function(ExportFormat f) onExport;
@@ -515,7 +515,7 @@ class ExportMenuButton extends StatelessWidget {
   }
 }
 
-/// Petit champ de recherche des tables (filtre les lignes affichées).
+/// Small search field for tables (filters the displayed rows).
 class _TableSearch extends StatelessWidget {
   const _TableSearch({required this.controller, required this.onChanged});
   final TextEditingController controller;
@@ -567,13 +567,13 @@ int _cmpCells(dynamic va, dynamic vb) {
   return '$va'.toLowerCase().compareTo('$vb'.toLowerCase());
 }
 
-// ---------------------------------------------------------------- chiffres
+// ---------------------------------------------------------------- figures
 
 class StatTiles extends StatelessWidget {
   const StatTiles({super.key, required this.result, this.compact = false, this.flat = false, this.title});
   final AResult result;
   final bool compact;
-  final bool flat; // carte de tableau de bord : pas de cadre interne, le titre sert de libellé
+  final bool flat; // dashboard card: no inner frame, the title serves as the label
   final String? title;
 
   @override
@@ -673,7 +673,7 @@ class StatTiles extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------- lignes / barres
+// ---------------------------------------------------------------- lines / bars
 
 class _Series {
   _Series(this.label, this.color, this.values, {this.format = 'integer', this.dashed = false, this.secondary = false});
@@ -707,7 +707,7 @@ class _SeriesChartState extends State<SeriesChart> {
     final e = widget.encoding;
     final xCol = r.columns[r.colIndex(e.x!)];
     final xi = r.colIndex(e.x!);
-    // catégories x dans l'ordre des lignes
+    // x categories in row order
     final xs = <String>[];
     final xVals = <dynamic>[];
     final seen = <String>{};
@@ -886,7 +886,7 @@ class _SeriesPainter extends CustomPainter {
       return bottom - ((v - primaryMin) / (range == 0 ? 1 : range)) * h;
     }
 
-    // grille + axe Y
+    // grid + Y axis
     final grid = Paint()
       ..color = T.border
       ..strokeWidth = 1;
@@ -913,13 +913,13 @@ class _SeriesPainter extends CustomPainter {
         tp.paint(canvas, Offset(right + 6, y - tp.height / 2));
       }
     }
-    // survol
+    // hover
     final n = labels.length;
     final slot = w / n;
     if (hover != null) {
       canvas.drawRect(Rect.fromLTWH(left + hover! * slot, top, slot, h), Paint()..color = T.mintTint);
     }
-    // libellés X (échantillonnés)
+    // X labels (sampled)
     final step = math.max(1, (n / (w / 64)).ceil());
     for (var i = 0; i < n; i += step) {
       tp.text = TextSpan(text: labels[i].length > 12 ? '${labels[i].substring(0, 11)}…' : labels[i], style: T.monoSmall.copyWith(fontSize: 13));
@@ -956,7 +956,7 @@ class _SeriesPainter extends CustomPainter {
           _drawDashed(canvas, path, paint);
         } else {
           canvas.drawPath(path, paint);
-          // remplissage léger sous la première série
+          // light fill under the first series
           if (identical(s, series.first) && pts.length > 1) {
             final fill = Path.from(path)
               ..lineTo(pts.last.dx, bottom)
@@ -1017,7 +1017,7 @@ class _SeriesPainter extends CustomPainter {
           g++;
         }
       }
-      // séries « précédentes » en barres : ligne pointillée par-dessus
+      // « previous » series on bars: dotted line on top
       for (final s in series.where((s) => s.dashed)) {
         final path = Path();
         var started = false;
@@ -1085,7 +1085,7 @@ class _SeriesPainter extends CustomPainter {
   bool shouldRepaint(_SeriesPainter old) => true;
 }
 
-// ---------------------------------------------------------------- anneau
+// ---------------------------------------------------------------- donut
 
 class DonutChart extends StatelessWidget {
   const DonutChart({super.key, required this.result, required this.encoding, this.compact = false, this.onDrill});
@@ -1168,10 +1168,10 @@ class DonutChart extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------- tableau croisé
+// ---------------------------------------------------------------- pivot table
 
-/// Tableau croisé d'investigation : tri par clic sur l'en-tête, recherche,
-/// totaux, export, couleurs conditionnelles, clic sur une ligne = détail.
+/// Investigation pivot table: sort by clicking the header, search,
+/// totals, export, conditional colours, click on a row = drill-down.
 class PivotGrid extends StatefulWidget {
   const PivotGrid({super.key, required this.result, required this.encoding, this.compact = false, this.onDrill, this.title = 'Tableau croisé'});
   final AResult result;
@@ -1187,7 +1187,7 @@ class PivotGrid extends StatefulWidget {
 class _PivotGridState extends State<PivotGrid> {
   final _search = TextEditingController();
   String _q = '';
-  int? _sort; // -1 = libellé de ligne, sinon index de colonne de valeurs (totaux compris)
+  int? _sort; // -1 = row label, otherwise index of the value column (totals included)
   bool _asc = false;
   final _hScroll = ScrollController();
 
@@ -1239,7 +1239,7 @@ class _PivotGridState extends State<PivotGrid> {
     final nc = colKeys.length;
     String rowLabel(int ri) => [for (var i = 0; i < rowDims.length; i++) r.labelOf(rowDims[i], rowVals[ri][i])].join(' · ');
 
-    // valeurs par ligne : [col0 m0, col0 m1, …, total m0, total m1…]
+    // values per row: [col0 m0, col0 m1, …, total m0, total m1…]
     final values = <List<double?>>[];
     for (var ri = 0; ri < rowKeys.length; ri++) {
       final line = <double?>[];
@@ -1254,7 +1254,7 @@ class _PivotGridState extends State<PivotGrid> {
       line.addAll(tot);
       values.add(line);
     }
-    // recherche + tri
+    // search + sort
     var order = [for (var i = 0; i < rowKeys.length; i++) i];
     if (_q.isNotEmpty) {
       final q = _q.toLowerCase();
@@ -1270,14 +1270,14 @@ class _PivotGridState extends State<PivotGrid> {
         return _asc ? c : -c;
       });
     }
-    // totaux de colonnes sur les lignes affichées
+    // column totals over the displayed rows
     final colTotals = List<double>.filled((nc + 1) * nm, 0);
     for (final ri in order) {
       for (var j = 0; j < (nc + 1) * nm; j++) {
         colTotals[j] += values[ri][j] ?? 0;
       }
     }
-    // couleurs conditionnelles : statistiques par mesure sur les cellules du corps
+    // conditional colours: per-measure statistics over the body cells
     final stats = <int, CondStats>{};
     for (var k = 0; k < nm; k++) {
       final f = encoding.cond[meas[k].key];
@@ -1425,7 +1425,7 @@ class _PivotGridState extends State<PivotGrid> {
 
     return LayoutBuilder(
       builder: (context, o) {
-        if (o.maxHeight < 140) return table; // trop petit pour la barre d'outils
+        if (o.maxHeight < 140) return table; // too small for the toolbar
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -1456,11 +1456,11 @@ class _PivotGridState extends State<PivotGrid> {
   }
 }
 
-// ---------------------------------------------------------------- liste
+// ---------------------------------------------------------------- list
 
-/// Liste d'investigation : tri par clic sur l'en-tête, recherche, ligne
-/// « Total », nombre de lignes, export Excel/CSV/PDF, couleurs
-/// conditionnelles, clic sur une valeur de regroupement = détail.
+/// Investigation list: sort by clicking the header, search, « Total »
+/// row, row count, Excel/CSV/PDF export, conditional
+/// colours, click on a grouping value = drill-down.
 class ResultTable extends StatefulWidget {
   const ResultTable({super.key, required this.result, this.encoding, this.compact = false, this.onDrill, this.title = 'Analyse'});
   final AResult result;
@@ -1657,7 +1657,7 @@ class _ResultTableState extends State<ResultTable> {
     if (widget.compact) return table;
     return LayoutBuilder(
       builder: (context, o) {
-        if (o.maxHeight < 140) return table; // trop petit pour la barre d'outils
+        if (o.maxHeight < 140) return table; // too small for the toolbar
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [

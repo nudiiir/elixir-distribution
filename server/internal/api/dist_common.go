@@ -11,8 +11,8 @@ import (
 	"elixir/server/internal/domain"
 )
 
-// routesDistribution registers the distribution routes (commandes clients,
-// tarifs, livraisons, relation client, messages). Contract:
+// routesDistribution registers the distribution routes (customer orders,
+// pricing, deliveries, customer relationship, messages). Contract:
 // docs/API_DISTRIBUTION.md.
 func (s *Server) routesDistribution(r chi.Router) {
 	s.routesOrders(r)

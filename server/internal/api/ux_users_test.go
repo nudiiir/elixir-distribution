@@ -184,13 +184,13 @@ func TestRefusedActionAndApprovalRoundTrip(t *testing.T) {
 	if code, _ := f.as(cashTok, "POST", "/documents", discountedQuote(1000), map[string]string{"X-Approval": old}); code != http.StatusForbidden {
 		t.Fatalf("expired token accepted: %d", code)
 	}
-	// Audit « approuvé par ».
+	// Audit « approuvé par » (approved by).
 	var n int
 	f.db.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='approval' AND detail LIKE '%approuvé par gerant%'`).Scan(&n)
 	if n != 1 {
 		t.Fatalf("approval audit rows = %d", n)
 	}
-	// A cashier cannot validate an invoice alone (sales.validate) nor make an avoir.
+	// A cashier cannot validate an invoice alone (sales.validate) nor make a credit note.
 	var d Document
 	code, _ = f.as(cashTok, "POST", "/documents", map[string]any{"doc_type": "SALE_INVOICE", "doc_date": today(),
 		"lines": []any{line(nil, "x", 1000, 100)}}, nil)
@@ -299,7 +299,7 @@ func TestLogoutAll(t *testing.T) {
 
 func TestScopeFiltering(t *testing.T) {
 	f := newAPIFx(t)
-	_, cashTok := f.mkUser("caisse", RoleCashierID, nil) // Caissier = own documents
+	_, cashTok := f.mkUser("caisse", RoleCashierID, nil) // Cashier = own documents
 	quote := func(tok, wh string) {
 		f.t.Helper()
 		body := map[string]any{"doc_type": "QUOTE", "doc_date": today(), "warehouse_id": wh,

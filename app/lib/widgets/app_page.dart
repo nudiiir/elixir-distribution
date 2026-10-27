@@ -73,7 +73,7 @@ class PageAction extends StatelessWidget {
 /// The standard frame of every detail / edit page: breadcrumb, « Retour »,
 /// title + subtitle, labelled actions on the right, scrolling body.
 /// Pushed inside the module's own navigator, so the menu stays visible.
-/// Échap = Retour (through [onBack] or a plain pop).
+/// Escape = « Retour » (through [onBack] or a plain pop).
 class AppPage extends StatelessWidget {
   const AppPage({
     super.key,
@@ -94,7 +94,7 @@ class AppPage extends StatelessWidget {
   final List<Widget> actions;
   final Widget body;
 
-  /// Called by « Retour » and Échap. Null = Navigator.maybePop.
+  /// Called by « Retour » and Escape. Null = Navigator.maybePop.
   final VoidCallback? onBack;
 
   /// False when the body manages its own scrolling (lists, editors).

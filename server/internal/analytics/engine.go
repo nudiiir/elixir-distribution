@@ -15,16 +15,16 @@ import (
 	"time"
 )
 
-// ---- spécification ----------------------------------------------------------
+// ---- specification ----------------------------------------------------------
 
-// Measure : mesure demandée — soit champ + agrégat, soit mesure nommée.
+// Measure: requested measure — either field + aggregate, or a named measure.
 type Measure struct {
 	Field      string `json:"field,omitempty"`
 	Agg        string `json:"agg,omitempty"`
 	Name       string `json:"name,omitempty"`
 	As         string `json:"as,omitempty"`
-	Share      bool   `json:"share,omitempty"`      // + part du total
-	Cumulative bool   `json:"cumulative,omitempty"` // + cumul (dimension date triée)
+	Share      bool   `json:"share,omitempty"`      // + share of total
+	Cumulative bool   `json:"cumulative,omitempty"` // + running total (sorted date dimension)
 }
 
 type Filter struct {
@@ -33,8 +33,8 @@ type Filter struct {
 	Value any    `json:"value,omitempty"`
 }
 
-// Having : filtre sur une mesure (après agrégation). Measure = alias moteur
-// (m0…), alias client ou clé de mesure nommée.
+// Having: filter on a measure (after aggregation). Measure = engine alias
+// (m0…), client alias or named-measure key.
 type Having struct {
 	Measure string  `json:"measure"`
 	Op      string  `json:"op"`
@@ -43,11 +43,11 @@ type Having struct {
 }
 
 type Sort struct {
-	Field string `json:"field"` // d0/m0, alias client, clé de champ ou de mesure nommée
+	Field string `json:"field"` // d0/m0, client alias, field key or named-measure key
 	Dir   string `json:"dir"`   // asc | desc
 }
 
-// Spec : une requête simple.
+// Spec: a simple query.
 type Spec struct {
 	Source     string         `json:"source"`
 	Dimensions []string       `json:"dimensions"`
@@ -63,7 +63,7 @@ type Spec struct {
 	ZeroFill   *bool          `json:"zero_fill,omitempty"`
 }
 
-// ComboSource : un côté d'une requête croisée.
+// ComboSource: one side of a cross query.
 type ComboSource struct {
 	Name     string    `json:"name"`
 	Source   string    `json:"source"`
@@ -78,7 +78,7 @@ type CombinedMeasure struct {
 	Format string `json:"format"` // currency | quantity | percent | ratio | integer
 }
 
-// Request : simple ou croisée (combo=true).
+// Request: simple or cross (combo=true).
 type Request struct {
 	Spec
 	Combo            bool              `json:"combo,omitempty"`
@@ -87,12 +87,12 @@ type Request struct {
 	CombinedMeasures []CombinedMeasure `json:"combined_measures,omitempty"`
 }
 
-// ---- résultat ------------------------------------------------------------
+// ---- result ------------------------------------------------------------
 
 type Column struct {
 	Key     string `json:"key"`   // d0, m0, m0_prev, m0_delta, m0_share, m0_cum, c0
 	Kind    string `json:"kind"`  // dimension | measure
-	Field   string `json:"field"` // champ ou mesure d'origine
+	Field   string `json:"field"` // source field or measure
 	Bucket  string `json:"bucket,omitempty"`
 	Label   string `json:"label"`
 	Format  string `json:"format"`
@@ -107,13 +107,13 @@ type Result struct {
 	Truncated  bool       `json:"truncated"`
 	Range      Resolved   `json:"range"`
 	PrevRange  *Resolved  `json:"prev_range,omitempty"`
-	Dropped    []string   `json:"dropped,omitempty"` // mesures retirées (droits)
+	Dropped    []string   `json:"dropped,omitempty"` // measures removed (permissions)
 	DurationMs int64      `json:"duration_ms"`
 	Cached     bool       `json:"cached"`
-	Labels     map[string]map[string]string `json:"labels,omitempty"` // col → valeur → libellé (seaux)
+	Labels     map[string]map[string]string `json:"labels,omitempty"` // col → value → label (buckets)
 }
 
-// Error : refus explicite (400/403) — jamais un « résultat vide ».
+// Error: explicit refusal (400/403) — never an « empty result ».
 type Error struct {
 	Code    string
 	Message string
@@ -128,7 +128,7 @@ func timeoutErr() error                    { return &Error{Code: "timeout", Mess
 // ---- moteur ---------------------------------------------------------------
 
 type Engine struct {
-	db      *sql.DB // pool lecture seule, distinct de la connexion d'écriture
+	db      *sql.DB // read-only pool, separate from the write connection
 	sem     chan struct{}
 	timeout time.Duration
 	cache   *lru
@@ -156,14 +156,14 @@ func (e *Engine) maxPostedAt(ctx context.Context) string {
 
 var aliasRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_ ]{0,63}$`)
 
-// ---- compilation d'une requête simple ----------------------------------------
+// ---- compiling a simple query ----------------------------------------
 
 type dimC struct {
 	field    *Field
 	bucket   string
 	expr     string
 	key      string // d0…
-	isPeriod bool   // seau sur l'axe de période (domaine généré → remplissage à zéro)
+	isPeriod bool   // bucket on the period axis (generated domain → zero fill)
 }
 type measC struct {
 	key    string // m0…
@@ -192,7 +192,7 @@ type compiled struct {
 	rs       Resolved
 	ws       int
 	dropped  []string
-	dateDim  int // index de la première dimension seau de date, -1 sinon
+	dateDim  int // index of the first date-bucket dimension, -1 otherwise
 	zeroFill bool
 }
 
@@ -215,7 +215,7 @@ func (e *Engine) compile(ctx context.Context, sp Spec, c Caller, rsOverride *Res
 	}
 	cp := &compiled{src: src, rs: rs, ws: ws, dateDim: -1}
 
-	// ---- FROM (vue ou gabarit)
+	// ---- FROM (view or template)
 	if src.Template {
 		sqlT, args, err := templateSQL(src.Key, rs, sp.Params)
 		if err != nil {
@@ -227,7 +227,7 @@ func (e *Engine) compile(ctx context.Context, sp Spec, c Caller, rsOverride *Res
 		cp.fromSQL = src.from
 	}
 
-	// ---- champ de période (avant les dimensions : il décide du remplissage à zéro)
+	// ---- period field (before the dimensions: it decides zero filling)
 	dateField := sp.DateField
 	if dateField == "" {
 		dateField = src.DateField
@@ -268,9 +268,9 @@ func (e *Engine) compile(ctx context.Context, sp Spec, c Caller, rsOverride *Res
 		isPeriod := false
 		if bucket != "" {
 			expr = bucketExpr(f.expr, f.Type, bucket, ws)
-			// Seul l'axe de période (ou un domaine fixe dow/heure) a un domaine
-			// généré ; une autre date (péremption, dernière vente) garde ses
-			// valeurs observées, sinon on inventerait des lignes.
+			// Only the period axis (or a fixed dow/hour domain) has a generated
+			// domain; any other date (expiry, last sale) keeps its observed
+			// values, otherwise we would invent rows.
 			isPeriod = bucket == "dow" || bucket == "hour" || (f.Key == dateField && !rs.All)
 			if isPeriod && cp.dateDim < 0 {
 				cp.dateDim = i
@@ -355,7 +355,7 @@ func (e *Engine) compile(ctx context.Context, sp Spec, c Caller, rsOverride *Res
 		return nil, forbid("aucune des mesures demandées n'est disponible pour votre rôle")
 	}
 
-	// ---- période
+	// ---- period
 	if dateField != "" && !rs.All {
 		f := src.field(dateField)
 		if f == nil || (f.Type != "date" && f.Type != "datetime") {
@@ -393,7 +393,7 @@ func (e *Engine) compile(ctx context.Context, sp Spec, c Caller, rsOverride *Res
 	for _, h := range sp.Having {
 		mc := cp.findMeasure(h.Measure)
 		if mc == nil {
-			// mesure nommée gardée ? refus explicite plutôt qu'un filtre ignoré
+			// guarded named measure? explicit refusal rather than an ignored filter
 			if n := src.named(h.Measure); n != nil && !c.allowed(n.GatedBy) {
 				return nil, forbid("filtre sur « %s » : non disponible pour votre rôle", n.LabelFR)
 			}
@@ -650,7 +650,7 @@ func havingSQL(expr string, h Having) (string, []any, error) {
 	return "", nil, bad("opérateur de filtre sur mesure inconnu : %s", h.Op)
 }
 
-// SQL retourne la requête agrégée (sans LIMIT si withLimit=false) et ses arguments.
+// SQL returns the aggregated query (without LIMIT if withLimit=false) and its arguments.
 func (cp *compiled) SQL(withLimit bool) (string, []any) {
 	var sel []string
 	for _, d := range cp.dims {
@@ -690,7 +690,7 @@ func (cp *compiled) SQL(withLimit bool) (string, []any) {
 
 func (cp *compiled) countSQL() (string, []any) {
 	inner, args := cp.SQL(false)
-	// retire le ORDER BY final pour le comptage
+	// strip the final ORDER BY for the count
 	if i := strings.LastIndex(inner, " ORDER BY "); i > 0 {
 		inner = inner[:i]
 	}
@@ -769,7 +769,7 @@ func templateSQL(key string, rs Resolved, params map[string]int) (string, []any,
 	return "", nil, bad("gabarit inconnu : %s", key)
 }
 
-// ---- exécution ---------------------------------------------------------------
+// ---- execution ---------------------------------------------------------------
 
 func (e *Engine) acquire(ctx context.Context) (func(), error) {
 	select {
@@ -816,7 +816,7 @@ func (e *Engine) runRows(ctx context.Context, q string, args []any) ([][]any, er
 	return out, nil
 }
 
-// Query exécute une requête simple.
+// Query runs a simple query.
 func (e *Engine) Query(ctx context.Context, sp Spec, c Caller) (*Result, error) {
 	start := time.Now()
 	cp, err := e.compile(ctx, sp, c, nil)
@@ -901,7 +901,7 @@ func (e *Engine) execute(ctx context.Context, cp *compiled, sp Spec, c Caller) (
 		}
 	}
 
-	// ---- libellés des seaux
+	// ---- bucket labels
 	for i, d := range cp.dims {
 		if d.bucket == "dow" || d.bucket == "hour" || d.bucket == "month" || d.bucket == "week" {
 			m := map[string]string{}
@@ -912,7 +912,7 @@ func (e *Engine) execute(ctx context.Context, cp *compiled, sp Spec, c Caller) (
 		}
 	}
 
-	// ---- comparaison avec la période précédente
+	// ---- comparison with the previous period
 	if sp.Compare == "previous_period" || sp.Compare == "previous_year" {
 		if cp.rs.All {
 			return nil, bad("la comparaison exige une période bornée")
@@ -949,7 +949,7 @@ func (e *Engine) execute(ctx context.Context, cp *compiled, sp Spec, c Caller) (
 		}
 	}
 
-	// ---- part du total / cumul
+	// ---- share of total / running total
 	nd := len(cp.dims)
 	for i, m := range cp.meas {
 		col := nd + i
@@ -1020,8 +1020,8 @@ func keyOf(v any) string {
 	return fmt.Sprint(v)
 }
 
-// zeroFill : produit cartésien de toutes les dimensions (domaine complet pour
-// les seaux de date, valeurs observées pour les autres), mesures à zéro.
+// zeroFill: Cartesian product of all dimensions (full domain for
+// date buckets, observed values for the others), measures at zero.
 func (e *Engine) zeroFill(cp *compiled, rows [][]any) [][]any {
 	nd := len(cp.dims)
 	if nd == 0 {
@@ -1045,12 +1045,12 @@ func (e *Engine) zeroFill(cp *compiled, rows [][]any) [][]any {
 			}
 		}
 	}
-	// ajoute les valeurs observées hors domaine (dates hors bornes ne devraient pas exister)
+	// add observed values outside the domain (out-of-range dates should not exist)
 	total := 1
 	for _, dom := range domains {
 		total *= len(dom)
 		if total > 50000 {
-			return rows // trop grand : pas de remplissage
+			return rows // too large: no fill
 		}
 	}
 	index := map[string][]any{}
@@ -1157,8 +1157,8 @@ func compareAny(a, b any) int {
 	return 0
 }
 
-// alignCompare : aligne la période précédente sur la courante — par position
-// de seau quand la première dimension est un seau de date, par valeur sinon.
+// alignCompare: aligns the previous period on the current one — by bucket
+// position when the first dimension is a date bucket, by value otherwise.
 func alignCompare(cp, pcp *compiled, rows, prows [][]any) [][]any {
 	nd, nm := len(cp.dims), len(cp.meas)
 	rest := func(r []any, from int) string {
@@ -1171,7 +1171,7 @@ func alignCompare(cp, pcp *compiled, rows, prows [][]any) [][]any {
 	}
 	prevIx := map[string][]any{}
 	if cp.dateDim == 0 && nd > 0 {
-		// position du seau dans le domaine
+		// bucket position in the domain
 		curDom := bucketDomain(cp.dims[0].bucket, cp.rs, cp.ws, time.Local)
 		prevDom := bucketDomain(pcp.dims[0].bucket, pcp.rs, pcp.ws, time.Local)
 		pos := map[string]int{}
@@ -1223,7 +1223,7 @@ func appendCompare(r, pr []any, nd, nm int) []any {
 	return r
 }
 
-// ---- requêtes croisées -----------------------------------------------------------
+// ---- cross queries -----------------------------------------------------------
 
 func (e *Engine) Combo(ctx context.Context, rq Request, c Caller) (*Result, error) {
 	start := time.Now()
@@ -1246,8 +1246,8 @@ func (e *Engine) Combo(ctx context.Context, rq Request, c Caller) (*Result, erro
 	if len(rq.JoinOn) == 0 || len(rq.JoinOn) > 2 {
 		return nil, bad("join_on : une ou deux dimensions communes")
 	}
-	// dimensions communes : mêmes champs des deux côtés ; les dates doivent
-	// porter le même seau et se traduisent par le champ de date de chaque source.
+	// common dimensions: same fields on both sides; dates must carry
+	// the same bucket and map to each source's date field.
 	dimsA, dimsB := make([]string, 0), make([]string, 0)
 	for _, j := range rq.JoinOn {
 		key, bucket := j, ""
@@ -1289,7 +1289,7 @@ func (e *Engine) Combo(ctx context.Context, rq Request, c Caller) (*Result, erro
 	if err != nil {
 		return nil, err
 	}
-	// alias client → alias moteur (jamais dans SQL)
+	// client alias → engine alias (never in SQL)
 	names := map[string]string{} // "src.alias" → "sX.mY"
 	for si, cp := range []*compiled{cpA, cpB} {
 		sname := rq.Sources[si].Name
@@ -1379,7 +1379,7 @@ func (e *Engine) Combo(ctx context.Context, rq Request, c Caller) (*Result, erro
 		}
 		return b.String()
 	}
-	// union des clés, remplissage à zéro des deux côtés
+	// union of keys, zero fill on both sides
 	type merged struct {
 		dims []any
 		a, b []any
@@ -1441,7 +1441,7 @@ func (e *Engine) Combo(ctx context.Context, rq Request, c Caller) (*Result, erro
 			f := toF(v)
 			vars[fmt.Sprintf("s1.m%d", j)] = &f
 		}
-		// espace de noms client → moteur
+		// client → engine namespace
 		cvars := map[string]*float64{}
 		for cname, ename := range names {
 			cvars[cname] = vars[ename]
@@ -1459,7 +1459,7 @@ func (e *Engine) Combo(ctx context.Context, rq Request, c Caller) (*Result, erro
 		}
 		rows = append(rows, row)
 	}
-	// tri : première mesure combinée desc, sinon dimension
+	// sort: first combined measure desc, else dimension
 	sortCol := nd
 	desc := true
 	if len(combined) > 0 {
@@ -1509,7 +1509,7 @@ func (e *Engine) Combo(ctx context.Context, rq Request, c Caller) (*Result, erro
 	return res, nil
 }
 
-// Run dispatche simple / croisée.
+// Run dispatches simple / cross.
 func (e *Engine) Run(ctx context.Context, rq Request, c Caller) (*Result, error) {
 	if rq.Combo {
 		return e.Combo(ctx, rq, c)
@@ -1535,8 +1535,8 @@ type BatchResult struct {
 	Error  map[string]string `json:"error,omitempty"`
 }
 
-// Batch exécute chaque tuile sous un budget de temps global ; une tuile en
-// erreur n'entraîne jamais les autres.
+// Batch runs each tile under a global time budget; a failing tile
+// never takes the others down.
 func (e *Engine) Batch(ctx context.Context, br BatchRequest, c Caller) []BatchResult {
 	if len(br.Queries) > 40 {
 		br.Queries = br.Queries[:40]
@@ -1645,9 +1645,9 @@ func (l *lru) put(k string, r *Result) {
 	l.ttl[k] = time.Now()
 }
 
-// MigrateSpec applique la table de renommage aux rapports enregistrés bâtis
-// avec une version antérieure. Retourne la spec mise à jour et la liste des
-// champs introuvables.
+// MigrateSpec applies the rename table to saved reports built
+// with an earlier version. Returns the updated spec and the list of
+// fields that could not be found.
 func MigrateSpec(raw json.RawMessage, fromVersion int) (json.RawMessage, []string) {
 	if fromVersion >= SchemaVersion {
 		return raw, nil

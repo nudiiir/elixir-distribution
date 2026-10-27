@@ -1,7 +1,7 @@
--- Paiement mixte à la caisse : un ticket réglé par plusieurs moyens garde
--- documents.payment_method à NULL et porte une ligne par moyen ici.
--- La part « credit » va au compte client ; le timbre n'est dû que sur la
--- part payée en espèces (il est inclus dans le montant de la ligne « cash »).
+-- Mixed payment at the till: a ticket settled by several methods keeps
+-- documents.payment_method NULL and carries one row per method here.
+-- The « credit » part goes to the customer account; stamp duty is only due on the
+-- part paid in cash (it is included in the amount of the « cash » row).
 CREATE TABLE document_payments (
   id          TEXT PRIMARY KEY,
   document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,

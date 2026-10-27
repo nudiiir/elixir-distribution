@@ -79,7 +79,7 @@ class _SendMessagePanelState extends State<SendMessagePanel> {
   late String _channel = messageChannelLabels.containsKey(widget.channel) ? widget.channel : 'whatsapp';
   String _lang = 'fr';
   List<MessageTemplate> _all = const [];
-  String? _templateId; // null = message libre
+  String? _templateId; // null = free message
   final _subject = TextEditingController();
   final _body = TextEditingController();
   final _to = TextEditingController();

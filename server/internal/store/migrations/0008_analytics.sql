@@ -1,10 +1,10 @@
--- 0008_analytics : module analyses (adapté au retail).
--- Vues plates (jointures seules, jamais de sous-requête corrélée), index de
--- lecture, rapports enregistrés et tableaux de bord. Convention d'unités à la
--- frontière des vues : montants en centimes, quantités en millièmes d'unité,
--- valeur = qty_milli*coût/1000. Aucune écriture dans le moteur de validation.
+-- 0008_analytics: analytics module (adapted to retail).
+-- Flat views (joins only, never a correlated subquery), read
+-- indexes, saved reports and dashboards. Unit convention at the
+-- view boundary: amounts in centimes, quantities in thousandths of a unit,
+-- value = qty_milli*cost/1000. No writes in the posting engine.
 
--- ---- index de lecture ------------------------------------------------------
+-- ---- read indexes ------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_document_lines_product ON document_lines(product_id);
 CREATE INDEX IF NOT EXISTS idx_documents_posted_at ON documents(posted_at);
 CREATE INDEX IF NOT EXISTS idx_documents_status_type_date ON documents(status, doc_type, doc_date);
@@ -13,7 +13,7 @@ CREATE INDEX IF NOT EXISTS idx_partner_ledger_doc ON partner_ledger(document_id)
 CREATE INDEX IF NOT EXISTS idx_stock_ledger_lot ON stock_ledger(lot_id);
 CREATE INDEX IF NOT EXISTS idx_lots_expiry ON lots(expiry_date);
 
--- ---- v_sale_lines : une ligne par ligne vendue (avoirs en négatif) --------
+-- ---- v_sale_lines: one row per line sold (credit notes negative) --------
 CREATE VIEW v_sale_lines AS
 SELECT d.doc_date,
        d.posted_at,
@@ -59,7 +59,7 @@ SELECT d.doc_date,
  WHERE d.status = 'posted'
    AND d.doc_type IN ('SALE_TICKET', 'SALE_INVOICE', 'SALE_CREDIT_NOTE');
 
--- ---- v_purchase_lines : réceptions + factures sans réception liée --------
+-- ---- v_purchase_lines: receipts + invoices without a linked receipt --------
 CREATE VIEW v_purchase_lines AS
 SELECT d.doc_date,
        d.posted_at,
@@ -98,7 +98,7 @@ SELECT d.doc_date,
      OR d.doc_type = 'PURCHASE_CREDIT_NOTE'
      OR (d.doc_type = 'PURCHASE_INVOICE' AND d.ref_document_id IS NULL));
 
--- ---- v_stock_movements : le journal de stock, lu directement --------------
+-- ---- v_stock_movements: the stock ledger, read directly --------------
 CREATE VIEW v_stock_movements AS
 SELECT d.doc_date        AS movement_date,
        s.created_at      AS movement_at,
@@ -125,8 +125,8 @@ SELECT d.doc_date        AS movement_date,
   LEFT JOIN warehouses w ON w.id = s.warehouse_id
   LEFT JOIN lots lo ON lo.id = s.lot_id;
 
--- ---- v_stock_snapshot : état actuel (les figures de péremption sont un
--- gabarit moteur avec horizon paramétré, pas une vue) ------------------------
+-- ---- v_stock_snapshot: current state (the expiry figures are an
+-- engine template with a parameterised horizon, not a view) ------------------------
 CREATE VIEW v_stock_snapshot AS
 SELECT sl.product_id,
        p.name            AS product_name,
@@ -152,7 +152,7 @@ SELECT sl.product_id,
   LEFT JOIN partners sp ON sp.id = p.default_supplier_id
  WHERE p.active = 1;
 
--- ---- v_partner_ledger : mouvements de créances / dettes ---------------------
+-- ---- v_partner_ledger: receivable / payable movements ---------------------
 CREATE VIEW v_partner_ledger AS
 SELECT d.doc_date        AS movement_date,
        pl.created_at     AS movement_at,
@@ -168,7 +168,7 @@ SELECT d.doc_date        AS movement_date,
   JOIN partners pa ON pa.id = pl.partner_id
   JOIN documents d ON d.id = pl.document_id;
 
--- ---- rapports enregistrés et tableaux de bord -----------------------------
+-- ---- saved reports and dashboards -----------------------------
 CREATE TABLE saved_reports (
   id            TEXT PRIMARY KEY,
   name          TEXT NOT NULL,
@@ -178,7 +178,7 @@ CREATE TABLE saved_reports (
   encoding_json TEXT NOT NULL DEFAULT '{}',
   owner_id      TEXT REFERENCES users(id),
   is_shared     INTEGER NOT NULL DEFAULT 0,
-  is_default    INTEGER NOT NULL DEFAULT 0,   -- livré avec le logiciel
+  is_default    INTEGER NOT NULL DEFAULT 0,   -- shipped with the software
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL
 );

@@ -1,22 +1,22 @@
-// Package analytics est le moteur de requêtes du module Analyses : une liste
-// blanche de sources, dimensions et mesures ; une spécification JSON venant
-// du client ; une requête SQL générée uniquement à partir d'identifiants
-// connus du serveur (les chaînes client ne servent qu'aux libellés ou aux
-// paramètres liés). Lecture seule, sur un pool dédié, jamais sur la
-// connexion d'écriture.
+// Package analytics is the query engine of the Analyses module: a
+// whitelist of sources, dimensions and measures; a JSON specification from
+// the client; an SQL query generated only from identifiers
+// known to the server (client strings are only used for labels or
+// bound parameters). Read-only, on a dedicated pool, never on the
+// write connection.
 package analytics
 
 import "sort"
 
-// SchemaVersion : incrémentée à chaque changement de la liste blanche ; les
-// rapports enregistrés portent la version avec laquelle ils ont été bâtis.
+// SchemaVersion: incremented on every change to the whitelist; saved
+// reports carry the version they were built with.
 const SchemaVersion = 1
 
-// renames : {version → {ancien champ → nouveau}} appliqué au chargement d'un
-// rapport enregistré bâti avec une version antérieure.
+// renames: {version → {old field → new}} applied when loading a
+// saved report built with an earlier version.
 var renames = map[int]map[string]string{}
 
-// Field décrit un champ exposé par une source.
+// Field describes a field exposed by a source.
 type Field struct {
 	Key        string   `json:"field"`
 	LabelFR    string   `json:"label_fr"`
@@ -24,7 +24,7 @@ type Field struct {
 	Type       string   `json:"type"`   // string | number | date | datetime | bool | enum
 	Unit       string   `json:"unit"`   // centimes | milli | percent | ratio | count | days | ""
 	Format     string   `json:"format"` // currency | quantity | percent | ratio | integer | text | date | datetime | bool
-	Group      string   `json:"group"`  // Temps | Produit | Partenaire | Document | Montants | Stock
+	Group      string   `json:"group"`  // Time | Product | Partner | Document | Amounts | Stock
 	Dimension  bool     `json:"dimension"`
 	Measure    bool     `json:"measure"`
 	Filterable bool     `json:"filterable"`
@@ -33,11 +33,11 @@ type Field struct {
 	GatedBy    string   `json:"gated_by,omitempty"`
 	EnumValues []string `json:"enum_values,omitempty"`
 	EnumSource string   `json:"enum_source,omitempty"`
-	Buckets    []string `json:"buckets,omitempty"` // pour les dates
-	expr       string   // expression SQL si différente de la colonne
+	Buckets    []string `json:"buckets,omitempty"` // for dates
+	expr       string   // SQL expression if different from the column
 }
 
-// NamedMeasure : mesure prédéfinie (expression fixée côté serveur).
+// NamedMeasure: predefined measure (expression fixed server-side).
 type NamedMeasure struct {
 	Key     string `json:"key"`
 	LabelFR string `json:"label_fr"`
@@ -48,7 +48,7 @@ type NamedMeasure struct {
 	sql     string
 }
 
-// Param : paramètre d'un gabarit (horizon de péremption…).
+// Param: parameter of a template (expiry horizon…).
 type Param struct {
 	Key     string `json:"key"`
 	LabelFR string `json:"label_fr"`
@@ -57,18 +57,18 @@ type Param struct {
 	Max     int    `json:"max"`
 }
 
-// Source : une vue ou un gabarit, sa liste blanche et ses mesures.
+// Source: a view or a template, its whitelist and its measures.
 type Source struct {
 	Key       string         `json:"key"`
 	LabelFR   string         `json:"label_fr"`
 	LabelAR   string         `json:"label_ar"`
 	Icon      string         `json:"icon"`
-	DateField string         `json:"date_field"` // champ de période par défaut
+	DateField string         `json:"date_field"` // default period field
 	Fields    []Field        `json:"fields"`
 	Named     []NamedMeasure `json:"named_measures"`
 	Params    []Param        `json:"params,omitempty"`
 	Template  bool           `json:"template"`
-	from      string         // nom de vue (sources simples)
+	from      string         // view name (simple sources)
 	fieldIx   map[string]*Field
 	namedIx   map[string]*NamedMeasure
 }
@@ -123,7 +123,7 @@ func defaultOps(t string) []string {
 	}
 }
 
-// ---- helpers de déclaration -------------------------------------------------
+// ---- declaration helpers -------------------------------------------------
 
 func dim(key, fr, ar, typ, group string) Field {
 	return Field{Key: key, LabelFR: fr, LabelAR: ar, Type: typ, Group: group, Dimension: true, Filterable: true, Format: fmtFor(typ)}
@@ -167,13 +167,13 @@ func nm(key, fr, ar, format, unit, sqlExpr, gated string) NamedMeasure {
 	return NamedMeasure{Key: key, LabelFR: fr, LabelAR: ar, Format: format, Unit: unit, sql: sqlExpr, GatedBy: gated}
 }
 
-// PermCost : droit qui garde les champs de coût / marge.
+// PermCost: permission guarding the cost / margin fields.
 const (
 	PermCost    = "view_cost"
 )
 
 func init() {
-	// ------------------------------------------------------------ ventes
+	// ------------------------------------------------------------ sales
 	register(&Source{
 		Key: "sale_lines", LabelFR: "Ventes", LabelAR: "المبيعات", Icon: "sell", from: "v_sale_lines", DateField: "doc_date",
 		Fields: []Field{
@@ -226,7 +226,7 @@ func init() {
 		},
 	})
 
-	// ------------------------------------------------------------ achats
+	// ------------------------------------------------------------ purchases
 	register(&Source{
 		Key: "purchase_lines", LabelFR: "Achats", LabelAR: "المشتريات", Icon: "local_shipping", from: "v_purchase_lines", DateField: "doc_date",
 		Fields: []Field{
@@ -265,7 +265,7 @@ func init() {
 		},
 	})
 
-	// ------------------------------------------------------------ mouvements de stock
+	// ------------------------------------------------------------ stock movements
 	register(&Source{
 		Key: "stock_movements", LabelFR: "Mouvements de stock", LabelAR: "حركات المخزون", Icon: "swap_vert", from: "v_stock_movements", DateField: "movement_date",
 		Fields: []Field{
@@ -301,7 +301,7 @@ func init() {
 		},
 	})
 
-	// ------------------------------------------------------------ stock actuel (gabarit : horizon de péremption)
+	// ------------------------------------------------------------ current stock (template: expiry horizon)
 	register(&Source{
 		Key: "stock_snapshot", LabelFR: "Stock actuel", LabelAR: "المخزون الحالي", Icon: "inventory_2", Template: true, DateField: "",
 		Params: []Param{{Key: "expiry_days", LabelFR: "Péremption sous N jours", Default: 90, Min: 1, Max: 3650}},
@@ -343,7 +343,7 @@ func init() {
 		},
 	})
 
-	// ------------------------------------------------------------ créances / dettes
+	// ------------------------------------------------------------ receivables / payables
 	register(&Source{
 		Key: "partner_ledger", LabelFR: "Créances & dettes", LabelAR: "الديون", Icon: "account_balance_wallet", from: "v_partner_ledger", DateField: "movement_date",
 		Fields: []Field{
@@ -366,7 +366,7 @@ func init() {
 		},
 	})
 
-	// ------------------------------------------------------------ performance produit (gabarit : période)
+	// ------------------------------------------------------------ product performance (template: period)
 	register(&Source{
 		Key: "product_performance", LabelFR: "Performance produit", LabelAR: "أداء المنتج", Icon: "insights", Template: true, DateField: "",
 		Fields: []Field{
@@ -409,7 +409,7 @@ func init() {
 	})
 }
 
-// Sources retourne la liste ordonnée des sources.
+// Sources returns the ordered list of sources.
 func Sources() []*Source {
 	out := make([]*Source, 0, len(sourceOrder))
 	for _, k := range sourceOrder {
@@ -418,7 +418,7 @@ func Sources() []*Source {
 	return out
 }
 
-// Caller : identité et droits du demandeur, réévalués à chaque requête.
+// Caller: identity and permissions of the requester, re-evaluated on every request.
 type Caller struct {
 	UserID string
 	Role   string
@@ -435,8 +435,8 @@ func (c Caller) allowed(gate string) bool {
 	return c.Perms != nil && c.Perms[gate]
 }
 
-// VisibleSchema : la liste blanche filtrée par les droits du demandeur —
-// les champs gardés sont absents, pas désactivés.
+// VisibleSchema: the whitelist filtered by the requester's permissions —
+// guarded fields are absent, not disabled.
 func VisibleSchema(c Caller) []map[string]any {
 	out := []map[string]any{}
 	for _, s := range Sources() {
@@ -461,7 +461,7 @@ func VisibleSchema(c Caller) []map[string]any {
 	return out
 }
 
-// combo pairs autorisées (clé triée « a+b »).
+// allowed combo pairs (sorted key « a+b »).
 var comboPairs = map[string][]string{
 	"purchase_lines+sale_lines":      {"product_id", "product_name", "category_id", "category_name", "brand", "warehouse_id", "warehouse_name", "date"},
 	"sale_lines+stock_snapshot":      {"product_id", "product_name", "category_id", "category_name", "brand", "warehouse_id", "warehouse_name"},

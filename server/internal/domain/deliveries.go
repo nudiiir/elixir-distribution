@@ -6,11 +6,11 @@ import (
 	"strings"
 )
 
-// Tournées de livraison : une tournée (delivery_runs) porte des arrêts
-// (run_stops), un par commande prête. Au départ, chaque commande passe « en
-// livraison » (BL généré si besoin) ; chaque arrêt est soldé (livré, partiel,
-// échec) ; à la clôture, l'argent collecté devient un encaissement PAYMENT_IN
-// par client et l'écart attendu / collecté est calculé.
+// Delivery runs: a run (delivery_runs) carries stops
+// (run_stops), one per ready order. On departure, each order goes « en
+// livraison » (delivery note generated if needed); each stop is settled (delivered, partial,
+// failed); at closing, the collected money becomes a PAYMENT_IN receipt
+// per customer and the expected / collected difference is computed.
 
 func loadRunStatus(tx Queryer, runID string) (string, error) {
 	var st string

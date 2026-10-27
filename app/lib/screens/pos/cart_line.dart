@@ -7,8 +7,8 @@ class CartLine {
   int qtyMilli;
   int discountPct = 0; // percent * 100, typed at the till
 
-  /// Remise of the customer's group (Paramètres › Clients et fidélité),
-  /// applied to lines that carry no remise of their own. Set by the till.
+  /// Discount of the customer's group (Paramètres › Clients et fidélité),
+  /// applied to lines that carry no discount of their own. Set by the till.
   int groupDiscountPct = 0;
 
   /// Price typed at the till (TTC centimes, right `price_edit`), null = the
@@ -21,7 +21,7 @@ class CartLine {
     ..groupDiscountPct = groupDiscountPct
     ..priceOverride = priceOverride;
 
-  /// The remise actually applied: the line's own, else the group's.
+  /// The discount actually applied: the line's own, else the group's.
   int get effectiveDiscountPct =>
       discountPct != 0 ? discountPct : groupDiscountPct;
 

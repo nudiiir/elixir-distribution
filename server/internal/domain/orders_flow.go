@@ -7,9 +7,9 @@ import (
 	"time"
 )
 
-// Cycle logistique d'une commande validée : préparation (prélèvements par lot,
-// scan), prête, BL, expédition, livraison (encaissement), facture, annulation,
-// reliquats.
+// Logistics cycle of a validated order: preparation (picks per lot,
+// scan), ready, delivery note, shipping, delivery (collection), invoice, cancellation,
+// backorders.
 
 // WrongProductError: a scanned barcode that is not on the order (HTTP 422).
 type WrongProductError struct{ Msg string }

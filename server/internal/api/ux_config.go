@@ -17,7 +17,7 @@ import (
 // routesConfigUX registers the config routes of the settings work:
 // numbering, customer groups, loyalty.
 func (s *Server) routesConfigUX(r chi.Router) {
-	// Cached settings (timbre on/off) used by the draft/POS previews.
+	// Cached settings (stamp duty on/off) used by the draft/POS previews.
 	domain.RefreshSettingsCache(s.db)
 
 	r.Get("/config/numbering", s.getNumbering)
@@ -33,7 +33,7 @@ func (s *Server) routesConfigUX(r chi.Router) {
 	r.Post("/loyalty/redemptions/{id}/cancel", s.cancelLoyaltyRedemption)
 }
 
-// ---- Numérotation -----------------------------------------------------------
+// ---- Numbering -----------------------------------------------------------
 
 type numberingRow struct {
 	DocType string `json:"doc_type"`
@@ -202,7 +202,7 @@ func boolStr(b bool) string {
 	return "0"
 }
 
-// ---- Groupes de clients -----------------------------------------------------
+// ---- Customer groups -----------------------------------------------------
 
 type CustomerGroup struct {
 	ID          string `json:"id"`
@@ -365,7 +365,7 @@ func (s *Server) deleteCustomerGroup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
-// ---- Fidélité -----------------------------------------------------------------
+// ---- Loyalty -----------------------------------------------------------------
 
 type loyaltyEntry struct {
 	ID         string  `json:"id"`

@@ -12,7 +12,7 @@ import '../../widgets/ui.dart';
 import '../crm/send_message.dart';
 import 'order_common.dart';
 
-/// « Reliquats » : order lines waiting for stock, the ones that can be
+/// « Reliquats » (backorders): order lines waiting for stock, the ones that can be
 /// served now, and the two ways to serve them (back into the same order, or
 /// a new order per client).
 class BackordersView extends StatefulWidget {

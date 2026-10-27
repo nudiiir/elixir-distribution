@@ -29,7 +29,7 @@ type alertItem struct {
 func (s *Server) alerts(w http.ResponseWriter, r *http.Request) {
 	items := []alertItem{}
 	today := time.Now().Format("2006-01-02")
-	// Fenêtre « périme bientôt » : Paramètres › Produits et stock (90 j par défaut).
+	// « périme bientôt » window: Paramètres › Produits et stock (90 d by default).
 	expiryDays := domain.SettingInt(s.db, "expiry_alert_days", 90)
 	if expiryDays < 1 || expiryDays > 3650 {
 		expiryDays = 90

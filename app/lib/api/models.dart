@@ -96,7 +96,7 @@ class Role {
         userCount = (j['user_count'] as num?)?.toInt() ?? 0;
 }
 
-/// A user who can log in with a code caisse.
+/// A user who can log in with a till code.
 class PinUser {
   final String id;
   final String username;
@@ -137,30 +137,30 @@ class Product {
   final String? categoryId;
   final String unit;
   final bool isWeighable;
-  final int? priceWholesale; // centimes TTC, null = no wholesale tier
+  final int? priceWholesale; // centimes incl. VAT, null = no wholesale tier
   final bool trackSerials;
   final int vatRate; // percent * 100
-  final int purchasePrice; // centimes HT
-  final int priceRetail; // centimes TTC
+  final int purchasePrice; // centimes excl. VAT
+  final int priceRetail; // centimes incl. VAT
   final int minStockMilli;
   final bool active;
-  final int? promoPrice; // centimes TTC, active between promoStart/promoEnd
+  final int? promoPrice; // centimes incl. VAT, active between promoStart/promoEnd
   final String? promoStart; // YYYY-MM-DD inclusive
   final String? promoEnd; // YYYY-MM-DD inclusive
   final String? parentProductId;
   final String? variantLabel;
   final int warrantyMonths; // 0 = sold without warranty
-  final String description; // fiche produit (lignes « Clé: Valeur » = specs web)
+  final String description; // product sheet (« Clé: Valeur » lines = web specs)
   final String brand;
-  final bool trackLots; // n° de lot obligatoire à la réception
-  final bool trackExpiry; // DLC obligatoire à la réception
-  final String? defaultSupplierId; // fournisseur habituel
+  final bool trackLots; // lot number mandatory on receipt
+  final bool trackExpiry; // expiry date mandatory on receipt
+  final String? defaultSupplierId; // usual supplier
   final List<String> barcodes; // additional barcodes
-  final List<BarcodeEntry> barcodesEx; // barcodes avec libellé
-  final List<Packaging> packagings; // conditionnements (carton = 24)
-  final int imageRev; // 0 = pas de photo ; change à chaque nouvelle photo
-  final String kind; // 'standard' | 'service' (un service ne bouge pas le stock)
-  final int imageCount; // nombre de photos (galerie)
+  final List<BarcodeEntry> barcodesEx; // barcodes with label
+  final List<Packaging> packagings; // packagings (carton = 24)
+  final int imageRev; // 0 = no photo; changes with every new photo
+  final String kind; // 'standard' | 'service' (a service does not move stock)
+  final int imageCount; // number of photos (gallery)
 
   bool get hasImage => imageRev > 0;
   bool get isService => kind == 'service';
@@ -220,7 +220,7 @@ class Product {
     return true;
   }
 
-  /// What the customer pays today (TTC centimes).
+  /// What the customer pays today (centimes incl. VAT).
   int get effectivePriceTTC => promoActive ? promoPrice! : priceRetail;
 
   /// Price for a wholesale-tier customer (promo wins if lower).
@@ -235,7 +235,7 @@ class Product {
     return effectivePriceTTC;
   }
 
-  /// Unit price HT in centimes, derived from today's effective TTC price.
+  /// Unit price excl. VAT in centimes, derived from today's effective price incl. VAT.
   int get unitPriceHT =>
       ((effectivePriceTTC * 10000) + (10000 + vatRate) ~/ 2) ~/
       (10000 + vatRate);
@@ -251,13 +251,13 @@ class StockLevel {
   final String warehouseId;
   final int qtyMilli;
   final int avgCost; // centimes
-  // Contexte produit (écran Stock) — absent des anciens serveurs.
-  final int? value; // valeur au coût calculée par le serveur (centimes)
+  // Product context (Stock screen) — missing from older servers.
+  final int? value; // value at cost computed by the server (centimes)
   final String warehouseName;
   final String? categoryId;
   final String? categoryName;
   final String brand;
-  final int priceRetail; // TTC
+  final int priceRetail; // incl. VAT
   final int minStockMilli;
   final String unit;
   final String? defaultSupplierId;
@@ -290,7 +290,7 @@ class StockLevel {
 
   int get valuation => value ?? (qtyMilli * avgCost) ~/ 1000;
 
-  /// LA règle « stock faible » de toute l'application.
+  /// THE « stock faible » (low stock) rule of the whole application.
   bool get isRupture => qtyMilli <= 0;
   bool get isUnderMin => !isRupture && minStockMilli > 0 && qtyMilli < minStockMilli;
   bool get isLow => isRupture || isUnderMin;
@@ -325,11 +325,11 @@ class Partner {
   final int? creditLimit;
   final String? notes;
   final String priceLevel; // retail | wholesale
-  final int minShelfDays; // durée de vie restante minimale exigée
-  final int overReceiptPct; // tolérance de sur-réception, pct x100
+  final int minShelfDays; // minimum remaining shelf life required
+  final int overReceiptPct; // over-receipt tolerance, pct x100
   final int balance; // positive = the partner owes us
   final bool active;
-  // Groupe de clients (Paramètres › Clients et fidélité). When set, the
+  // Customer group (Paramètres › Clients et fidélité). When set, the
   // group's price level and discount apply as soon as the customer is chosen.
   final String? groupId;
   final String? groupName;
@@ -386,23 +386,23 @@ class Partner {
 
   /// prospect | active | dormant | blocked
   final String crmStatus;
-  final String? repUserId; // commercial assigné
+  final String? repUserId; // assigned sales rep
   final String repName;
-  final String? routeId; // tournée
+  final String? routeId; // delivery round
   final String routeName;
   final String wilaya;
   final String commune;
   final double? latitude;
   final double? longitude;
   final String openingHours;
-  final String licenseNo; // n° d'agrément / licence
+  final String licenseNo; // approval / licence number
   final String whatsapp;
   final String website;
 
   /// manual | web | import | rep | portal
   final String source;
 
-  /// null = délai par défaut du magasin.
+  /// null = the shop's default payment term.
   final int? paymentTermsDays;
   final List<String> tagIds;
   final String createdAt;
@@ -472,7 +472,7 @@ class DocDetail {
   final String? reason;
   final String? orderStatus;
   final String? destWarehouseId;
-  final String? internalNotes; // jamais imprimée
+  final String? internalNotes; // never printed
   final int paid;
   final int remaining;
   final String paymentStatus; // paid | partial | due | ''
@@ -550,7 +550,7 @@ class DocSummary {
         paymentStatus = (j['payment_status'] as String?) ?? '';
 }
 
-/// Pièce jointe d'un document (les octets se téléchargent à part).
+/// Attachment of a document (the bytes are downloaded separately).
 class DocAttachment {
   final String id;
   final String documentId;
@@ -568,7 +568,7 @@ class DocAttachment {
         createdAt = (j['created_at'] as String?) ?? '';
 }
 
-/// Une facture encore ouverte (FIFO sur le compte partenaire).
+/// An invoice still open (FIFO on the partner account).
 class OpenItem {
   final String documentId;
   final String number;
@@ -636,7 +636,7 @@ class CaisseReport {
   final int cashSales;
   final int cardSales;
   final int creditSales;
-  final int otherSales; // chèque, virement, carte cadeau
+  final int otherSales; // cheque, bank transfer, gift card
   final int cashIn;
   final int cashOut;
   final int cashRefunds;
@@ -667,7 +667,7 @@ class Category {
         parentId = j['parent_id'] as String?;
 }
 
-/// One physical serialized unit (IMEI / N° de série).
+/// One physical serialized unit (IMEI / serial number).
 class ProductUnit {
   final String id;
   final String productId;
@@ -942,7 +942,7 @@ class PostedDoc {
         totalTTC = (j['total_ttc'] as num?)?.toInt() ?? 0;
 }
 
-/// Un code-barres supplémentaire avec son libellé descriptif optionnel.
+/// An additional barcode with its optional descriptive label.
 class BarcodeEntry {
   BarcodeEntry({required this.code, this.label = ''});
   final String code;
@@ -955,12 +955,12 @@ class BarcodeEntry {
   Map<String, dynamic> toJson() => {'code': code, 'label': label};
 }
 
-/// Un conditionnement d'achat : carton = 24 pièces.
+/// A purchase packaging: carton = 24 pieces.
 class Packaging {
   Packaging({this.id, required this.name, required this.factorMilli, this.barcode});
   final String? id;
   final String name;
-  final int factorMilli; // unités de base par pack (milli)
+  final int factorMilli; // base units per pack (milli)
   final String? barcode;
 
   Packaging.fromJson(Map<String, dynamic> j)
@@ -973,7 +973,7 @@ class Packaging {
       {'name': name, 'factor_milli': factorMilli, 'barcode': barcode};
 }
 
-// ---------------- Fiche produit ----------------
+// ---------------- Product sheet ----------------
 
 class FicheLevel {
   FicheLevel.fromJson(Map<String, dynamic> j)
@@ -1020,12 +1020,12 @@ class FicheMove {
   final int unitCost;
   final String warehouseId;
 
-  /// Stock du dépôt juste après ce mouvement (solde courant).
+  /// Depot stock right after this movement (running balance).
   final int? balanceAfter;
-  final String? reason; // motif d'un ajustement
+  final String? reason; // reason for an adjustment
 }
 
-/// Un jour du graphe « Ventes 30 jours ».
+/// One day of the « Ventes 30 jours » chart.
 class SalesDay {
   SalesDay.fromJson(Map<String, dynamic> j)
       : date = (j['date'] as String?) ?? '',
@@ -1054,7 +1054,7 @@ class FicheVariant {
   final int stockMilli;
 }
 
-/// La fiche produit complète : rien ici n'est stocké, tout est recalculé.
+/// The full product sheet: nothing here is stored, everything is recomputed.
 class FicheData {
   FicheData.fromJson(Map<String, dynamic> j)
       : product = Product.fromJson(j['product'] as Map<String, dynamic>),
@@ -1095,20 +1095,20 @@ class FicheData {
   final List<SalesDay> sales30d;
   final int avgDailySalesMilli;
 
-  /// Stock ÷ ventes moyennes par jour ; null sans ventes.
+  /// Stock ÷ average sales per day; null without sales.
   final int? coverageDays;
 
   int get stockTotal => levels.fold(0, (s, l) => s + l.qtyMilli);
   int get valeurStock =>
       levels.fold(0, (s, l) => s + (l.qtyMilli * l.avgCost) ~/ 1000);
 
-  /// Achat pondéré — null quand le stock est nul (jamais zéro : une moyenne
-  /// de rien n'est pas zéro dinar).
+  /// Weighted purchase cost — null when stock is zero (never zero: an average
+  /// of nothing is not zero dinars).
   int? get achatPondere =>
       stockTotal <= 0 ? null : (valeurStock * 1000) ~/ stockTotal;
 }
 
-/// Une exception de rapprochement (facture vs réception, réception vs BC).
+/// A matching exception (invoice vs receipt, receipt vs purchase order).
 class MatchExceptionRow {
   MatchExceptionRow.fromJson(Map<String, dynamic> j)
       : kind = (j['kind'] as String?) ?? '',
@@ -1136,7 +1136,7 @@ class PosPayment {
   Map<String, dynamic> toJson() => {'method': method, 'amount': amount};
 }
 
-/// A ticket of the open caisse session (POS « Derniers tickets »).
+/// A ticket of the open till session (POS « Derniers tickets »).
 class PosRecentTicket {
   final String id;
   final String? number;

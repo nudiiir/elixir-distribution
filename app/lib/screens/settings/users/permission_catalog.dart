@@ -30,11 +30,11 @@ const permModules = <PermModule>[
   PermModule('stock', 'Stock', ['view', 'create', 'edit', 'cancel', 'validate', 'export', 'print']),
   PermModule('products', 'Produits', ['view', 'create', 'edit', 'export', 'print']),
   PermModule('partners', 'Clients et fournisseurs', ['view', 'create', 'edit', 'export', 'print']),
-  // crm.view : tâches, activités, segments, objectifs, modèles de messages ;
-  // crm.edit : les modifier. crm.all_customers est un droit particulier.
+  // crm.view: tasks, activities, segments, targets, message templates;
+  // crm.edit: modify them. crm.all_customers is a special right.
   PermModule('crm', 'Relation clients', ['view', 'edit']),
-  // orders.manage / orders.override_credit / deliveries.manage : droits
-  // particuliers ci-dessous (pas de colonne « Gérer » dans la grille).
+  // orders.manage / orders.override_credit / deliveries.manage: special
+  // rights below (no « Gérer » column in the grid).
   PermModule('orders', 'Commandes clients', ['view', 'validate']),
   PermModule('deliveries', 'Livraisons', ['view']),
   PermModule('pricing', 'Tarifs et offres', ['view', 'edit']),

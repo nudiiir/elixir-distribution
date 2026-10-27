@@ -1,5 +1,5 @@
--- Documents : note interne (jamais imprimée) et pièces jointes (scan du BL
--- fournisseur, bon signé, photo…). La note imprimée reste documents.notes.
+-- Documents: internal note (never printed) and attachments (scan of the supplier
+-- delivery note, signed order, photo…). The printed note stays documents.notes.
 ALTER TABLE documents ADD COLUMN internal_notes TEXT;
 
 CREATE TABLE document_attachments (

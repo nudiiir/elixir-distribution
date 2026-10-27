@@ -172,7 +172,7 @@ Future<V?> runGuarded<V>(BuildContext context, ApiClient api, Future<V> Function
   }
 }
 
-/// Small text question (motif d'annulation…). Null when closed.
+/// Small text question (cancellation reason…). Null when closed.
 Future<String?> askText(BuildContext context,
     {required String title,
     String? message,

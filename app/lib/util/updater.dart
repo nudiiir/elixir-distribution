@@ -3,11 +3,11 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
-/// Version embarquée dans le binaire — à bumper à chaque release, en même
-/// temps que pubspec.yaml et installer/*.iss.
+/// Version embedded in the binary — bump on every release, together
+/// with pubspec.yaml and installer/*.iss.
 const kAppVersion = '0.4.0';
 
-/// Dépôt public qui porte les installateurs (GitHub Releases).
+/// Public repository that hosts the installers (GitHub Releases).
 /// GitHub "owner/name" of the releases repository. Empty in the public
 /// build, which turns the update check off.
 const kReleaseRepo = '';
@@ -33,7 +33,7 @@ bool isNewer(String remote, String local) {
   return false;
 }
 
-/// Interroge GitHub ; renvoie null si on est à jour (ou hors ligne).
+/// Queries GitHub; returns null when up to date (or offline).
 Future<UpdateInfo?> checkForUpdate() async {
   if (kReleaseRepo.isEmpty) return null;
   try {
@@ -59,8 +59,8 @@ Future<UpdateInfo?> checkForUpdate() async {
   }
 }
 
-/// Le poste actuel héberge-t-il le service serveur ? (seul ce poste doit
-/// recevoir l'installateur serveur — pas les caisses secondaires)
+/// Does this machine host the server service? (only this machine should
+/// receive the server installer — not the secondary tills)
 Future<bool> hasLocalServerService() async {
   try {
     final r = await Process.run('sc', ['query', 'ElixirServer']);
@@ -70,16 +70,16 @@ Future<bool> hasLocalServerService() async {
   }
 }
 
-/// Télécharge les installateurs puis lance la réinstallation en élévation.
+/// Downloads the installers then launches the elevated reinstall.
 ///
-/// PIÈGE APPRIS À LA DURE : un process lancé en `detached` MEURT avec l'app
-/// sous Windows — sortir tout de suite tuait la mise à jour avant même
-/// l'invite UAC. On reste donc VIVANT jusqu'à ce qu'un fichier-drapeau
-/// confirme que l'élévation a réussi : le process élevé, lui, est lancé par
-/// Windows (AppInfo) et survit à la fermeture de l'app.
+/// LESSON LEARNED THE HARD WAY: a process started `detached` DIES with the app
+/// on Windows — exiting right away killed the update before even
+/// the UAC prompt. So we stay ALIVE until a flag file
+/// confirms the elevation succeeded: the elevated process itself is started by
+/// Windows (AppInfo) and survives the app closing.
 ///
-/// Jette une exception si l'utilisateur refuse l'autorisation Windows ou si
-/// rien ne se passe ; ne quitte l'app QUE lorsque l'installation est lancée.
+/// Throws if the user declines the Windows authorization or if
+/// nothing happens; quits the app ONLY once the installation has started.
 Future<void> downloadAndInstall(
   UpdateInfo u, {
   void Function(String status)? onStatus,
@@ -103,7 +103,7 @@ Future<void> downloadAndInstall(
     server = await fetch(u.serverUrl!, 'ElixirServeur-Setup.exe');
   }
 
-  // Script ÉLEVÉ : attend que l'app se ferme, installe, relance.
+  // ELEVATED script: waits for the app to close, installs, relaunches.
   final okFlag = '${dir.path}\\ok.flag';
   final cancelFlag = '${dir.path}\\cancel.flag';
   final log = '${dir.path}\\install.log';
@@ -118,7 +118,7 @@ Future<void> downloadAndInstall(
     'Stop-Transcript | Out-Null',
   ].join('\r\n'), flush: true);
 
-  // Lanceur NON élevé : déclenche l'UAC et pose le drapeau correspondant.
+  // NON-elevated launcher: triggers UAC and writes the matching flag.
   final launcher = File('${dir.path}\\launch.ps1');
   await launcher.writeAsString([
     r'try {',
@@ -136,7 +136,7 @@ Future<void> downloadAndInstall(
     ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', launcher.path],
   );
 
-  // L'UAC peut rester affichée un moment : on attend jusqu'à 3 minutes.
+  // UAC may stay on screen for a while: we wait up to 3 minutes.
   final deadline = DateTime.now().add(const Duration(minutes: 3));
   while (DateTime.now().isBefore(deadline)) {
     await Future<void>.delayed(const Duration(milliseconds: 500));
@@ -146,7 +146,7 @@ Future<void> downloadAndInstall(
     }
     if (File(okFlag).existsSync()) {
       onStatus?.call('Installation en cours — l\'application va redémarrer…');
-      // L'installeur élevé tourne sous AppInfo : il nous survit.
+      // The elevated installer runs under AppInfo: it outlives us.
       await Future<void>.delayed(const Duration(milliseconds: 800));
       exit(0);
     }

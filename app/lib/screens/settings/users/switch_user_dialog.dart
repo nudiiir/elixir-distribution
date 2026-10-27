@@ -6,7 +6,7 @@ import '../../../theme/tokens.dart';
 import '../../../util/approval.dart';
 import '../../../util/feedback.dart';
 
-/// « Changer de caissier »: pick a user who has a code caisse, type the code.
+/// « Changer de caissier »: pick a user who has a till code, type the code.
 /// Returns the new [Session] (its token is already installed on [api]), or
 /// null when closed. The caller swaps the app's session.
 Future<Session?> showSwitchUserDialog(BuildContext context, ApiClient api) {

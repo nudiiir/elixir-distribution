@@ -22,7 +22,7 @@ import 'partners/partner_pages.dart';
 
 const _prefs = 'partners';
 
-/// Clients et fournisseurs: list → detail page → edit page.
+/// Customers and suppliers: list → detail page → edit page.
 /// Menu commands: `kind:customer` · `kind:supplier` · `new:customer` ·
 /// `new:supplier`.
 class PartnersScreen extends StatefulWidget {
@@ -43,7 +43,7 @@ class _PartnersScreenState extends State<PartnersScreen> {
   bool _loading = true;
   String? _error;
 
-  // Filtres distribution / CRM (côté serveur, périmètre « own » respecté).
+  // Distribution / CRM filters (server side, « own » scope respected).
   String? _clientType;
   String? _crmStatus;
   String? _repId;

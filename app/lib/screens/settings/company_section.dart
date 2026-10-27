@@ -12,7 +12,7 @@ import 'general_widgets.dart';
 import 'settings_shell.dart';
 
 /// Company identity keys of the server settings. They feed the legal header
-/// and footer of invoices (décret 05-468) and tickets.
+/// and footer of invoices (decree 05-468) and tickets.
 const companyKeys = [
   'company_name',
   'company_address',
@@ -26,8 +26,8 @@ const companyKeys = [
   'company_bank',
   'company_rib',
   'company_capital',
-  'company_footer', // texte de pied de page des documents
-  'company_legal', // mentions légales
+  'company_footer', // footer text of documents
+  'company_legal', // legal notices
 ];
 
 /// Paramètres → Entreprise: name, logo, tax identifiers, bank, footer.

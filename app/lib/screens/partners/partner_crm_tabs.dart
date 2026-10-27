@@ -18,7 +18,7 @@ import '../orders/orders_screen.dart' show openOrderDetail;
 // Sections / tabs of the client 360 page (docs/API_DISTRIBUTION.md §5).
 
 // ---------------------------------------------------------------------------
-// Vue d'ensemble : indicateurs
+// Overview: indicators
 // ---------------------------------------------------------------------------
 
 class PartnerKpisSection extends StatefulWidget {
@@ -149,7 +149,7 @@ class _PartnerKpisSectionState extends State<PartnerKpisSection> {
 }
 
 // ---------------------------------------------------------------------------
-// Chronologie
+// Timeline
 // ---------------------------------------------------------------------------
 
 class PartnerTimelineTab extends StatefulWidget {
@@ -656,7 +656,7 @@ class _ContactFormPageState extends State<ContactFormPage> {
 }
 
 // ---------------------------------------------------------------------------
-// Tâches du client
+// Client tasks
 // ---------------------------------------------------------------------------
 
 class PartnerTasksTab extends StatefulWidget {
@@ -885,7 +885,7 @@ class TaskRow extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Activités
+// Activities
 // ---------------------------------------------------------------------------
 
 class PartnerActivitiesTab extends StatefulWidget {
@@ -1072,7 +1072,7 @@ class _PartnerActivitiesTabState extends State<PartnerActivitiesTab> {
 }
 
 // ---------------------------------------------------------------------------
-// Pièces (fichiers du dossier client)
+// Documents (client file attachments)
 // ---------------------------------------------------------------------------
 
 String _fileSize(int bytes) {
@@ -1297,7 +1297,7 @@ class _FileInfoDialogState extends State<_FileInfoDialog> {
 }
 
 // ---------------------------------------------------------------------------
-// Étiquettes
+// Tags
 // ---------------------------------------------------------------------------
 
 class PartnerTagsTab extends StatefulWidget {

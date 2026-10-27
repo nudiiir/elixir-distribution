@@ -214,8 +214,8 @@ func (s *Server) exportAllData(w http.ResponseWriter, r *http.Request) {
 // « Réinitialiser les données ».
 
 const (
-	resetTransactions = "transactions" // ventes, achats, mouvements
-	resetAll          = "all"          // tout sauf utilisateurs et paramètres
+	resetTransactions = "transactions" // sales, purchases, movements
+	resetAll          = "all"          // everything except users and settings
 )
 
 // Tables a reset never touches (configuration, people, history of who did what).

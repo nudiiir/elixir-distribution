@@ -2,7 +2,7 @@
 
 The whole system follows three rules agreed at design time:
 
-1. **Everything is a document with lines.** One `documents` + `document_lines` pair covers every business paper (ticket, facture, BL, avoir, bon de commande, réception, ajustement, transfert, règlement). A document is editable in `draft`, immutable once `posted`. Corrections to a posted document are made with a new document (avoir), never by editing.
+1. **Everything is a document with lines.** One `documents` + `document_lines` pair covers every business paper (till receipt, invoice, delivery note, credit note, purchase order, goods receipt, adjustment, transfer, payment). A document is editable in `draft`, immutable once `posted`. Corrections to a posted document are made with a new document (credit note), never by editing.
 2. **Ledgers, not mutable balances.** Posting a document writes immutable rows to `stock_ledger` and/or `partner_ledger`. `stock_levels` is a cache maintained in the same transaction and always recomputable from the ledger. Client credit = SUM of `partner_ledger`.
 3. **Catalog ≠ stock.** `products` is identity; quantities live per warehouse (and optionally per lot) in the ledger/levels.
 
@@ -24,7 +24,7 @@ The whole system follows three rules agreed at design time:
 | `product_categories` | tree (parent_id) |
 | `products` | barcode, name FR/AR, unit, weighable flag, VAT rate, purchase price (last), retail/wholesale prices (TTC), min stock, lot-tracking flag |
 | `lots` | lot number + expiry per product (only when `track_lots`) |
-| `warehouses` | shop floor / dépôt / … |
+| `warehouses` | shop floor / depot / … |
 | `partners` | unified clients + suppliers (`kind`: customer/supplier/both) with fiscal IDs (NIF/NIS/RC/AI) and credit limit |
 | `sequences` | gapless numbering: (doc_type, year) → next_number, consumed inside the posting transaction |
 | `caisse_sessions` | open/close, opening cash, expected vs counted |
@@ -37,31 +37,31 @@ The whole system follows three rules agreed at design time:
 
 ## Document types and what posting does
 
-Number format: `{PREFIX}-{YYYY}-{NNNNNN}` assigned **at posting** from `sequences` (gapless, per type, per year — décret 05-468).
+Number format: `{PREFIX}-{YYYY}-{NNNNNN}` assigned **at posting** from `sequences` (gapless, per type, per year — Decree 05-468).
 
 | doc_type | Prefix | Stock effect | Partner-ledger effect |
 |---|---|---|---|
-| `QUOTE` (devis) | DV | — | — |
-| `SALE_TICKET` (ticket caisse) | TK | −qty @ avg_cost | +TTC only if `payment_method='credit'` |
-| `SALE_INVOICE` (facture) | FV | −qty @ avg_cost (unless it references BLs that already moved stock) | +TTC if credit |
-| `DELIVERY_NOTE` (BL) | BL | −qty @ avg_cost | — |
-| `SALE_CREDIT_NOTE` (avoir) | AV | +qty | −TTC |
-| `PURCHASE_ORDER` (bon de commande) | BC | — | — |
-| `PURCHASE_RECEIPT` (réception) | BR | +qty @ line unit_cost → **updates CUMP** | — |
-| `PURCHASE_INVOICE` (facture fournisseur) | FA | +qty @ cost if no receipt referenced | −TTC (we owe supplier) |
+| `QUOTE` (quote) | DV | — | — |
+| `SALE_TICKET` (till receipt) | TK | −qty @ avg_cost | +TTC only if `payment_method='credit'` |
+| `SALE_INVOICE` (invoice) | FV | −qty @ avg_cost (unless it references BLs that already moved stock) | +TTC if credit |
+| `DELIVERY_NOTE` (delivery note) | BL | −qty @ avg_cost | — |
+| `SALE_CREDIT_NOTE` (credit note) | AV | +qty | −TTC |
+| `PURCHASE_ORDER` (purchase order) | BC | — | — |
+| `PURCHASE_RECEIPT` (goods receipt) | BR | +qty @ line unit_cost → **updates CUMP** | — |
+| `PURCHASE_INVOICE` (supplier invoice) | FA | +qty @ cost if no receipt referenced | −TTC (we owe supplier) |
 | `PURCHASE_CREDIT_NOTE` | AF | −qty | +TTC |
 | `STOCK_ADJUSTMENT` | AJ | ±qty as entered | — |
 | `STOCK_TRANSFER` | TR | −qty from `warehouse_id`, +qty to `dest_warehouse_id` | — |
 | `INVENTORY_COUNT` | IN | delta = counted − current at posting | — |
-| `PAYMENT_IN` (encaissement) | RG | — | −amount (customer paid) |
-| `PAYMENT_OUT` (règlement fournisseur) | RF | — | +amount |
+| `PAYMENT_IN` (cash collection) | RG | — | −amount (customer paid) |
+| `PAYMENT_OUT` (supplier payment) | RF | — | +amount |
 
 **CUMP (weighted average cost)** on inbound stock: `new_avg = (old_qty×old_avg + in_qty×unit_cost) / (old_qty + in_qty)`. Outbound movements record the current avg_cost, which is what makes margin reports honest.
 
 **Line math** (integer, half-up rounding):
 `line_ht = unit_price × qty_milli × (10000 − discount_pct) / 10000 / 1000` · `line_vat = line_ht × vat_rate / 10000` · `line_ttc = line_ht + line_vat`. Retail prices are stored TTC; the client derives HT when building lines.
 
-**Timbre** (stamp duty, cash-paid invoices only): currently 1% of TTC, min 5 DA, max 2 500 DA, **exempt when payment is electronic** (cib/edahabia/transfer). ⚠️ Verify against LF 2025 progressive scale before invoicing goes live — the rate lives in one function (`domain.Timbre`).
+**Stamp duty** (timbre, cash-paid invoices only): currently 1% of TTC, min 5 DA, max 2 500 DA, **exempt when payment is electronic** (cib/edahabia/transfer). ⚠️ Verify against LF 2025 progressive scale before invoicing goes live — the rate lives in one function (`domain.Timbre`).
 
 ## Posting engine
 
@@ -73,7 +73,7 @@ Deferred from P0 posting (tables ready, logic later): INVENTORY_COUNT delta comp
 
 ## Distribution (migrations 0016–0017)
 
-Customer orders are **not documents** (the `documents.doc_type` CHECK is unchanged): they live in their own tables and never touch a ledger themselves. What they generate — `DELIVERY_NOTE`, `SALE_INVOICE` (ref = the BL, so stock is not moved twice), `PAYMENT_IN` — goes through the posting engine. API contract: `docs/API_DISTRIBUTION.md`.
+Customer orders are **not documents** (the `documents.doc_type` CHECK is unchanged): they live in their own tables and never touch a ledger themselves. What they generate — `DELIVERY_NOTE`, `SALE_INVOICE` (ref = the delivery note, so stock is not moved twice), `PAYMENT_IN` — goes through the posting engine. API contract: `docs/API_DISTRIBUTION.md`.
 
 | Table | Role |
 |---|---|
@@ -82,11 +82,11 @@ Customer orders are **not documents** (the `documents.doc_type` CHECK is unchang
 | `customer_order_events` | status history and actions (from, to, user, note, at) |
 | `customer_order_picks` | preparation: line → lot, qty (paid + free), barcode, who |
 | `customer_prices` | special price HT per partner **or** customer group × product, min qty tier, date range |
-| `promo_rules` | free goods (« N + M », UG) or quantity discount; scope product/category/brand/all; audience all/group/partner; channel all/desk/web; dates |
+| `promo_rules` | free goods (« N + M », free units) or quantity discount; scope product/category/brand/all; audience all/group/partner; channel all/desk/web; dates |
 | `product_quotas` | max qty per customer per day/week/month (partner NULL = every customer) |
 | `vehicles`, `delivery_routes` | fleet; route templates (wilayas, communes, weekdays, default driver/vehicle) |
 | `delivery_runs`, `run_stops` | a day's run (planned/out/closed/cancelled, cash expected/collected/difference) and its stops (pending/delivered/partial/failed, COD expected/collected, payment document) |
-| `partner_contacts`, `tags`, `partner_tags`, `partner_files` | CRM: contacts (one primary), coloured tags, licence/registre scans (BLOB ≤ 5 MB) |
+| `partner_contacts`, `tags`, `partner_tags`, `partner_files` | CRM: contacts (one primary), coloured tags, licence/trade-register scans (BLOB ≤ 5 MB) |
 | `crm_activities` | calls, visits (GPS), notes, WhatsApp/SMS/e-mail, meetings — by user, optional order/document |
 | `crm_tasks` | to-dos (call/visit/collect_payment/follow_up/other), assignee, due, status open/done/cancelled, source manual/auto_* with idempotency `auto_key` |
 | `crm_segments` | saved segment rules (JSON); built-in segments live in code |
@@ -95,6 +95,6 @@ Customer orders are **not documents** (the `documents.doc_type` CHECK is unchang
 
 New `partners` columns: `client_type`, `crm_status`, `rep_user_id`, `route_id`, `wilaya`, `commune`, `latitude`, `longitude`, `opening_hours`, `license_no`, `whatsapp`, `website`, `source`, `payment_terms_days`.
 
-View `v_customer_order_lines` feeds the analytics source `customer_orders`. Role « Gérant » receives the new permission keys (`orders.*`, `deliveries.*`, `crm.*`, `pricing.*`).
+View `v_customer_order_lines` feeds the analytics source `customer_orders`. Role « Gérant » (manager) receives the new permission keys (`orders.*`, `deliveries.*`, `crm.*`, `pricing.*`).
 
-**Availability** (« disponible ») = `stock_levels.qty_milli` − Σ (validated + free) of other orders `validated|preparing|ready` without a BL. Order validation caps lines to it (remainder → backorder), enforces quotas, and checks the account (balance + open orders + this order vs credit limit, overdue invoices, blocked status) — overridable with `orders.override_credit`.
+**Availability** (« disponible », available) = `stock_levels.qty_milli` − Σ (validated + free) of other orders `validated|preparing|ready` without a BL. Order validation caps lines to it (remainder → backorder), enforces quotas, and checks the account (balance + open orders + this order vs credit limit, overdue invoices, blocked status) — overridable with `orders.override_credit`.

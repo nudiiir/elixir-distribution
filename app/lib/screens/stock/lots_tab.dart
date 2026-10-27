@@ -91,7 +91,7 @@ class LotsTabState extends State<LotsTab> {
     return switch (w) {
       'expired' => d < 0,
       '15' => d >= 0 && d <= 15,
-      '60' => d >= 0 && d <= Features.instance.expiryAlertDays, // fenêtre des Paramètres
+      '60' => d >= 0 && d <= Features.instance.expiryAlertDays, // window from Settings
       _ => true,
     };
   }
@@ -148,7 +148,7 @@ class LotsTabState extends State<LotsTab> {
     }
   }
 
-  /// Retire the whole lot from the shelf: posted STOCK_ADJUSTMENT, motif
+  /// Retire the whole lot from the shelf: posted STOCK_ADJUSTMENT, reason
   /// « péremption », negative quantity on that lot.
   Future<void> _withdraw(Lot l) async {
     final wh = _targetWarehouse;
@@ -189,7 +189,7 @@ class LotsTabState extends State<LotsTab> {
       try {
         posted = await widget.api.postDocument(draft.id);
       } catch (_) {
-        // ne pas laisser un brouillon orphelin derrière un refus
+        // do not leave an orphan draft behind a refusal
         try {
           await widget.api.cancelDocument(draft.id);
         } catch (_) {}

@@ -14,7 +14,7 @@ import '../../widgets/ui.dart';
 import 'stock_common.dart';
 
 /// « À commander » : replenishment proposal per product (server rule:
-/// target = max(2 × min, 30 jours de ventes), rounded to the packaging),
+/// target = max(2 × min, 30 days of sales), rounded to the packaging),
 /// editable quantities, one draft purchase order per supplier.
 class ReorderTab extends StatefulWidget {
   const ReorderTab({
@@ -160,7 +160,7 @@ class ReorderTabState extends State<ReorderTab> {
     for (final r in lines) {
       bySupplier.putIfAbsent(r.supplierId, () => []).add(r);
     }
-    // Produits sans fournisseur connu : on demande à qui les commander.
+    // Products with no known supplier: ask who to order them from.
     final orphans = bySupplier.remove(null);
     Partner? orphanSupplier;
     if (orphans != null) {

@@ -9,8 +9,8 @@ import '../theme/tokens.dart';
 import '../util/feedback.dart';
 import '../widgets/ui.dart';
 
-/// Factures scannées — supplier invoices photographed on a phone land here and
-/// become draft réceptions. The shop pulls them; nothing is pushed at the PC,
+/// Scanned invoices — supplier invoices photographed on a phone land here and
+/// become draft receipts. The shop pulls them; nothing is pushed at the PC,
 /// so a scan made while the shop was closed is still waiting in the morning.
 class InboxScreen extends StatefulWidget {
   const InboxScreen({super.key, required this.api});
@@ -227,7 +227,7 @@ class _InboxScreenState extends State<InboxScreen> {
   }
 }
 
-/// Review a scan, then turn it into a draft réception in one click.
+/// Review a scan, then turn it into a draft receipt in one click.
 class _ScanDetailDialog extends StatefulWidget {
   const _ScanDetailDialog(
       {required this.api, required this.cloud, required this.item});
@@ -241,7 +241,7 @@ class _ScanDetailDialog extends StatefulWidget {
 
 /// One editable row of the scan: designation, quantity, cost and the
 /// catalogue product it will feed. Everything the OCR read can be corrected
-/// here before the réception exists.
+/// here before the receipt exists.
 class _EditLine {
   _EditLine(ScannedLine l)
       : designation = TextEditingController(text: l.designation),
@@ -408,8 +408,8 @@ class _ScanDetailDialogState extends State<_ScanDetailDialog> {
         partnerId = found.firstOrNull?.id;
       }
 
-      // Lines flagged "nouveau produit" enter the catalogue first, so the
-      // réception feeds real stock instead of free-text lines.
+      // Lines flagged "nouveau produit" (new product) enter the catalogue first, so the
+      // receipt feeds real stock instead of free-text lines.
       var created = 0;
       for (final l in _lines) {
         if (!l.createNew) continue;
@@ -429,7 +429,7 @@ class _ScanDetailDialogState extends State<_ScanDetailDialog> {
           l.createNew = false;
           created++;
         } catch (_) {
-          // A duplicate barcode or similar must not block the réception —
+          // A duplicate barcode or similar must not block the receipt —
           // the line simply stays free-text.
         }
       }

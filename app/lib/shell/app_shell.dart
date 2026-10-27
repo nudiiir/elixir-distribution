@@ -51,7 +51,7 @@ class _Module {
   final IconData icon;
   final String title;
   final String group; // sidebar section
-  final String? feature; // Profil du magasin switch that hides it
+  final String? feature; // « Profil du magasin » switch that hides it
 
   /// Sub-items: (label, command sent to the screen, optional feature).
   final List<(String, String, String?)> subs;
@@ -218,14 +218,14 @@ class _AppShellState extends State<AppShell> {
 
   Timer? _presenceTimer;
 
-  /// Passage tableau de bord -> explorateur : la tuile en cours d'édition.
+  /// Dashboard -> explorer handoff: the tile being edited.
   final _explorerRequest = ValueNotifier<ExplorerRequest?>(null);
 
   @override
   void initState() {
     super.initState();
     UiPrefs.instance.user = user.id;
-    // « Mes préférences » → page d'accueil choisie par l'utilisateur.
+    // « Mes préférences » → home page chosen by the user.
     final start = UiPrefs.instance.get<String>('prefs', 'start_module');
     final si = start == null ? -1 : _visible.indexWhere((m) => m.key == start);
     if (si >= 0) _index = si;
@@ -251,14 +251,14 @@ class _AppShellState extends State<AppShell> {
     _presenceTimer =
         Timer.periodic(const Duration(seconds: 30), (_) => _beat());
     _checkUpdate();
-    // La vitrine web affiche les quantités du snapshot : on lui envoie un
-    // battement de stock tant que l'app tourne, pour limiter les surventes.
+    // The web storefront shows the snapshot quantities: we send it a
+    // stock heartbeat while the app is running, to limit overselling.
     if (user.can('webstore')) {
       _webstoreTimer = Timer.periodic(
           const Duration(minutes: 5), (_) => _pushWebstoreStock());
     }
-    // Commandes web : import automatique (si activé) puis renvoi des statuts
-    // des commandes importées vers la boutique (page de suivi du client).
+    // Web orders: automatic import (if enabled) then push back the statuses
+    // of imported orders to the store (customer tracking page).
     if (user.can('orders')) {
       _webOrdersTimer = Timer.periodic(const Duration(minutes: 5), (_) => _webOrdersBeat());
       Timer(const Duration(seconds: 20), _webOrdersBeat);
@@ -294,12 +294,12 @@ class _AppShellState extends State<AppShell> {
           {'product_id': e.key, 'qty_milli': e.value}
       ]);
     } catch (_) {
-      // Pas de boutique, hors ligne… le prochain battement réessaiera.
+      // No store, offline… the next heartbeat will retry.
     }
   }
 
-  /// Au démarrage : si une version plus récente est publiée, on propose de
-  /// l'installer tout de suite (téléchargement + réinstallation silencieuse).
+  /// At startup: if a newer version is published, offer to
+  /// install it right away (download + silent reinstall).
   Future<void> _checkUpdate() async {
     final info = await checkForUpdate();
     if (info == null || !mounted) return;
@@ -747,7 +747,7 @@ class _AppShellState extends State<AppShell> {
             onLogout: _logout,
           ),
           const Divider(),
-          // Loud offline strip — every caisse depends on the server PC.
+          // Loud offline strip — every till depends on the server PC.
           if (!_online)
             Container(
               width: double.infinity,
@@ -1054,7 +1054,7 @@ class _Sidebar extends StatefulWidget {
   /// False hides a task of a module (right missing).
   final bool Function(String module, String command)? subAllowed;
 
-  /// Red count next to a module (tâches en retard, commandes à valider…).
+  /// Red count next to a module (overdue tasks, orders to validate…).
   final Map<String, int> badges;
   final List<_Module> modules;
   final bool Function(_Module) shown;

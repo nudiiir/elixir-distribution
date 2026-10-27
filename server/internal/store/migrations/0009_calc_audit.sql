@@ -1,15 +1,15 @@
--- Corrections de l'audit des calculs (octobre 2026).
--- Contrepassations : marquées pour que le rejeu du journal sache défaire le CUMP.
+-- Fixes from the calculation audit (October 2026).
+-- Reversals: flagged so the ledger replay knows how to undo the weighted average cost.
 ALTER TABLE stock_ledger ADD COLUMN is_reversal INTEGER NOT NULL DEFAULT 0;
--- Réévaluation (écart de prix facture/réception) : ligne à quantité nulle qui
--- fixe le CUMP absolu après correction ; le rejeu l'applique telle quelle.
+-- Revaluation (invoice/receipt price variance): zero-quantity row that
+-- sets the absolute weighted average cost after correction; the replay applies it as is.
 ALTER TABLE stock_ledger ADD COLUMN avg_after INTEGER;
--- Inventaire : quantité théorique au moment du comptage (l'écart est calculé
--- contre elle, pas contre le stock au moment de la validation).
+-- Inventory: theoretical quantity at count time (the variance is computed
+-- against it, not against the stock at validation time).
 ALTER TABLE document_lines ADD COLUMN expected_milli INTEGER;
 
--- Les quantités par lot n'étaient jamais maintenues par les mouvements :
--- le journal fait foi pour tout lot qui en porte au moins une écriture.
+-- Per-lot quantities were never maintained by the movements:
+-- the ledger is authoritative for any lot that has at least one entry.
 UPDATE lots SET qty_milli = (SELECT COALESCE(SUM(sl.qty_delta_milli), 0)
                                FROM stock_ledger sl WHERE sl.lot_id = lots.id)
  WHERE EXISTS (SELECT 1 FROM stock_ledger sl WHERE sl.lot_id = lots.id);

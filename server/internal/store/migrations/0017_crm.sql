@@ -1,11 +1,11 @@
--- 0017_crm : relation client (contacts, étiquettes, pièces du dossier,
--- activités, tâches, segments, objectifs des commerciaux, messages).
+-- 0017_crm: customer relationship (contacts, tags, customer file documents,
+-- activities, tasks, segments, sales rep targets, messages).
 
 CREATE TABLE partner_contacts (
   id         TEXT PRIMARY KEY,
   partner_id TEXT NOT NULL REFERENCES partners(id) ON DELETE CASCADE,
   name       TEXT NOT NULL,
-  role       TEXT NOT NULL DEFAULT '',   -- gérant, acheteur, comptable…
+  role       TEXT NOT NULL DEFAULT '',   -- manager, buyer, accountant…
   phone      TEXT NOT NULL DEFAULT '',
   whatsapp   TEXT NOT NULL DEFAULT '',
   email      TEXT NOT NULL DEFAULT '',
@@ -32,8 +32,8 @@ CREATE TABLE partner_tags (
 );
 CREATE INDEX idx_partner_tags_tag ON partner_tags(tag_id);
 
--- Pièces du dossier client (agrément, registre de commerce, carte NIF…),
--- stockées comme document_attachments (BLOB, 5 Mo max).
+-- Customer file documents (approval, trade register, NIF card…),
+-- stored like document_attachments (BLOB, 5 MB max).
 CREATE TABLE partner_files (
   id         TEXT PRIMARY KEY,
   partner_id TEXT NOT NULL REFERENCES partners(id) ON DELETE CASCADE,
@@ -42,7 +42,7 @@ CREATE TABLE partner_files (
   name       TEXT NOT NULL,
   mime       TEXT NOT NULL,
   data       BLOB NOT NULL,
-  expires_at TEXT,                         -- YYYY-MM-DD (agrément…)
+  expires_at TEXT,                         -- YYYY-MM-DD (approval…)
   notes      TEXT NOT NULL DEFAULT '',
   created_by TEXT REFERENCES users(id),
   created_at TEXT NOT NULL
@@ -53,7 +53,7 @@ CREATE TABLE crm_activities (
   id           TEXT PRIMARY KEY,
   partner_id   TEXT NOT NULL REFERENCES partners(id) ON DELETE CASCADE,
   type         TEXT NOT NULL CHECK (type IN ('call','visit','note','whatsapp','sms','email','meeting')),
-  outcome      TEXT NOT NULL DEFAULT '',   -- libre : commande, rappel, pas intéressé…
+  outcome      TEXT NOT NULL DEFAULT '',   -- free text: order, callback, not interested…
   summary      TEXT NOT NULL DEFAULT '',
   at           TEXT NOT NULL,              -- ISO-8601 UTC
   duration_min INTEGER NOT NULL DEFAULT 0,
@@ -76,14 +76,14 @@ CREATE TABLE crm_tasks (
   partner_id   TEXT REFERENCES partners(id) ON DELETE CASCADE,
   order_id     TEXT REFERENCES customer_orders(id) ON DELETE SET NULL,
   assignee_id  TEXT REFERENCES users(id),
-  due_at       TEXT,                       -- YYYY-MM-DD ou horodatage ISO
+  due_at       TEXT,                       -- YYYY-MM-DD or ISO timestamp
   priority     INTEGER NOT NULL DEFAULT 0 CHECK (priority IN (0,1,2)),
   status       TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','done','cancelled')),
   type         TEXT NOT NULL DEFAULT 'other'
                CHECK (type IN ('call','visit','collect_payment','follow_up','other')),
   source       TEXT NOT NULL DEFAULT 'manual'
                CHECK (source IN ('manual','auto_overdue','auto_inactive','auto_backorder')),
-  auto_key     TEXT,                       -- clé d'idempotence des tâches automatiques
+  auto_key     TEXT,                       -- idempotency key of automatic tasks
   completed_at TEXT,
   completed_by TEXT REFERENCES users(id),
   result       TEXT NOT NULL DEFAULT '',
@@ -108,7 +108,7 @@ CREATE TABLE rep_targets (
   id                 TEXT PRIMARY KEY,
   user_id            TEXT NOT NULL REFERENCES users(id),
   month              TEXT NOT NULL,          -- YYYY-MM
-  sales_target       INTEGER NOT NULL DEFAULT 0,  -- centimes TTC
+  sales_target       INTEGER NOT NULL DEFAULT 0,  -- centimes incl. VAT
   orders_target      INTEGER NOT NULL DEFAULT 0,
   visits_target      INTEGER NOT NULL DEFAULT 0,
   new_customers_target INTEGER NOT NULL DEFAULT 0,
@@ -149,7 +149,7 @@ CREATE TABLE message_log (
 );
 CREATE INDEX idx_message_log_partner ON message_log(partner_id, created_at);
 
--- Modèles par défaut (français). {{placeholders}} : voir docs/API_DISTRIBUTION.md.
+-- Default templates (French). {{placeholders}}: see docs/API_DISTRIBUTION.md.
 INSERT INTO message_templates (id, code, channel, lang, name, subject, body, active, is_system, created_at, updated_at) VALUES
 ('tpl-order_confirmed-wa', 'order_confirmed', 'whatsapp', 'fr', 'Commande confirmée', '',
  'Bonjour {{client}}, votre commande {{numero}} d''un montant de {{montant}} est confirmée. Merci de votre confiance. — {{magasin}}',

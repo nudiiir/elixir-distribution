@@ -13,7 +13,7 @@ import '../../widgets/ui.dart';
 import 'stock_common.dart';
 
 /// « Niveaux de stock » : one row per product (zeros included), the KPI strip follows
-/// the filters. ONE rule for « stock faible » (see [StockLevel.isLow]).
+/// the filters. ONE rule for « stock faible » (low stock; see [StockLevel.isLow]).
 class LevelsTab extends StatefulWidget {
   const LevelsTab({
     super.key,

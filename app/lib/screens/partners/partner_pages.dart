@@ -85,7 +85,7 @@ Future<Partner?> openPartnerForm(BuildContext context, ApiClient api,
   ));
 }
 
-/// Encaisser (client) / Payer (fournisseur) — a single quick action, so a
+/// Collect (client) / Pay (supplier) — a single quick action, so a
 /// small dialog. [outgoing] forces the direction (partners that are both).
 Future<bool> showPartnerPaymentDialog(
     BuildContext context, ApiClient api, Partner p,
@@ -333,7 +333,7 @@ class _PartnerDetailPageState extends State<PartnerDetailPage> {
     }
   }
 
-  /// Encaisser une échéance : encaissement espèces + échéance pointée.
+  /// Collect an instalment: cash receipt + instalment marked as paid.
   Future<void> _payDue(InstallmentDue d) async {
     if (_busy) return;
     setState(() => _busy = true);
@@ -916,7 +916,7 @@ class _PartnerFormPageState extends State<PartnerFormPage> {
   late final _notes = TextEditingController(text: widget.existing?.notes ?? '');
   late String _kind = widget.existing?.kind ?? widget.initialKind;
   late String _priceLevel = widget.existing?.priceLevel ?? 'retail';
-  // Groupe de clients + plafond de crédit propre (vide = plafond du magasin).
+  // Customer group + own credit limit (empty = shop limit).
   late String? _groupId = widget.existing?.groupId;
   List<CustomerGroup> _groups = const [];
   late final _creditLimit = TextEditingController(
@@ -959,7 +959,7 @@ class _PartnerFormPageState extends State<PartnerFormPage> {
     CrmDirectory.routes(widget.api).then((r) {
       if (mounted) setState(() => _routes = r);
     });
-    // The page frame autofocuses for Échap: put the cursor in « Nom ».
+    // The page frame autofocuses for Esc: put the cursor in « Nom ».
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && widget.existing == null) _nameFocus.requestFocus();
     });
@@ -1033,10 +1033,10 @@ class _PartnerFormPageState extends State<PartnerFormPage> {
         'ai': v(_ai),
         'notes': v(_notes),
         'price_level': _kind == 'supplier' ? 'retail' : _priceLevel,
-        // null = suit le plafond par défaut du magasin.
+        // null = follows the shop's default limit.
         'credit_limit': _kind == 'supplier' || (credit ?? 0) == 0 ? null : credit,
         'group_id': _kind == 'supplier' ? '' : (_groupId ?? ''),
-        // Réglages fournisseur gardés tels quels (le formulaire ne les montre pas).
+        // Supplier settings kept as they are (the form does not show them).
         if (widget.existing != null) 'min_shelf_days': widget.existing!.minShelfDays,
         if (widget.existing != null) 'over_receipt_pct': widget.existing!.overReceiptPct,
       }, id: widget.existing?.id);

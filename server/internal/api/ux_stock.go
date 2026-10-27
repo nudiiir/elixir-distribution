@@ -22,7 +22,7 @@ func (s *Server) routesStockUX(r chi.Router) {
 }
 
 // ---------------------------------------------------------------------------
-// Journal de stock (Mouvements)
+// Stock ledger (Movements)
 // ---------------------------------------------------------------------------
 
 // ledgerKinds maps the UI type pills to document types.
@@ -76,7 +76,7 @@ type ledgerResult struct {
 
 // stockLedger replays the movement ledger for the filtered products and
 // warehouses. The running balance is per product × warehouse and starts from
-// every movement before FromTS; the CUMP is replayed with the same rules as
+// every movement before FromTS; the weighted average cost is replayed with the same rules as
 // the nightly check (domain.VerifyStock) to value the opening and closing.
 //
 // The type filter only selects which rows are SHOWN (and summed in in/out):
@@ -156,7 +156,7 @@ func stockLedger(db *sql.DB, p ledgerParams) (*ledgerResult, error) {
 			a = &acc{}
 			state[k] = a
 		}
-		// CUMP replay — same rules as domain.VerifyStock.
+		// Weighted average cost replay — same rules as domain.VerifyStock.
 		valued := lr.DocType == domain.PurchaseReceipt || lr.DocType == domain.PurchaseInvoice ||
 			lr.DocType == domain.StockTransfer || lr.DocType == domain.StockAdjustment
 		switch {
@@ -267,7 +267,7 @@ func (s *Server) stockLedgerHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
-// À commander
+// To order
 // ---------------------------------------------------------------------------
 
 type reorderRow struct {
@@ -462,7 +462,7 @@ func stockReorder(db *sql.DB, warehouseID string, now time.Time) ([]reorderRow, 
 			rr.CoverageDays = &c
 		}
 		rr.TargetMilli = 2 * rr.MinStockMilli
-		if s := rr.Sold30Milli; s > rr.TargetMilli { // 30 jours de ventes
+		if s := rr.Sold30Milli; s > rr.TargetMilli { // 30 days of sales
 			rr.TargetMilli = s
 		}
 		onHand := rr.QtyMilli
@@ -483,7 +483,7 @@ func stockReorder(db *sql.DB, warehouseID string, now time.Time) ([]reorderRow, 
 		}
 		rr.SuggestedMilli = need
 
-		// Fournisseur : le dernier qui a livré, sinon le fournisseur habituel.
+		// Supplier: the last one who delivered, otherwise the usual supplier.
 		rr.LastUnitCost = purchase
 		if l, ok := last[rr.ProductID]; ok {
 			id := l.partner
@@ -556,7 +556,7 @@ func (s *Server) stockReorderHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
-// Ajustements / inventaires / transferts
+// Adjustments / inventories / transfers
 // ---------------------------------------------------------------------------
 
 type stockDoc struct {

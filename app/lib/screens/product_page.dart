@@ -13,7 +13,7 @@ import '../widgets/fiche_produit.dart'
 import '../widgets/product_thumb.dart';
 import '../widgets/ui.dart';
 
-/// Opens the full product page (création ET modification), pushed in the
+/// Opens the full product page (creation AND edit), pushed in the
 /// current navigator (inside the module, menu still visible). [template]
 /// pre-fills a new product (« Dupliquer ») — never its barcodes. Returns
 /// true when anything was saved, false when left without saving, null when
@@ -140,13 +140,13 @@ const _newSentinel = '\u0000new';
 class _ProductPageState extends State<ProductPage> {
   Features get _f => Features.instance;
 
-  /// Produit en cours de modification (null = création). Devient null après
+  /// Product being edited (null = creation). Becomes null after
   /// « Enregistrer et nouveau ».
   late Product? _existing = widget.existing;
   bool get _isEdit => _existing != null;
   Product? get _src => widget.existing ?? widget.template;
 
-  // ---- Identité ----
+  // ---- Identity ----
   late final _barcode = TextEditingController(text: widget.existing?.barcode ?? '');
   late final _name = TextEditingController(
       text: widget.existing?.name ??
@@ -159,7 +159,7 @@ class _ProductPageState extends State<ProductPage> {
   final List<(Uint8List, String)> _pendingPhotos = [];
   bool _busyPhoto = false;
 
-  // ---- Prix ----
+  // ---- Price ----
   late final _purchase = TextEditingController(
       text: _src == null || _src!.purchasePrice == 0
           ? ''
@@ -173,24 +173,24 @@ class _ProductPageState extends State<ProductPage> {
       text: _src?.priceWholesale == null ? '' : editDA(_src!.priceWholesale!));
   late int _vat = _src?.vatRate ?? Features.instance.defaultVat;
 
-  // ---- Classement ----
+  // ---- Classification ----
   late String? _categoryId = _src?.categoryId;
   late final _brand = TextEditingController(text: _src?.brand ?? '');
   final _brandFocus = FocusNode();
   late String? _supplierId = _src?.defaultSupplierId;
   List<Category> _cats = const [];
   List<Partner> _suppliers = const [];
-  // Marques gérées (Paramètres › Produits et stock) + marques déjà utilisées.
+  // Managed brands (Paramètres › Produits et stock) + brands already in use.
   late List<String> _brands = {...Features.instance.brands, ...widget.brands}.toList()..sort();
 
   // ---- Stock ----
   final _initialQty = TextEditingController();
-  // Nouveau produit : stock minimum par défaut des Paramètres.
+  // New product: default minimum stock from Paramètres.
   late final _minStock = TextEditingController(
       text: _src == null
           ? (Features.instance.defaultMinStockMilli == 0 ? '' : fmtQty(Features.instance.defaultMinStockMilli))
           : (_src!.minStockMilli == 0 ? '' : fmtQty(_src!.minStockMilli)));
-  // Unité de vente (liste des Paramètres ; « kg » quand vendu au poids).
+  // Sales unit (list from Paramètres; « kg » when sold by weight).
   late String _unit = _src?.unit ??
       (Features.instance.units.isEmpty ? 'pièce' : Features.instance.units.first);
   late final List<_PackRow> _packs = [
@@ -202,7 +202,7 @@ class _ProductPageState extends State<ProductPage> {
   ];
   late bool _soldByPack = _packs.isNotEmpty;
 
-  // ---- Suivi / type ----
+  // ---- Tracking / type ----
   late bool _lot = (_src?.trackLots ?? false) || (_src?.trackExpiry ?? false);
   late bool _serial = _src?.trackSerials ?? false;
   late bool _weighed = _src?.isWeighable ?? false;
@@ -213,7 +213,7 @@ class _ProductPageState extends State<ProductPage> {
   final List<_OptionRow> _options = [_OptionRow('Taille'), _OptionRow('Couleur')];
   final Map<String, _VariantRow> _variantRows = {};
 
-  // ---- Colonne droite ----
+  // ---- Right column ----
   late bool _active = widget.existing?.active ?? true;
   late final _description = TextEditingController(text: _src?.description ?? '');
   late final _warranty = TextEditingController(
@@ -223,7 +223,7 @@ class _ProductPageState extends State<ProductPage> {
   late String? _promoStart = widget.existing?.promoStart;
   late String? _promoEnd = widget.existing?.promoEnd;
 
-  // ---- État ----
+  // ---- State ----
   final Map<String, String> _errors = {};
   final _keys = <String, GlobalKey>{};
   final _focus = <String, FocusNode>{};
@@ -238,8 +238,8 @@ class _ProductPageState extends State<ProductPage> {
   bool _savedAny = false;
   bool _generating = false;
 
-  /// « Options avancées » (nom arabe, codes-barres en plus, emballages,
-  /// n° de série) — open from the start when the product uses them.
+  /// « Options avancées » (Arabic name, extra barcodes, packagings,
+  /// serial no.) — open from the start when the product uses them.
   late bool _advanced = (_src?.nameAr ?? '').isNotEmpty ||
       (widget.existing?.barcodesEx.isNotEmpty ?? false) ||
       (_src?.packagings.isNotEmpty ?? false);
@@ -331,9 +331,9 @@ class _ProductPageState extends State<ProductPage> {
     } catch (_) {}
   }
 
-  // ---------------------------------------------------------------- prix
+  // ---------------------------------------------------------------- price
 
-  /// Coût de référence de la marge : saisi à la création, figé ensuite.
+  /// Reference cost for the margin: entered at creation, frozen afterwards.
   int get _cost => _isEdit
       ? _existing!.purchasePrice
       : (parseDA(_purchase.text) ?? 0);
@@ -364,7 +364,7 @@ class _ProductPageState extends State<ProductPage> {
     final m = _parseMargin(_margin.text);
     if (cost <= 0 || m == null) return;
     final pvHT = roundDiv(cost * (10000 + m), 10000);
-    // Arrondi du prix de vente (Paramètres › Produits et stock).
+    // Selling price rounding (Paramètres › Produits et stock).
     _retail.text = editDA(_f.roundPrice(roundDiv(pvHT * (10000 + _vat), 10000)));
   }
 
@@ -572,7 +572,7 @@ class _ProductPageState extends State<ProductPage> {
     }
   }
 
-  // ---------------------------------------------------------------- variantes
+  // ---------------------------------------------------------------- variants
 
   List<List<String>> get _combos {
     final lists = [
@@ -783,7 +783,7 @@ class _ProductPageState extends State<ProductPage> {
       WidgetsBinding.instance.addPostFrameCallback((_) => _focusFirstError());
       return;
     }
-    // Vente sous le coût : avertit, ne bloque pas (spec §4.5).
+    // Selling below cost: warns, does not block (spec §4.5).
     final cost = _cost;
     final ttc = parseDA(_retail.text) ?? 0;
     if (cost > 0 && ttc > 0 && roundDiv(ttc * 10000, 10000 + _vat) <= cost) {
@@ -800,7 +800,7 @@ class _ProductPageState extends State<ProductPage> {
       final saved =
           await widget.api.saveProduct(_payload(), id: _existing?.id);
       _savedAny = true;
-      // Photos choisies avant la création.
+      // Photos chosen before creation.
       var withPhotos = saved;
       final photoErrors = <String>[];
       for (final (bytes, mime) in List.of(_pendingPhotos)) {
@@ -811,7 +811,7 @@ class _ProductPageState extends State<ProductPage> {
         }
       }
       _pendingPhotos.clear();
-      // Déclinaisons générées : des produits frères liés au parent.
+      // Generated variants: sibling products linked to the parent.
       var created = 0;
       final variantErrors = <String>[];
       if (_variantsOn && _f.variants && saved.parentProductId == null) {
@@ -871,7 +871,7 @@ class _ProductPageState extends State<ProductPage> {
         _dirty = false;
         Navigator.of(context).pop(true);
       } else {
-        // Le produit existe : la page passe en modification.
+        // The product exists: the page switches to edit mode.
         setState(() {
           _existing = withPhotos;
           _variantsOn = false;
@@ -905,8 +905,8 @@ class _ProductPageState extends State<ProductPage> {
     }
   }
 
-  /// « Enregistrer et nouveau » : garde catégorie, marque, TVA, fournisseur
-  /// et type — quarante produits du même rayon à la suite.
+  /// « Enregistrer et nouveau »: keeps category, brand, VAT, supplier
+  /// and type — forty products from the same shelf in a row.
   void _resetForNew() {
     for (final c in [
       _barcode, _name, _nameAr, _newBcode, _newBcodeLabel, _purchase, _margin,
@@ -954,7 +954,7 @@ class _ProductPageState extends State<ProductPage> {
         danger: true);
   }
 
-  /// « Annuler », « Retour », Échap.
+  /// « Annuler », « Retour », Esc.
   Future<void> _close() async {
     if (!await _confirmDiscard()) return;
     _dirty = false;
@@ -1095,7 +1095,7 @@ class _ProductPageState extends State<ProductPage> {
         ],
       );
 
-  // ---------------------------------------------------------------- Identité
+  // ---------------------------------------------------------------- Identity
 
   Widget _identity() {
     return PageSection(
@@ -1288,7 +1288,7 @@ class _ProductPageState extends State<ProductPage> {
     ]);
   }
 
-  // ---------------------------------------------------------------- Prix
+  // ---------------------------------------------------------------- Price
 
   Widget _prices() {
     final unit = _weighed ? ' (DA le kg)' : ' (DA)';
@@ -1296,7 +1296,7 @@ class _ProductPageState extends State<ProductPage> {
     final ttc = parseDA(_retail.text) ?? 0;
     final pvHT = ttc <= 0 ? 0 : roundDiv(ttc * 10000, 10000 + _vat);
     final below = cost > 0 && ttc > 0 && pvHT <= cost;
-    // Taux de TVA des Paramètres › Taxes (+ celui du produit s'il n'y est plus).
+    // VAT rates from Paramètres › Taxes (+ the product's own if no longer listed).
     final vats = {..._f.vatRates, _vat}.toList();
     final retail = _PField(
       fieldKey: _k('retail'),
@@ -1409,7 +1409,7 @@ class _ProductPageState extends State<ProductPage> {
     );
   }
 
-  // ---------------------------------------------------------------- Classement
+  // ---------------------------------------------------------------- Classification
 
   Widget _classement() {
     final catValue = _cats.any((c) => c.id == _categoryId) ? _categoryId : null;
@@ -1577,7 +1577,7 @@ class _ProductPageState extends State<ProductPage> {
         _touch();
       },
     );
-    // Unités : liste de Paramètres › Produits et stock (+ l'unité actuelle).
+    // Units: list from Paramètres › Produits et stock (+ the current unit).
     final unitChoices = {..._f.units, _unit}.toList();
     final unitField = _weighed
         ? null
@@ -1634,7 +1634,7 @@ class _ProductPageState extends State<ProductPage> {
     );
   }
 
-  // ---------------------------------------------------------------- Suivi
+  // ---------------------------------------------------------------- Tracking
 
   Widget _tracking() {
     final children = <Widget>[];
@@ -1914,7 +1914,7 @@ class _ProductPageState extends State<ProductPage> {
     );
   }
 
-  // ---------------------------------------------------------------- Boutique
+  // ---------------------------------------------------------------- Online shop
 
   Widget _webstore() {
     return PageSection(
@@ -1930,7 +1930,7 @@ class _ProductPageState extends State<ProductPage> {
     );
   }
 
-  // ---------------------------------------------------------------- Garantie / promo
+  // ---------------------------------------------------------------- Warranty / promo
 
   Widget _warrantyPromo() {
     return PageSection(
@@ -2002,7 +2002,7 @@ class _ProductPageState extends State<ProductPage> {
     );
   }
 
-  // ---------------------------------------------------------------- Options avancées
+  // ---------------------------------------------------------------- Advanced options
 
   Widget _advancedSection() {
     final service = _kind == 'service';
@@ -2663,8 +2663,8 @@ Future<String?> _askText(BuildContext context, String title, String hint) {
   ).whenComplete(ctrl.dispose);
 }
 
-/// « + Nouveau fournisseur » : le minimum pour continuer la fiche ; le reste
-/// se complète dans Partenaires.
+/// « + Nouveau fournisseur »: the minimum to carry on with the product form; the rest
+/// is completed in Partenaires.
 class _NewSupplierDialog extends StatefulWidget {
   const _NewSupplierDialog();
 

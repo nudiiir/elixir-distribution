@@ -68,7 +68,7 @@ class _Line {
 
 /// « Nouvelle commande » (and « Modifier » of a new / validated order):
 /// client with his account, fast product entry with the resolved price,
-/// delivery details. A page, not a dialog: Échap = Retour.
+/// delivery details. A page, not a dialog: Esc = Back.
 class OrderFormPage extends StatefulWidget {
   const OrderFormPage({super.key, required this.api, required this.user, this.existing, this.initialPartner});
   final ApiClient api;
@@ -793,7 +793,7 @@ class _OrderFormPageState extends State<OrderFormPage> {
   }
 }
 
-/// Several products match: choose one (↑ ↓ Entrée).
+/// Several products match: choose one (↑ ↓ Enter).
 class _ProductChoice extends StatelessWidget {
   const _ProductChoice({required this.items, required this.query});
   final List<Product> items;

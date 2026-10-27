@@ -26,7 +26,7 @@ import '../../widgets/ui.dart';
 import '../product_page.dart';
 import '../pricing/product_pricing_page.dart' show openProductPricing;
 
-/// Fiche produit — the page where the shopkeeper answers the question that
+/// Product record (« Fiche produit ») — the page where the shopkeeper answers the question that
 /// decides whether he trusts the software: « why does it say 45 when I count
 /// 43 ». Everything is recomputed, nothing stored, and every figure leads
 /// back to its documents in two clicks.
@@ -467,7 +467,7 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
 
   // ---------------------------------------------------------------- sections
 
-  /// Marge sur PV_HT contre coût moyen — jamais TTC contre HT (spec §2.4).
+  /// Margin on selling price excl. tax vs average cost — never incl. tax vs excl. tax (spec §2.4).
   String _marginText(int saleTTC, int vatRate, int? cost) {
     if (cost == null || cost <= 0 || saleTTC <= 0) return '—';
     final pvHT = roundDiv(saleTTC * 10000, 10000 + vatRate);
@@ -477,8 +477,8 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
 
   Widget _infos(FicheData d) {
     final p = d.product;
-    // Quand le stock total est nul, chaque moyenne affiche un tiret, jamais
-    // un zéro : une moyenne de rien n'est pas zéro dinar.
+    // When total stock is zero, every average shows a dash, never
+    // a zero: an average of nothing is not zero dinars.
     final stock = d.stockTotal;
     final cost = d.achatPondere;
     int? avgSale;
@@ -663,8 +663,8 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
             'Sous le minimum (${fmtQty(d.product.minStockMilli)})'));
       }
     }
-    // Du stock sur le produit principal alors que des variantes existent :
-    // il n'est vendable sur aucune variante tant qu'il n'est pas réparti.
+    // Stock on the main product while variants exist:
+    // it is sellable on no variant until it is split.
     if (d.variants.isNotEmpty && d.stockTotal > 0) {
       alerts.add(_alertRow(Icons.call_split_rounded, T.warnDark,
           '${fmtQty(d.stockTotal)} à répartir entre les variantes'));

@@ -171,7 +171,7 @@ extension CrmApi on ApiClient {
 
   Future<void> crmDeleteContact(String id) => _cDelete('/partner-contacts/$id');
 
-  // ---- Étiquettes ----
+  // ---- Tags ----
 
   Future<List<CrmTag>> crmTags() async =>
       [for (final e in _items(await _cGet('/tags'))) CrmTag.fromJson(e)];
@@ -188,7 +188,7 @@ extension CrmApi on ApiClient {
       Partner.fromJson(Map<String, dynamic>.from(
           await _cPut('/partners/$partnerId/tags', {'tag_ids': tagIds}) as Map));
 
-  // ---- Pièces (fichiers du client) ----
+  // ---- Attachments (customer files) ----
 
   Future<List<PartnerFile>> crmFiles(String partnerId) async =>
       [for (final e in _items(await _cGet('/partners/$partnerId/files'))) PartnerFile.fromJson(e)];
@@ -221,7 +221,7 @@ extension CrmApi on ApiClient {
   Future<void> crmDeleteFile(String partnerId, String fileId) =>
       _cDelete('/partners/$partnerId/files/$fileId');
 
-  // ---- Activités ----
+  // ---- Activities ----
 
   Future<List<CrmActivity>> crmActivities(
       {String? partnerId, String? userId, String? type, String? from, String? to, int limit = 100, int offset = 0}) async {
@@ -244,7 +244,7 @@ extension CrmApi on ApiClient {
 
   Future<void> crmDeleteActivity(String id) => _cDelete('/crm/activities/$id');
 
-  // ---- Tâches ----
+  // ---- Tasks ----
 
   Future<List<CrmTask>> crmTasks({
     String? assigneeId,
@@ -316,7 +316,7 @@ extension CrmApi on ApiClient {
       SegmentResult.fromJson(Map<String, dynamic>.from(
           await _cGet('/crm/segments/$id/evaluate', overrides) as Map));
 
-  // ---- Commerciaux ----
+  // ---- Sales reps ----
 
   Future<List<RepTarget>> crmRepTargets(String month) async =>
       [for (final e in _items(await _cGet('/crm/rep-targets', {'month': month}))) RepTarget.fromJson(e)];
@@ -329,9 +329,9 @@ extension CrmApi on ApiClient {
           RepPerf.fromJson(e)
       ];
 
-  /// People who can be chosen as commercial / assignee. The full user list
-  /// is admin-only: others get the users with a code caisse, the known
-  /// commerciaux and themselves.
+  /// People who can be chosen as sales rep / assignee. The full user list
+  /// is admin-only: others get the users with a till code, the known
+  /// sales reps and themselves.
   Future<List<CrmUser>> crmUsers() async {
     final out = <String, String>{};
     try {
@@ -363,7 +363,7 @@ extension CrmApi on ApiClient {
     return list;
   }
 
-  /// Tournées types (lecture : deliveries.view | orders.view | crm.view).
+  /// Standard delivery rounds (read: deliveries.view | orders.view | crm.view).
   Future<List<CrmRoute>> crmRoutes() async =>
       [for (final e in _items(await _cGet('/delivery-routes'))) CrmRoute.fromJson(e)];
 

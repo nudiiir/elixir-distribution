@@ -30,9 +30,9 @@ type CaisseReport struct {
 	CardSales    int64 `json:"card_sales"`
 	CreditSales  int64 `json:"credit_sales"`
 	OtherSales   int64 `json:"other_sales"`
-	CashIn       int64 `json:"cash_in"`      // encaissements espèces
-	CashOut      int64 `json:"cash_out"`     // règlements espèces
-	CashRefunds  int64 `json:"cash_refunds"` // avoirs remboursés en espèces
+	CashIn       int64 `json:"cash_in"`      // cash receipts
+	CashOut      int64 `json:"cash_out"`     // cash settlements
+	CashRefunds  int64 `json:"cash_refunds"` // credit notes refunded in cash
 	ExpectedCash int64 `json:"expected_cash"`
 }
 

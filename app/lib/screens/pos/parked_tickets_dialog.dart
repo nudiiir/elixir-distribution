@@ -7,7 +7,7 @@ import 'cart_line.dart';
 import 'parked_tickets.dart';
 
 /// « Tickets en attente » (F5): pops with the ticket to resume, or null.
-/// Supprimer asks for confirmation (the cart is lost for good).
+/// « Supprimer » asks for confirmation (the cart is lost for good).
 class ParkedTicketsDialog extends StatefulWidget {
   const ParkedTicketsDialog({super.key});
 

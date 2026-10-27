@@ -35,7 +35,7 @@ func (s *Server) ficheProduct(w http.ResponseWriter, r *http.Request) {
 
 	canCost := s.can(r, "view_cost")
 
-	// Niveaux par dépôt.
+	// Levels per depot.
 	type level struct {
 		WarehouseID string `json:"warehouse_id"`
 		Warehouse   string `json:"warehouse"`
@@ -59,7 +59,7 @@ func (s *Server) ficheProduct(w http.ResponseWriter, r *http.Request) {
 		rows.Close()
 	}
 
-	// Lots avec quantité restante (somme du journal par lot), triés par DLC.
+	// Lots with remaining quantity (ledger sum per lot), sorted by expiry date.
 	type lotRow struct {
 		ID        string  `json:"id"`
 		LotNumber string  `json:"lot_number"`
@@ -81,9 +81,9 @@ func (s *Server) ficheProduct(w http.ResponseWriter, r *http.Request) {
 		rows.Close()
 	}
 
-	// Derniers mouvements (5), avec le document derrière chacun.
-	// balance_after = stock du dépôt juste après ce mouvement (somme courante
-	// du journal par dépôt) : la colonne « Solde » de la fiche.
+	// Latest movements (5), with the document behind each one.
+	// balance_after = depot stock right after this movement (running sum
+	// of the ledger per depot): the « Solde » column of the product page.
 	type mv struct {
 		Date         string  `json:"date"`
 		DocType      string  `json:"doc_type"`
@@ -129,15 +129,15 @@ func (s *Server) ficheProduct(w http.ResponseWriter, r *http.Request) {
 		log.Printf("fiche moves: %v", err)
 	}
 
-	// Ventes des 30 derniers jours (quantité nette vendue par jour, avoirs
-	// déduits) + couverture du stock.
+	// Sales over the last 30 days (net quantity sold per day, credit notes
+	// deducted) + stock coverage.
 	var stockTotal int64
 	for _, l := range levels {
 		stockTotal += l.QtyMilli
 	}
 	sales30, avgDaily, coverage := s.salesCoverage(id, stockTotal, time.Now())
 
-	// Dernier prix payé à chaque fournisseur.
+	// Last price paid to each supplier.
 	type sup struct {
 		PartnerID string `json:"partner_id"`
 		Partner   string `json:"partner"`
@@ -161,7 +161,7 @@ func (s *Server) ficheProduct(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Déclinaisons (produits enfants) avec leur stock total.
+	// Variants (child products) with their total stock.
 	type variant struct {
 		Product
 		StockMilli int64 `json:"stock_milli"`
@@ -194,7 +194,7 @@ func (s *Server) ficheProduct(w http.ResponseWriter, r *http.Request) {
 		"moves":     moves,
 		"suppliers": suppliers,
 		"variants":  variants,
-		// Ventes 30 jours + couverture (null sans ventes).
+		// 30-day sales + coverage (null without sales).
 		"sales_30d":             sales30,
 		"avg_daily_sales_milli": avgDaily,
 		"coverage_days":         coverage,
@@ -249,7 +249,7 @@ func (s *Server) salesCoverage(productID string, stockMilli int64, now time.Time
 	}
 	avg := total / 30
 	if avg <= 0 {
-		return days, 0, nil // pas de ventes : pas de couverture
+		return days, 0, nil // no sales: no coverage
 	}
 	cov := int64(0)
 	if stockMilli > 0 {
@@ -298,8 +298,8 @@ func (s *Server) splitProduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Le partage se fait dépôt par dépôt ; v1 exige que le stock soit dans un
-	// seul dépôt (transférer d'abord sinon).
+	// The split is done depot by depot; v1 requires the stock to be in a
+	// single depot (transfer first otherwise).
 	var nWarehouses int
 	s.db.QueryRow(`SELECT COUNT(*) FROM stock_levels WHERE product_id=? AND qty_milli <> 0`, id).
 		Scan(&nWarehouses)
@@ -342,7 +342,7 @@ func (s *Server) splitProduct(w http.ResponseWriter, r *http.Request) {
 		id, in.WarehouseID).Scan(&avgCost)
 
 	now := domain.NowISO()
-	// 1. Créer les déclinaisons (le code-barres quitte le pool du parent).
+	// 1. Create the variants (the barcode leaves the parent's pool).
 	var variantIDs []string
 	for _, it := range in.Items {
 		vid := domain.NewID()
@@ -372,8 +372,8 @@ func (s *Server) splitProduct(w http.ResponseWriter, r *http.Request) {
 		variantIDs = append(variantIDs, vid)
 	}
 
-	// 2. Un document d'ajustement déplace le stock du pool vers les
-	// déclinaisons — jamais une écriture directe.
+	// 2. An adjustment document moves the stock from the pool to the
+	// variants — never a direct write.
 	docID := domain.NewID()
 	tx, err := s.db.Begin()
 	if err != nil {

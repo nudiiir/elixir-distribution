@@ -9,7 +9,7 @@ import '../../widgets/app_page.dart';
 import '../orders/order_common.dart';
 
 // ---------------------------------------------------------------------------
-// Tournée type
+// Route template
 // ---------------------------------------------------------------------------
 
 class RouteFormPage extends StatefulWidget {
@@ -207,7 +207,7 @@ class _RouteFormPageState extends State<RouteFormPage> {
 }
 
 // ---------------------------------------------------------------------------
-// Véhicule
+// Vehicle
 // ---------------------------------------------------------------------------
 
 class VehicleFormPage extends StatefulWidget {
@@ -304,7 +304,7 @@ class _VehicleFormPageState extends State<VehicleFormPage> {
 }
 
 // ---------------------------------------------------------------------------
-// Planifier une tournée
+// Plan a delivery round
 // ---------------------------------------------------------------------------
 
 class RunPlanPage extends StatefulWidget {

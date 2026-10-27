@@ -14,10 +14,10 @@ type StockLevel struct {
 	WarehouseName string  `json:"warehouse_name"`
 	QtyMilli      int64   `json:"qty_milli"`
 	AvgCost       int64   `json:"avg_cost"`
-	// Valeur au coût (centimes) : qté × CMUP, ou somme des dépôts en mode agrégé.
+	// Value at cost (centimes): qty × weighted average cost, or sum of depots in aggregated mode.
 	Value int64 `json:"value"`
 
-	// Contexte produit pour les filtres et les indicateurs de l'écran Stock.
+	// Product context for the filters and indicators of the Stock screen.
 	CategoryID          *string `json:"category_id"`
 	CategoryName        *string `json:"category_name"`
 	Brand               string  `json:"brand"`
@@ -76,7 +76,7 @@ func (s *Server) stockMovements(w http.ResponseWriter, r *http.Request) {
 // Default mode (used by the POS, dashboard, editor…): one row per existing
 // product × warehouse cache row, capped at 1000.
 //
-// full=1 (écran Stock) : one row per ACTIVE, non-service product — products
+// full=1 (Stock screen): one row per ACTIVE, non-service product — products
 // never stocked appear with 0 (so « Rupture » is complete) — aggregated over
 // the warehouses unless warehouse_id is given. No cap.
 func (s *Server) stockLevels(w http.ResponseWriter, r *http.Request) {
@@ -173,8 +173,8 @@ func (s *Server) stockLevelsFull(w http.ResponseWriter, r *http.Request, viewCos
 		}
 		sl.WarehouseID = wh
 		sl.Value = stockDivRound(valueMilli, 1000)
-		// CMUP agrégé = valeur / quantité ; sans stock positif, le dernier
-		// CMUP connu (une moyenne de rien n'est pas zéro dinar).
+		// Aggregated weighted average cost = value / quantity; with no positive stock, the last
+		// known weighted average cost (an average of nothing is not zero dinars).
 		if sl.QtyMilli > 0 {
 			sl.AvgCost = stockDivRound(valueMilli, sl.QtyMilli)
 		} else {

@@ -34,10 +34,10 @@ type posCheckoutInput struct {
 	Notes           *string        `json:"notes"`
 	Lines           []DocumentLine `json:"lines"`
 	// Either one method for the whole ticket (cash/cib/edahabia/cheque/credit,
-	// timbre on the whole total when cash) or several rows.
+	// stamp duty on the whole total when cash) or several rows.
 	PaymentMethod *string      `json:"payment_method"`
 	Payments      []PosPayment `json:"payments"`
-	// Remise ticket (pct × 100) appliquée aux lignes qui n'en portent pas.
+	// Ticket discount (pct × 100) applied to lines that carry none.
 	DiscountPct int64 `json:"discount_pct"`
 }
 
@@ -79,7 +79,7 @@ func (s *Server) posCheckout(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// The customer's group remise (Paramètres › Clients et fidélité) is the
+	// The customer's group discount (Paramètres › Clients et fidélité) is the
 	// shop's own rule, not the cashier's: lines carrying exactly it are not
 	// checked against the cashier's discount right.
 	checked := in.Lines
@@ -94,8 +94,8 @@ func (s *Server) posCheckout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	conf := s.loadPosConf()
-	// Règle « rapport Z quotidien » : une caisse ouverte un jour précédent
-	// doit être clôturée avant toute nouvelle vente.
+	// « rapport Z quotidien » rule: a till opened on a previous day
+	// must be closed before any new sale.
 	if conf.RequireDailyZ {
 		if stale, err := s.posSessionStale(in.CaisseSessionID, time.Now()); err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
@@ -109,16 +109,16 @@ func (s *Server) posCheckout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Total des marchandises (avant timbre), base de l'arrondi espèces.
+	// Goods total (before stamp duty), basis of the cash rounding.
 	var goods int64
 	for _, l := range in.Lines {
 		_, _, t := domain.LineTotals(l.UnitPrice, l.QtyMilli, l.DiscountPct, l.VatRate)
 		goods += t
 	}
 	timbreCash := domain.TimbreApplies(domain.SaleTicket, "cash")
-	// Arrondi des espèces : montant (positif ou négatif) ajouté au ticket
-	// comme une ligne « Arrondi » — le total du ticket est alors exactement
-	// ce qui entre dans le tiroir, et les rapports restent justes.
+	// Cash rounding: amount (positive or negative) added to the ticket
+	// as an « Arrondi » line — the ticket total is then exactly
+	// what goes into the drawer, and the reports stay correct.
 	var rounding int64
 
 	// Payments: merge same-method rows, validate, and collapse a single row
@@ -160,8 +160,8 @@ func (s *Server) posCheckout(w http.ResponseWriter, r *http.Request) {
 				ttc += domain.Timbre(ttc)
 			}
 			if m == "cash" && byMethod[m] != ttc {
-				// Montant arrondi par la caisse : accepté s'il correspond
-				// exactement à l'arrondi configuré.
+				// Amount rounded by the till: accepted if it matches
+				// the configured rounding exactly.
 				if d := cashRoundingDelta(goods, conf.CashRounding, timbreCash); d != 0 &&
 					byMethod[m] == cashDue(goods+d, timbreCash) {
 					rounding, ttc = d, byMethod[m]
@@ -179,7 +179,7 @@ func (s *Server) posCheckout(w http.ResponseWriter, r *http.Request) {
 				pays = append(pays, PosPayment{Method: m, Amount: byMethod[m]})
 			}
 			method = nil
-			// Paiement mixte : l'arrondi porte sur la part en espèces.
+			// Mixed payment: the rounding applies to the cash part.
 			if cash, ok := byMethod["cash"]; ok {
 				cashGoods := goods - (sumPayments(byMethod) - cash)
 				if d := cashRoundingDelta(cashGoods, conf.CashRounding, timbreCash); d != 0 &&
@@ -199,8 +199,8 @@ func (s *Server) posCheckout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Droits à la caisse — the shared sale checks of the roles work: remise
-	// (+ max_discount_pct), crédit (+ max_credit, + the customer's ceiling),
+	// Till rights — the shared sale checks of the roles work: discount
+	// (+ max_discount_pct), credit (+ max_credit, + the customer's ceiling),
 	// approval_above. A refusal answers 403 needs_approval and the till
 	// replays the request with X-Approval (« Code du gérant »).
 	if !s.checkSaleRights(w, r, SaleCheck{
@@ -214,7 +214,7 @@ func (s *Server) posCheckout(w http.ResponseWriter, r *http.Request) {
 	}) {
 		return
 	}
-	// Prix changé à la caisse : right price_edit, else the manager's code.
+	// Price changed at the till: right price_edit, else the manager's code.
 	if !s.posCheckPrices(w, r, in.Lines) {
 		return
 	}
@@ -395,7 +395,7 @@ type PosRecentTicket struct {
 	Payments      []PosPayment `json:"payments"`
 }
 
-// posRecent lists the last tickets of a caisse session (default: the open one).
+// posRecent lists the last tickets of a till session (default: the open one).
 func (s *Server) posRecent(w http.ResponseWriter, r *http.Request) {
 	if !s.can(r, "pos") {
 		forbid(w)
@@ -450,14 +450,14 @@ func (s *Server) posRecent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
-// ---- Paramètres › Caisse : règles appliquées par le serveur ----------------
+// ---- Paramètres › Caisse: rules enforced by the server ----------------
 
 // posRoundingLabel is the description of the cash-rounding line.
 const posRoundingLabel = "Arrondi"
 
-// posConf is the part of the shop-wide caisse settings the server enforces.
+// posConf is the part of the shop-wide till settings the server enforces.
 type posConf struct {
-	CashRounding       int64 // centimes: 0 (aucun), 50, 100, 500
+	CashRounding       int64 // centimes: 0 (none), 50, 100, 500
 	RequireDailyZ      bool  // a till opened on a previous day blocks new sales
 	DefaultCreditLimit int64 // centimes, 0 = no ceiling (customers without their own)
 }
@@ -523,7 +523,7 @@ func (s *Server) posSessionStale(sessionID *string, now time.Time) (bool, error)
 	return sessionFromPreviousDay(openedAt, now), nil
 }
 
-// cashDue is the cash to take for goods paid in cash (timbre included when due).
+// cashDue is the cash to take for goods paid in cash (stamp duty included when due).
 func cashDue(cashGoods int64, timbre bool) int64 {
 	if timbre && cashGoods > 0 {
 		return cashGoods + domain.Timbre(cashGoods)
@@ -540,7 +540,7 @@ func absI(v int64) int64 {
 
 // cashRoundingDelta returns the « Arrondi » amount d (centimes, may be < 0) to
 // add to the goods paid in cash so that the cash to take — goods + d + the
-// timbre on (goods + d) — is a multiple of step, as close as possible to the
+// stamp duty on (goods + d) — is a multiple of step, as close as possible to the
 // unrounded amount (nearest step, half up). 0 when no rounding applies.
 func cashRoundingDelta(cashGoods, step int64, timbre bool) int64 {
 	if step <= 0 || cashGoods <= 0 {
@@ -551,7 +551,7 @@ func cashRoundingDelta(cashGoods, step int64, timbre bool) int64 {
 		return 0
 	}
 	near := ((base + step/2) / step) * step
-	// The timbre moves by whole DA, so the nearest multiple may be out of
+	// The stamp duty moves by whole DA, so the nearest multiple may be out of
 	// reach: then the next nearest one (below or above, closest first).
 	other := []int64{near + step, near - step}
 	if absI(near-step-base) < absI(near+step-base) {
@@ -616,7 +616,7 @@ func (s *Server) posCheckRights(r *http.Request, in *posCheckoutInput,
 		centimes(ceiling), centimes(balance+credit))}
 }
 
-// posGroupDiscount is the remise of the customer's group (pct × 100), 0 when
+// posGroupDiscount is the discount of the customer's group (pct × 100), 0 when
 // the customer has no group (or the groups table is not there yet).
 func (s *Server) posGroupDiscount(partnerID *string) int64 {
 	if partnerID == nil || *partnerID == "" {
@@ -630,13 +630,13 @@ func (s *Server) posGroupDiscount(partnerID *string) int64 {
 	return pct.Int64
 }
 
-// unitHTOf mirrors the app's TTC → HT unit price conversion (CartLine.unitHT).
+// unitHTOf mirrors the app's incl. VAT → excl. VAT unit price conversion (CartLine.unitHT).
 func unitHTOf(ttc, vat int64) int64 {
 	return (ttc*10000 + (10000+vat)/2) / (10000 + vat)
 }
 
 // posCheckPrices: a product line sold at another price than the product's
-// own (détail, demi-gros, promo) needs the price_edit right, or a manager
+// own (retail, semi-wholesale, promo) needs the price_edit right, or a manager
 // code. Lines without a product (Arrondi, Points fidélité) are not prices.
 func (s *Server) posCheckPrices(w http.ResponseWriter, r *http.Request, lines []DocumentLine) bool {
 	for _, l := range lines {

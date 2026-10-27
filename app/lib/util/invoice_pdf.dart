@@ -68,8 +68,8 @@ class InvoiceOptions {
   }
 }
 
-/// Renders the PDF for the document (facture légale 05-468 layout with the
-/// montant en lettres), saves it under Documents\Elixir\documents and opens it.
+/// Renders the PDF for the document (legal invoice 05-468 layout with the
+/// amount in words), saves it under Documents\Elixir\documents and opens it.
 /// With [api], the company logo and the products' barcode / unit are fetched
 /// (needed by the optional columns); [logo] / [products] can be given instead.
 Future<String> openDocumentPdf({
@@ -145,7 +145,7 @@ String _sampleNumber(Map<String, String> s) {
   return parts.join('-');
 }
 
-/// Builds the PDF bytes of a document (A4 / A5 facture, or the 80 mm ticket).
+/// Builds the PDF bytes of a document (A4 / A5 invoice, or the 80 mm ticket).
 Future<Uint8List> buildDocumentPdf({
   required Map<String, String> company,
   required DocDetail doc,
@@ -160,7 +160,7 @@ Future<Uint8List> buildDocumentPdf({
   final arabic = pw.Font.ttf(await rootBundle.load('assets/fonts/IBMPlexSansArabic-Regular.ttf'));
   final arabicBold = pw.Font.ttf(await rootBundle.load('assets/fonts/IBMPlexSansArabic-Bold.ttf'));
 
-  // Tickets get a receipt-shaped page, not a facture.
+  // Tickets get a receipt-shaped page, not an invoice.
   if (doc.docType == 'SALE_TICKET') {
     return _buildTicketPdf(
             company: company, doc: doc, sans: sans, sansBold: sansBold, mono: mono, arabic: arabic)
@@ -426,8 +426,8 @@ Future<Uint8List> buildDocumentPdf({
               pw.Text('حُدِّدت هذه الوثيقة بمبلغ :',
                   style: stAr(8.5), textDirection: pw.TextDirection.rtl),
             pw.SizedBox(height: 2),
-            // TODO(fiscal): montant en lettres arabe — le libellé arabe est
-            // traduit, le montant reste en lettres françaises.
+            // TODO(fiscal): amount in words in Arabic — the Arabic label is
+            // translated, the amount stays in French words.
             pw.Text(montantEnLettres(doc.totalTTC).toUpperCase(),
                 style: st(8.5, bold: true).copyWith(lineSpacing: 2)),
           ]),
@@ -483,7 +483,7 @@ Future<Uint8List> buildDocumentPdf({
         crossAxisAlignment: pw.CrossAxisAlignment.start,
         children: rtl ? [totals, pw.Expanded(child: words)] : [pw.Expanded(child: words), totals],
       ),
-      // ---- Note imprimée (la note interne ne sort jamais) ----
+      // ---- Printed note (the internal note never goes out) ----
       if ((doc.notes ?? '').trim().isNotEmpty) ...[
         pw.SizedBox(height: 12),
         pw.Container(

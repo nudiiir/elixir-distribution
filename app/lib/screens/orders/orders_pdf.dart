@@ -10,8 +10,8 @@ import '../../api/dist_api.dart';
 import '../../theme/tokens.dart' show fmtDA, fmtQty;
 import 'order_common.dart';
 
-/// A4 PDFs of the distribution screens: bon de commande, liste de
-/// préparation, feuille de route. Same approach as util/invoice_pdf.dart:
+/// A4 PDFs of the distribution screens: purchase order, picking
+/// list, route sheet. Same approach as util/invoice_pdf.dart:
 /// built with package:pdf, saved under Documents\Elixir\documents, opened.
 
 const _ink = PdfColor.fromInt(0xFF0F1113);

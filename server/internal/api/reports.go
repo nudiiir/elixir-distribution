@@ -8,7 +8,7 @@ import (
 // (doc_date, inclusive). Avoirs (SALE_CREDIT_NOTE) are surfaced as refunds AND
 // netted out of the net_* figures, the VAT-by-rate table, the margin and the
 // breakdowns, so a returned item never keeps counting as profit or collected
-// VAT. The timbre is a tax collected for the State, not revenue: it is reported
+// VAT. The stamp duty is a tax collected for the State, not revenue: it is reported
 // on its own line and excluded from ca_ttc.
 
 // sgn: +1 for a sale, -1 for a credit note.
@@ -48,7 +48,7 @@ func (s *Server) reportSummary(w http.ResponseWriter, r *http.Request) {
 		WHERE status='posted' AND doc_type IN ('SALE_TICKET','SALE_INVOICE')
 		  AND doc_date >= ? AND doc_date <= ?`, from, to).
 		Scan(&caTTC, &caHT, &vat, &timbre, &tickets)
-	caTTC -= timbre // le timbre n'est pas du chiffre d'affaires
+	caTTC -= timbre // the stamp duty is not revenue
 	out["ca_ttc"] = caTTC
 	out["ca_ht"] = caHT
 	out["vat"] = vat
@@ -95,8 +95,8 @@ func (s *Server) reportSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.can(r, "view_cost") {
-		// unit_cost est porté par unité de la ligne : qty_milli × unit_cost est
-		// le coût de la ligne, avoirs déduits (retour au coût de la vente).
+		// unit_cost is per unit of the line: qty_milli × unit_cost is
+		// the line cost, credit notes deducted (returned at the sale's cost).
 		var lineHT, costMilli int64
 		s.db.QueryRow(`SELECT COALESCE(SUM(`+sgn+` * l.line_ht),0),
 				COALESCE(SUM(`+sgn+` * l.qty_milli * COALESCE(l.unit_cost,0)),0)

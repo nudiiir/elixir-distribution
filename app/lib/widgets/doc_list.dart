@@ -96,7 +96,7 @@ class StatusChip extends StatelessWidget {
   const StatusChip({super.key, required this.status, this.orderStatus});
   final String status;
 
-  /// Statut de réception d'un bon de commande (partial/received/closed).
+  /// Receipt status of a purchase order (partial/received/closed).
   final String? orderStatus;
 
   @override
@@ -113,7 +113,7 @@ class StatusChip extends StatelessWidget {
   }
 }
 
-/// Paiement d'un document : payé / partiel / à payer (rien si sans objet).
+/// Payment of a document: paid / partial / to pay (nothing if not applicable).
 class PaymentChip extends StatelessWidget {
   const PaymentChip({super.key, required this.status, this.overdue = false});
   final String status; // paid | partial | due | ''
@@ -258,9 +258,9 @@ Future<bool> convertDocument(BuildContext context, ApiClient api, DocDetail d,
   return changed == true;
 }
 
-/// « Annuler le document » for a validated document: the motif is asked, the
+/// « Annuler le document » for a validated document: the reason is asked, the
 /// stock and accounts are put back, the document stays visible marked
-/// « Annulé » (une trace est gardée). True if done.
+/// « Annulé » (a trace is kept). True if done.
 Future<bool> voidDocumentFlow(BuildContext context, ApiClient api, String docId,
     {String? docType}) async {
   final what = switch (docType) {
@@ -313,7 +313,7 @@ Future<bool> voidDocumentFlow(BuildContext context, ApiClient api, String docId,
   reason.dispose();
   if (ok != true || !context.mounted) return false;
   try {
-    // Sans le droit « annuler un document validé » : code du gérant.
+    // Without the « annuler un document validé » right: manager's code.
     await withApproval(
         context, api, () => api.voidDocument(docId, reason: text));
     if (context.mounted) {
@@ -422,7 +422,7 @@ String _frShort(DateTime d) =>
     '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}';
 
 /// Searchable, filterable, exportable document list — the list archetype for
-/// documents, shared by Ventes and Achats. Filters are remembered per screen.
+/// documents, shared by Sales and Purchases. Filters are remembered per screen.
 class DocListPane extends StatefulWidget {
   const DocListPane({
     super.key,

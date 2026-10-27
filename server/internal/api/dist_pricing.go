@@ -81,7 +81,7 @@ func (s *Server) resolvePrice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"quote": pq, "quotas": quotas})
 }
 
-// ---- Prix spéciaux ----------------------------------------------------------------
+// ---- Special prices ----------------------------------------------------------------
 
 type CustomerPrice struct {
 	ID          string  `json:"id"`

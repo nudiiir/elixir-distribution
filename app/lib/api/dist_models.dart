@@ -1,5 +1,5 @@
 /// Models of the Distribution module (docs/API_DISTRIBUTION.md):
-/// commandes clients, préparation, reliquats, tarifs, livraisons.
+/// customer orders, preparation, backorders, price lists, deliveries.
 /// Parsing is tolerant: a missing key gives an empty value, never a crash.
 library;
 
@@ -21,7 +21,7 @@ List<Map<String, dynamic>> _list(Object? v) => [
 List<String> _strs(Object? v) => [for (final e in (v as List? ?? const [])) '$e'];
 
 // ---------------------------------------------------------------------------
-// Commandes
+// Orders
 // ---------------------------------------------------------------------------
 
 class CustomerOrder {
@@ -293,7 +293,7 @@ class ValidationInfo {
 }
 
 // ---------------------------------------------------------------------------
-// Préparation
+// Preparation
 // ---------------------------------------------------------------------------
 
 class LotSuggestion {
@@ -393,7 +393,7 @@ class PickResult {
 }
 
 // ---------------------------------------------------------------------------
-// Reliquats
+// Backorders
 // ---------------------------------------------------------------------------
 
 class BackorderRow {
@@ -430,7 +430,7 @@ class BackorderRow {
 }
 
 // ---------------------------------------------------------------------------
-// Client : crédit
+// Customer: credit
 // ---------------------------------------------------------------------------
 
 class PartnerCredit {
@@ -507,7 +507,7 @@ class OrderClient {
 }
 
 // ---------------------------------------------------------------------------
-// Tarifs
+// Price lists
 // ---------------------------------------------------------------------------
 
 class PriceQuote {
@@ -668,7 +668,7 @@ class Quota {
 }
 
 // ---------------------------------------------------------------------------
-// Livraisons
+// Deliveries
 // ---------------------------------------------------------------------------
 
 class Vehicle {

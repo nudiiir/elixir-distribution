@@ -1,18 +1,18 @@
--- 0016_distribution : distribution (grossiste → commerces et professionnels).
---   * Commandes clients (« Commandes clients ») : saisie bureau / téléphone /
---     WhatsApp / commercial / boutique web, validation avec contrôle du crédit,
---     préparation par lot (FEFO), BL, livraison, facturation, reliquats.
---   * Tarifs : prix spéciaux client / groupe, promotions (UG, remise
---     quantitative), quotas par client.
---   * Livraisons : tournées, véhicules, arrêts, encaissement à la livraison.
---   * Fiche client distribution (type, statut CRM, commercial, tournée…).
--- Additive uniquement : aucune table existante n'est reconstruite et la
--- contrainte CHECK de documents.doc_type est inchangée (les commandes vivent
--- dans leurs propres tables ; BL, factures et règlements restent des documents).
--- Conventions : ids UUIDv7 TEXT, montants en centimes, quantités en millièmes,
--- pourcentages ×100, horodatages ISO-8601 UTC, dates métier YYYY-MM-DD.
+-- 0016_distribution: distribution (wholesaler → shops and professionals).
+--   * Customer orders (« Commandes clients »): entry by office / phone /
+--     WhatsApp / sales rep / web shop, validation with credit check,
+--     batch picking (FEFO), delivery note, delivery, invoicing, backorders.
+--   * Pricing: special prices per customer / group, promotions (free units,
+--     quantity discount), quotas per customer.
+--   * Deliveries: runs, vehicles, stops, cash on delivery.
+--   * Distribution customer record (type, CRM status, sales rep, run…).
+-- Additive only: no existing table is rebuilt and the
+-- CHECK constraint on documents.doc_type is unchanged (orders live
+-- in their own tables; delivery notes, invoices and payments stay documents).
+-- Conventions: UUIDv7 TEXT ids, amounts in centimes, quantities in thousandths,
+-- percentages ×100, ISO-8601 UTC timestamps, business dates YYYY-MM-DD.
 
--- ---- Tournées et véhicules (référencés par les partenaires) ----------------
+-- ---- Delivery runs and vehicles (referenced by partners) ----------------
 CREATE TABLE vehicles (
   id           TEXT PRIMARY KEY,
   name         TEXT NOT NULL,
@@ -27,7 +27,7 @@ CREATE TABLE vehicles (
 CREATE TABLE delivery_routes (
   id                     TEXT PRIMARY KEY,
   name                   TEXT NOT NULL UNIQUE,
-  wilayas_json           TEXT NOT NULL DEFAULT '[]',   -- ["16","09"] ou noms
+  wilayas_json           TEXT NOT NULL DEFAULT '[]',   -- ["16","09"] or names
   communes_json          TEXT NOT NULL DEFAULT '[]',
   weekdays_json          TEXT NOT NULL DEFAULT '[]',   -- ISO : 1 = lundi … 7 = dimanche
   default_driver_user_id TEXT REFERENCES users(id),
@@ -39,7 +39,7 @@ CREATE TABLE delivery_routes (
   updated_at             TEXT NOT NULL
 );
 
--- ---- Fiche client distribution / CRM -----------------------------------------
+-- ---- Distribution customer record / CRM -----------------------------------------
 ALTER TABLE partners ADD COLUMN client_type TEXT NOT NULL DEFAULT 'other'
   CHECK (client_type IN ('supermarket','restaurant','hotel','wholesaler','retailer','individual','other'));
 ALTER TABLE partners ADD COLUMN crm_status TEXT NOT NULL DEFAULT 'active'
@@ -56,30 +56,30 @@ ALTER TABLE partners ADD COLUMN whatsapp TEXT NOT NULL DEFAULT '';
 ALTER TABLE partners ADD COLUMN website TEXT NOT NULL DEFAULT '';
 ALTER TABLE partners ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'
   CHECK (source IN ('manual','web','import','rep','portal'));
--- Délai de paiement (jours) des factures issues des commandes ; NULL = réglage
--- « default_payment_days » (30 par défaut).
+-- Payment terms (days) of invoices produced from orders; NULL = setting
+-- « default_payment_days » (30 by default).
 ALTER TABLE partners ADD COLUMN payment_terms_days INTEGER;
 CREATE INDEX idx_partners_rep ON partners(rep_user_id);
 CREATE INDEX idx_partners_route ON partners(route_id);
 CREATE INDEX idx_partners_wilaya ON partners(wilaya);
 CREATE INDEX idx_partners_phone ON partners(phone);
 
--- ---- Commandes clients -------------------------------------------------------
--- Statuts : new → validated → preparing → ready → shipping → delivered →
--- invoiced ; cancelled depuis tout statut antérieur à delivered.
+-- ---- Customer orders -------------------------------------------------------
+-- Statuses: new → validated → preparing → ready → shipping → delivered →
+-- invoiced; cancelled from any status before delivered.
 CREATE TABLE customer_orders (
   id                TEXT PRIMARY KEY,
-  number            TEXT NOT NULL UNIQUE,           -- CC-2026-000001 (numérotation CUSTOMER_ORDER)
+  number            TEXT NOT NULL UNIQUE,           -- CC-2026-000001 (CUSTOMER_ORDER numbering)
   order_date        TEXT NOT NULL,                  -- YYYY-MM-DD
   partner_id        TEXT NOT NULL REFERENCES partners(id),
   source            TEXT NOT NULL DEFAULT 'manual'
                     CHECK (source IN ('manual','phone','whatsapp','rep','web','portal')),
-  external_ref      TEXT,                           -- id de la commande sur la boutique web
-  external_number   TEXT,                           -- n° affiché par la boutique web
+  external_ref      TEXT,                           -- order id on the web shop
+  external_number   TEXT,                           -- number shown by the web shop
   status            TEXT NOT NULL DEFAULT 'new'
                     CHECK (status IN ('new','validated','preparing','ready','shipping','delivered','invoiced','cancelled')),
-  is_partial        INTEGER NOT NULL DEFAULT 0,     -- livrée en partie (reliquat ou rupture)
-  has_backorder     INTEGER NOT NULL DEFAULT 0,     -- au moins une ligne en reliquat
+  is_partial        INTEGER NOT NULL DEFAULT 0,     -- partially delivered (backorder or out of stock)
+  has_backorder     INTEGER NOT NULL DEFAULT 0,     -- at least one line on backorder
   warehouse_id      TEXT NOT NULL REFERENCES warehouses(id),
   rep_user_id       TEXT REFERENCES users(id),
   route_id          TEXT REFERENCES delivery_routes(id),
@@ -91,21 +91,21 @@ CREATE TABLE customer_orders (
   commune           TEXT NOT NULL DEFAULT '',
   contact_name      TEXT NOT NULL DEFAULT '',
   contact_phone     TEXT NOT NULL DEFAULT '',
-  notes             TEXT NOT NULL DEFAULT '',       -- imprimée / visible client
+  notes             TEXT NOT NULL DEFAULT '',       -- printed / visible to the customer
   internal_notes    TEXT NOT NULL DEFAULT '',
   total_ht          INTEGER NOT NULL DEFAULT 0,
   total_vat         INTEGER NOT NULL DEFAULT 0,
   total_discount    INTEGER NOT NULL DEFAULT 0,
-  shipping_fee      INTEGER NOT NULL DEFAULT 0,     -- TTC, hors lignes produit
-  extra_discount    INTEGER NOT NULL DEFAULT 0,     -- TTC (code promo web…), hors lignes
+  shipping_fee      INTEGER NOT NULL DEFAULT 0,     -- incl. tax, excluding product lines
+  extra_discount    INTEGER NOT NULL DEFAULT 0,     -- incl. tax (web promo code…), excluding lines
   promo_code        TEXT NOT NULL DEFAULT '',
-  total_ttc         INTEGER NOT NULL DEFAULT 0,     -- lignes + frais − remise globale
+  total_ttc         INTEGER NOT NULL DEFAULT 0,     -- lines + fees − global discount
   cancel_reason     TEXT NOT NULL DEFAULT '',
-  credit_override   INTEGER NOT NULL DEFAULT 0,     -- validée malgré l'alerte crédit
+  credit_override   INTEGER NOT NULL DEFAULT 0,     -- validated despite the credit alert
   delivery_note_id  TEXT REFERENCES documents(id),
   invoice_id        TEXT REFERENCES documents(id),
-  payment_id        TEXT REFERENCES documents(id),  -- encaissement à la livraison (hors tournée)
-  web_status_dirty  INTEGER NOT NULL DEFAULT 0,     -- statut à renvoyer à la boutique
+  payment_id        TEXT REFERENCES documents(id),  -- cash on delivery (outside a run)
+  web_status_dirty  INTEGER NOT NULL DEFAULT 0,     -- status to send back to the shop
   created_by        TEXT REFERENCES users(id),
   validated_by      TEXT REFERENCES users(id),
   validated_at      TEXT,
@@ -126,12 +126,12 @@ CREATE TABLE customer_order_lines (
   product_id                  TEXT NOT NULL REFERENCES products(id),
   description                 TEXT NOT NULL DEFAULT '',
   qty_ordered_milli           INTEGER NOT NULL DEFAULT 0,
-  qty_validated_milli         INTEGER NOT NULL DEFAULT 0,  -- engagé sur cette commande
-  qty_prepared_milli          INTEGER NOT NULL DEFAULT 0,  -- somme des prélèvements (payant + UG)
-  qty_delivered_milli         INTEGER NOT NULL DEFAULT 0,  -- payant + UG parti sur le BL
-  qty_backorder_milli         INTEGER NOT NULL DEFAULT 0,  -- reliquat en attente de stock
-  qty_free_milli              INTEGER NOT NULL DEFAULT 0,  -- unités gratuites (UG)
-  unit_price                  INTEGER NOT NULL DEFAULT 0,  -- centimes HT
+  qty_validated_milli         INTEGER NOT NULL DEFAULT 0,  -- committed on this order
+  qty_prepared_milli          INTEGER NOT NULL DEFAULT 0,  -- sum of picks (paid + free units)
+  qty_delivered_milli         INTEGER NOT NULL DEFAULT 0,  -- paid + free units shipped on the delivery note
+  qty_backorder_milli         INTEGER NOT NULL DEFAULT 0,  -- backorder waiting for stock
+  qty_free_milli              INTEGER NOT NULL DEFAULT 0,  -- free units
+  unit_price                  INTEGER NOT NULL DEFAULT 0,  -- centimes excl. tax
   discount_pct                INTEGER NOT NULL DEFAULT 0,
   vat_rate                    INTEGER NOT NULL DEFAULT 0,
   line_ht                     INTEGER NOT NULL DEFAULT 0,
@@ -162,7 +162,7 @@ CREATE TABLE customer_order_events (
 );
 CREATE INDEX idx_customer_order_events_order ON customer_order_events(order_id, created_at);
 
--- Prélèvements de préparation : ligne → lot, quantité (payant + UG confondus).
+-- Picking allocations: line → lot, quantity (paid + free units together).
 CREATE TABLE customer_order_picks (
   id         TEXT PRIMARY KEY,
   order_id   TEXT NOT NULL REFERENCES customer_orders(id) ON DELETE CASCADE,
@@ -176,9 +176,9 @@ CREATE TABLE customer_order_picks (
 CREATE INDEX idx_customer_order_picks_line ON customer_order_picks(line_id);
 CREATE INDEX idx_customer_order_picks_lot ON customer_order_picks(lot_id);
 
--- ---- Tarifs --------------------------------------------------------------------
--- Prix spécial HT par client OU par groupe de clients, avec quantité minimale
--- (prix par palier) et période de validité optionnelles.
+-- ---- Pricing --------------------------------------------------------------------
+-- Special price excl. tax per customer OR per customer group, with optional minimum
+-- quantity (tiered price) and validity period.
 CREATE TABLE customer_prices (
   id            TEXT PRIMARY KEY,
   partner_id    TEXT REFERENCES partners(id) ON DELETE CASCADE,
@@ -197,8 +197,8 @@ CREATE INDEX idx_customer_prices_product ON customer_prices(product_id);
 CREATE INDEX idx_customer_prices_partner ON customer_prices(partner_id);
 CREATE INDEX idx_customer_prices_group ON customer_prices(group_id);
 
--- Promotions : UG « N achetés + M gratuits » (free_goods) ou remise à partir
--- de N unités (qty_discount), sur un produit, une catégorie, une marque ou tout.
+-- Promotions: free units « N achetés + M gratuits » (free_goods) or a discount from
+-- N units (qty_discount), on a product, a category, a brand or everything.
 CREATE TABLE promo_rules (
   id             TEXT PRIMARY KEY,
   name           TEXT NOT NULL,
@@ -223,8 +223,8 @@ CREATE TABLE promo_rules (
 );
 CREATE INDEX idx_promo_rules_active ON promo_rules(active, type);
 
--- Quotas : quantité maximale par client et par période pour un produit rare.
--- partner_id NULL = s'applique à chaque client.
+-- Quotas: maximum quantity per customer and per period for a scarce product.
+-- partner_id NULL = applies to every customer.
 CREATE TABLE product_quotas (
   id            TEXT PRIMARY KEY,
   product_id    TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
@@ -252,8 +252,8 @@ CREATE TABLE delivery_runs (
   closed_by       TEXT REFERENCES users(id),
   cash_expected   INTEGER NOT NULL DEFAULT 0,
   cash_collected  INTEGER NOT NULL DEFAULT 0,
-  cash_difference INTEGER NOT NULL DEFAULT 0,  -- collecté − attendu
-  counted_cash    INTEGER,                     -- remis par le livreur (facultatif)
+  cash_difference INTEGER NOT NULL DEFAULT 0,  -- collected − expected
+  counted_cash    INTEGER,                     -- handed over by the driver (optional)
   notes           TEXT NOT NULL DEFAULT '',
   created_by      TEXT REFERENCES users(id),
   created_at      TEXT NOT NULL,
@@ -281,7 +281,7 @@ CREATE TABLE run_stops (
 );
 CREATE INDEX idx_run_stops_order ON run_stops(order_id);
 
--- ---- Vue analyses : une ligne par ligne de commande client --------------------
+-- ---- Analytics view: one row per customer order line --------------------
 CREATE VIEW v_customer_order_lines AS
 SELECT o.order_date,
        o.created_at                      AS created_at,
@@ -322,7 +322,7 @@ LEFT JOIN product_categories c ON c.id = p.category_id
 LEFT JOIN users u ON u.id = o.rep_user_id
 LEFT JOIN delivery_routes rt ON rt.id = o.route_id;
 
--- ---- Permissions : le rôle Gérant reçoit les nouveaux droits ------------------
+-- ---- Permissions: the Manager (Gérant) role receives the new rights ------------------
 UPDATE roles SET perms_json = json_set(perms_json,
     '$."orders.view"', json('true'), '$."orders.manage"', json('true'),
     '$."orders.validate"', json('true'), '$."orders.override_credit"', json('true'),

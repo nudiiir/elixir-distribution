@@ -6,8 +6,8 @@ import (
 	"time"
 )
 
-// Range : période demandée, relative (résolue à l'exécution, en heure
-// locale de la machine) ou absolue.
+// Range: requested period, relative (resolved at run time, in the machine's
+// local time) or absolute.
 type Range struct {
 	Type string `json:"type"` // today, yesterday, this_week, previous_week, this_month, previous_month,
 	//   this_quarter, previous_quarter, this_year, previous_year, year_to_date,
@@ -31,7 +31,7 @@ func startOfWeek(t time.Time, weekStart int) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day()-d, 0, 0, 0, 0, t.Location())
 }
 
-// Resolve calcule les bornes. now est en heure locale ; weekStart 0=dimanche…6.
+// Resolve computes the bounds. now is in local time; weekStart 0=Sunday…6.
 func (r Range) Resolve(now time.Time, weekStart int) (Resolved, error) {
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	f := func(a, b time.Time) Resolved { return Resolved{From: a.Format(dayFmt), To: b.Format(dayFmt)} }
@@ -111,7 +111,7 @@ func (r Range) Resolve(now time.Time, weekStart int) (Resolved, error) {
 	return Resolved{}, fmt.Errorf("période inconnue : %s", r.Type)
 }
 
-// Previous : période de même longueur immédiatement précédente.
+// Previous: period of the same length immediately before.
 func (rs Resolved) Previous(loc *time.Location) Resolved {
 	if rs.All {
 		return rs
@@ -126,8 +126,8 @@ func (rs Resolved) Previous(loc *time.Location) Resolved {
 
 var validBuckets = map[string]bool{"day": true, "week": true, "month": true, "quarter": true, "year": true, "dow": true, "hour": true}
 
-// bucketExpr : expression SQL du seau pour une colonne date (YYYY-MM-DD)
-// ou datetime (RFC3339 UTC, ramenée en heure locale).
+// bucketExpr: SQL bucket expression for a date column (YYYY-MM-DD)
+// or datetime column (RFC3339 UTC, converted to local time).
 func bucketExpr(col, typ, bucket string, weekStart int) string {
 	dateExpr := col
 	timeExpr := col
@@ -154,9 +154,9 @@ func bucketExpr(col, typ, bucket string, weekStart int) string {
 	return dateExpr
 }
 
-// bucketDomain : toutes les valeurs de seau de la période (remplissage à zéro).
-// Pour dow et hour le domaine est fixe (7 / 24) ; dow est ordonné à partir du
-// jour de début de semaine configuré.
+// bucketDomain: every bucket value of the period (zero fill).
+// For dow and hour the domain is fixed (7 / 24); dow is ordered from the
+// configured week start day.
 func bucketDomain(bucket string, rs Resolved, weekStart int, loc *time.Location) []any {
 	switch bucket {
 	case "dow":
@@ -173,7 +173,7 @@ func bucketDomain(bucket string, rs Resolved, weekStart int, loc *time.Location)
 		return out
 	}
 	if rs.All {
-		return nil // pas de domaine sans bornes : seules les valeurs observées
+		return nil // no domain without bounds: observed values only
 	}
 	a, _ := time.ParseInLocation(dayFmt, rs.From, loc)
 	b, _ := time.ParseInLocation(dayFmt, rs.To, loc)
@@ -207,7 +207,7 @@ func bucketDomain(bucket string, rs Resolved, weekStart int, loc *time.Location)
 	return out
 }
 
-// bucketLabel : libellé français d'une valeur de seau.
+// bucketLabel: French label of a bucket value.
 func bucketLabel(bucket string, v any) string {
 	switch bucket {
 	case "dow":

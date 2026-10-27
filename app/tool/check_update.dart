@@ -1,4 +1,4 @@
-// Vérification manuelle du canal de mise à jour : `dart run tool/check_update.dart`
+// Manual check of the update channel: `dart run tool/check_update.dart`
 import 'package:elixir_app/util/updater.dart';
 
 Future<void> main() async {

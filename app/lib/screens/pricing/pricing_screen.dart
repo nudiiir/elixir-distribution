@@ -43,8 +43,8 @@ String _dates(String? a, String? b) {
   return '${frDate(a)} → ${frDate(b)}';
 }
 
-/// « Tarifs et offres » : prix spéciaux (client / groupe), offres (UG,
-/// remise par quantité), quotas. Menu commands: `special` · `promos` ·
+/// « Tarifs et offres »: special prices (client / group), offers (free units,
+/// quantity discount), quotas. Menu commands: `special` · `promos` ·
 /// `quotas`. [product] narrows everything to one product (page opened from
 /// a product). [client] does the same for one client (page opened from a
 /// client).

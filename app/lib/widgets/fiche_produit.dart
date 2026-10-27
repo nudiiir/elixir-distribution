@@ -23,7 +23,7 @@ import 'ui.dart';
 /// [navigate] gives « ‹ Précédent » / « Suivant › » (Alt+↑ / Alt+↓) through
 /// the list as displayed; [onShown] tells the list which product is shown.
 /// [onEdit] / [onDuplicate] let the caller open the edit page itself (null =
-/// the page opens it); [canEdit] hides Modifier / Dupliquer / Désactiver.
+/// the page opens it); [canEdit] hides « Modifier » / « Dupliquer » / « Désactiver ».
 Future<void> showFicheProduit(
   BuildContext context,
   ApiClient api,
@@ -55,7 +55,7 @@ Future<void> showFicheProduit(
   ));
 }
 
-/// « Ajuster le stock » sans ouvrir la fiche (menu de ligne de la liste).
+/// « Ajuster le stock » without opening the product page (list row menu).
 /// Returns true when an adjustment was posted.
 Future<bool> showAdjustStock(
     BuildContext context, ApiClient api, String productId) async {
@@ -105,8 +105,8 @@ Future<bool> showSplitProduct(
   return done == true;
 }
 
-/// Étiquettes de rayon pour un ou plusieurs produits, avec le modèle
-/// « étiquette » du magasin — un PDF, une page par étiquette.
+/// Shelf labels for one or more products, with the shop's « étiquette »
+/// template — one PDF, one page per label.
 Future<void> printProductLabels(
     BuildContext context, ApiClient api, List<Product> products,
     {bool askCopies = true}) async {
@@ -194,7 +194,7 @@ Future<int?> _askCopies(BuildContext context, int products) {
   ).whenComplete(ctrl.dispose);
 }
 
-// ---------------- Photos : préparation, fichier, presse-papiers ----------------
+// ---------------- Photos: preparation, file, clipboard ----------------
 
 const _maxPhotoBytes = 2 * 1024 * 1024;
 
@@ -228,7 +228,7 @@ Future<(Uint8List, String)?> normalizeProductPhoto(
   return null;
 }
 
-/// « Ajouter une photo » : boîte Windows d'ouverture de fichier.
+/// « Ajouter une photo »: Windows open-file dialog.
 Future<(Uint8List, String)?> pickProductPhoto() async {
   final path = pickImageFile();
   if (path == null) return null;
@@ -236,8 +236,8 @@ Future<(Uint8List, String)?> pickProductPhoto() async {
   return normalizeProductPhoto(bytes, imageContentType(path));
 }
 
-/// « Coller » : l'image du presse-papiers Windows (capture d'écran, image
-/// copiée depuis un navigateur…), convertie en PNG. Null s'il n'y en a pas.
+/// « Coller »: the image on the Windows clipboard (screenshot, image
+/// copied from a browser…), converted to PNG. Null if there is none.
 Future<(Uint8List, String)?> pasteProductPhoto() async {
   final dib = _clipboardDib();
   if (dib == null) return null;
@@ -247,8 +247,8 @@ Future<(Uint8List, String)?> pasteProductPhoto() async {
     final codec = await ui.instantiateImageCodec(bmp);
     final frame = await codec.getNextFrame();
     var image = frame.image;
-    // Les captures 32 bits ont souvent un canal alpha à zéro : on les rend
-    // opaques plutôt que d'obtenir une image invisible.
+    // 32-bit screenshots often have an all-zero alpha channel: make them
+    // opaque rather than get an invisible image.
     final raw = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
     if (raw != null) {
       final px = raw.buffer.asUint8List();
@@ -327,7 +327,7 @@ Uint8List? _dibToBmp(Uint8List dib) {
   return out;
 }
 
-// ---------------- Ajuster le stock ----------------
+// ---------------- Adjust stock ----------------
 
 const kAdjustReasons = [
   'inventaire',
@@ -339,9 +339,9 @@ const kAdjustReasons = [
   'échantillon',
 ];
 
-/// Il n'existe aucun champ de stock modifiable : le stock change par un
-/// document d'ajustement avec quantité comptée et motif. Deux clics de plus
-/// qui gardent chaque chiffre du système explicable.
+/// There is no editable stock field: stock changes through an
+/// adjustment document with a counted quantity and a reason. Two more clicks
+/// that keep every figure in the system explainable.
 class _AdjustDialog extends StatefulWidget {
   const _AdjustDialog({required this.api, required this.fiche});
   final ApiClient api;
@@ -514,10 +514,10 @@ class _AdjustDialogState extends State<_AdjustDialog> {
   }
 }
 
-// ---------------- Séparer en variantes ----------------
+// ---------------- Split into variants ----------------
 
-/// Le logiciel ne connaît pas la répartition par parfum : le commerçant
-/// compte, et la séparation est refusée tant que la somme ne tombe pas juste.
+/// The software does not know the breakdown by flavour: the shopkeeper
+/// counts, and the split is refused until the sum is exact.
 class _SplitDialog extends StatefulWidget {
   const _SplitDialog(
       {required this.api, required this.fiche, required this.codes});

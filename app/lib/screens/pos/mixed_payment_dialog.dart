@@ -7,8 +7,8 @@ import '../../util/features.dart';
 import '../../widgets/ui.dart';
 import 'cash_rounding.dart';
 
-/// Moyens proposés dans le paiement mixte (la carte cadeau garde son propre
-/// parcours : code, solde, débit).
+/// Methods offered in the mixed payment (the gift card keeps its own
+/// flow: code, balance, debit).
 const mixedMethods = <(String, String, IconData)>[
   ('cash', 'Espèces', Icons.payments_outlined),
   ('cib', 'CIB', Icons.credit_card),
@@ -39,7 +39,7 @@ class MixedPaymentResult {
 
 /// The money math of a mixed payment, shared by the dialog and its tests:
 /// the non-cash rows pay part of the goods, the cash rows pay the rest plus
-/// the timbre due on that cash part only.
+/// the stamp duty due on that cash part only.
 class MixedMath {
   MixedMath(
     this.goods,
@@ -48,10 +48,10 @@ class MixedMath {
     this.step = 0,
     this.timbreOn = true,
   });
-  final int goods; // total TTC of the goods, timbre excluded
+  final int goods; // total incl. tax of the goods, stamp duty excluded
   final int cashGiven; // sum of the cash rows as typed (may exceed: change)
   final int nonCash; // sum of the other rows
-  final int step; // arrondi des espèces (centimes, 0 = aucun)
+  final int step; // cash rounding (centimes, 0 = none)
   final bool timbreOn;
 
   int get cashGoods => goods - nonCash;
@@ -179,7 +179,7 @@ class _MixedPaymentDialogState extends State<MixedPaymentDialog> {
       fill = g > 0 ? _cashFor(g) - others.cashGiven : 0;
     } else {
       // Smallest x such that the cash already typed covers what is left
-      // (goods − x) plus its timbre. g + timbre(g) grows with g: bisection.
+      // (goods − x) plus its stamp duty. g + timbre(g) grows with g: bisection.
       final maxX = widget.goodsTotal - others.nonCash;
       if (maxX <= 0) {
         fill = 0;

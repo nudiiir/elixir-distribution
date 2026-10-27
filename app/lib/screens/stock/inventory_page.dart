@@ -54,9 +54,9 @@ Future<InventoryOutcome?> openInventoryPage(
   }
 }
 
-/// Inventaire physique : scope (dépôt + catégorie + marque, ou tout le
-/// catalogue), saisie ou scan des quantités comptées (vide = non compté, ne
-/// bouge pas), sessions enregistrées en brouillon, rapport d'écarts avant
+/// Physical inventory: scope (depot + category + brand, or the whole
+/// catalogue), entry or scan of counted quantities (empty = not counted, does
+/// not move), sessions saved as drafts, variance report before
 /// validation. Each counted line carries `expected_milli` = the stock shown
 /// when it was counted: the server applies counted − expected on top of the
 /// CURRENT level, so sales made meanwhile are not wiped out.
@@ -942,7 +942,7 @@ class _OpenDrafts extends StatelessWidget {
 
 typedef _Diff = ({String id, String name, int theo, int counted, int diff, int value});
 
-/// Différences found by the count, shown before posting (a confirmation).
+/// Differences found by the count, shown before posting (a confirmation).
 class _DiffReport extends StatelessWidget {
   const _DiffReport({
     required this.counted,

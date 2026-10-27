@@ -32,8 +32,8 @@ func TestSplitCashCardTimbreOnCashPartOnly(t *testing.T) {
 	f.product("P", false)
 	f.receive("P", 10, 50000)
 
-	// 1 000 DA ticket : 600 DA par CIB, 400 DA en espèces. Le timbre n'est dû
-	// que sur les 400 DA en espèces (5 DA plancher), pas sur 1 000 DA (10 DA).
+	// 1 000 DA ticket: 600 DA by CIB, 400 DA in cash. The stamp duty is only due
+	// on the 400 DA in cash (5 DA floor), not on 1 000 DA (10 DA).
 	_, timbreFull := domain.SplitTimbre(100000, 0)
 	eq(t, "timbre on a full-cash 1000 DA ticket", timbreFull, 1000)
 
@@ -48,7 +48,7 @@ func TestSplitCashCardTimbreOnCashPartOnly(t *testing.T) {
 	eq(t, "stock after split sale", q, 9000)
 	f.mustVerify()
 
-	// Card + Edahabia only: no cash, no timbre.
+	// Card + Edahabia only: no cash, no stamp duty.
 	tk2 := f.doc(dc{typ: domain.SaleTicket}, ln{prod: "P", qty: 1000, price: 100000})
 	f.pay(tk2, "cib", 60000)
 	f.pay(tk2, "edahabia", 40000)
@@ -63,7 +63,7 @@ func TestSplitMustCoverTotalExactly(t *testing.T) {
 	f.product("P", false)
 	f.receive("P", 10, 50000)
 
-	// Cash row forgets the timbre → refused.
+	// Cash row forgets the stamp duty → refused.
 	tk := f.doc(dc{typ: domain.SaleTicket}, ln{prod: "P", qty: 1000, price: 100000})
 	f.pay(tk, "cib", 60000)
 	f.pay(tk, "cash", 40000)
@@ -97,7 +97,7 @@ func TestSplitCashCreditGoesToLedgerAndVoids(t *testing.T) {
 		t.Fatalf("expected customer-required refusal, got %v", err)
 	}
 
-	// 1 000 DA : 300 DA à crédit, 700 DA en espèces (+7 DA de timbre).
+	// 1 000 DA: 300 DA on credit, 700 DA in cash (+7 DA stamp duty).
 	tk := f.doc(dc{typ: domain.SaleTicket, partner: "C"}, ln{prod: "P", qty: 1000, price: 100000})
 	f.pay(tk, "credit", 30000)
 	f.pay(tk, "cash", 70700)

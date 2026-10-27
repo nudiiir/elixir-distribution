@@ -15,7 +15,7 @@ import 'wilaya_tab.dart';
 
 enum CrmView { tasks, segments, reps, wilayas }
 
-/// Module « Relation clients » (perm crm.view).
+/// « Relation clients » module (perm crm.view).
 /// Menu commands: `tab:tasks` · `tab:segments` · `tab:reps` · `tab:wilayas`
 /// · `new:task` · `generate`.
 class CrmScreen extends StatefulWidget {

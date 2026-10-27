@@ -7,13 +7,13 @@ import (
 	"strings"
 )
 
-// Évaluateur arithmétique des mesures combinées. L'expression ne touche
-// jamais SQL : elle est évaluée en Go sur les nombres déjà agrégés. Grammaire :
+// Arithmetic evaluator for combined measures. The expression never touches
+// SQL: it is evaluated in Go on the already aggregated numbers. Grammar:
 //   expr   := term (('+'|'-') term)*
 //   term   := unary (('*'|'/') unary)*
 //   unary  := '-' unary | primary
 //   primary:= number | ident ('.' ident)? | '(' expr ')' | func '(' expr (',' expr)* ')'
-// Fonctions : nullif(a,b), coalesce(a,b), abs(a), round(a), min(a,b), max(a,b).
+// Functions: nullif(a,b), coalesce(a,b), abs(a), round(a), min(a,b), max(a,b).
 
 type exprNode interface {
 	eval(vars map[string]*float64) (*float64, error)
@@ -135,7 +135,7 @@ var funcArity = map[string]int{"nullif": 2, "coalesce": -1, "abs": 1, "round": 1
 type exprParser struct {
 	s   string
 	pos int
-	// identifiants rencontrés (pour validation contre les alias connus)
+	// identifiers encountered (for validation against the known aliases)
 	idents []string
 }
 

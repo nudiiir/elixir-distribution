@@ -12,7 +12,7 @@ import (
 	"elixir/server/internal/analytics"
 )
 
-// GET /analytics/gallery — les questions prêtes à l'emploi.
+// GET /analytics/gallery — the ready-to-use questions.
 func (s *Server) analyticsGallery(w http.ResponseWriter, r *http.Request) {
 	if !s.can(r, "reports") {
 		forbid(w)
@@ -40,8 +40,8 @@ type askOutput struct {
 	DurationMs    int64             `json:"duration_ms"`
 }
 
-// compactSchema : la liste blanche visible par l'appelant, réduite au strict
-// nécessaire pour le modèle (clés, libellés, types, seaux, énumérations).
+// compactSchema: the whitelist visible to the caller, reduced to the bare
+// minimum for the model (keys, labels, types, buckets, enumerations).
 func compactSchema(c analytics.Caller) []map[string]any {
 	out := []map[string]any{}
 	for _, src := range analytics.VisibleSchema(c) {
@@ -82,11 +82,11 @@ func compactSchema(c analytics.Caller) []map[string]any {
 	return out
 }
 
-// POST /analytics/ask — question en langage naturel → spec → résultat.
-// Le modèle ne reçoit que la question et le schéma ; la spec revient ici, est
-// validée et exécutée localement. Une seconde tentative est faite avec le
-// message d'erreur si la première est refusée. Sans cloud : appariement
-// local sur la galerie.
+// POST /analytics/ask — natural-language question → spec → result.
+// The model only receives the question and the schema; the spec comes back here, is
+// validated and executed locally. A second attempt is made with the
+// error message if the first is refused. Without cloud: local
+// matching against the gallery.
 func (s *Server) analyticsAsk(w http.ResponseWriter, r *http.Request) {
 	if !s.can(r, "reports") {
 		forbid(w)
@@ -154,7 +154,7 @@ func (s *Server) analyticsAsk(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// ---- repli local (hors ligne, ou cloud en échec)
+	// ---- local fallback (offline, or cloud failing)
 	if out.Result == nil {
 		if it := analytics.MatchGallery(q); it != nil {
 			out.Provider = "local"

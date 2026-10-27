@@ -12,22 +12,22 @@ class Features extends ChangeNotifier {
   Features._();
   static final Features instance = Features._();
 
-  bool lots = true; // lots et dates de péremption
-  bool serials = true; // n° de série / IMEI
-  bool weighed = true; // produits au poids, balances 21/22
-  bool variants = true; // déclinaisons (taille, couleur…)
-  bool packagings = true; // conditionnements (carton = 24)
-  bool webstore = true; // boutique en ligne
-  bool wholesale = true; // tarif demi-gros
-  bool services = true; // produits de type service
+  bool lots = true; // lots and expiry dates
+  bool serials = true; // serial no. / IMEI
+  bool weighed = true; // sold-by-weight products, scales 21/22
+  bool variants = true; // variants (size, colour…)
+  bool packagings = true; // packagings (carton = 24)
+  bool webstore = true; // online shop
+  bool wholesale = true; // semi-wholesale price list
+  bool services = true; // service-type products
 
   int defaultVat = 1900; // percent × 100
-  int targetMarginPct = 30; // marge cible pour le prix suggéré
-  int paymentTermDays = 0; // échéance par défaut des factures à crédit
+  int targetMarginPct = 30; // target margin for the suggested price
+  int paymentTermDays = 0; // default due date for invoices on credit
 
   // ---- Taxes
   List<int> vatRates = const [1900, 900, 0]; // ×100, the choices offered everywhere
-  bool timbreEnabled = true; // droit de timbre on cash sales
+  bool timbreEnabled = true; // stamp duty on cash sales
   /// Optional name of each rate (`vat_labels` = "1900=Normal|900=Réduit").
   Map<int, String> vatLabels = const {};
 
@@ -50,7 +50,7 @@ class Features extends ChangeNotifier {
     return out;
   }
 
-  // ---- Produits et stock
+  // ---- Products and stock
   int priceRounding = 0; // centimes: 0 = none, 500 = 5 DA, 1000 = 10 DA (selling price)
   int expiryAlertDays = 90; // « périme bientôt » window
   int defaultMinStockMilli = 0; // default minimum stock of a new product
@@ -61,7 +61,7 @@ class Features extends ChangeNotifier {
   // ---- Documents
   int quoteValidityDays = 15;
 
-  // ---- Clients et fidélité
+  // ---- Customers and loyalty
   int defaultCreditLimit = 0; // centimes, 0 = no ceiling
   bool loyaltyEnabled = false;
   int loyaltyEarnPer = 10000; // centimes spent for 1 point (100 DA)
@@ -69,7 +69,7 @@ class Features extends ChangeNotifier {
   int loyaltyMinRedeem = 100; // points needed before redeeming
   int giftCardValidityDays = 365; // 0 = no expiry
 
-  // ---- Caisse
+  // ---- Till
   String? posDefaultCustomerId;
   String? posDefaultWarehouseId;
   List<String> posPaymentMethods = const ['cash', 'cib', 'edahabia', 'cheque', 'credit', 'gift'];

@@ -1,11 +1,11 @@
 part of '../analytics_screen.dart';
 
-// =================================================================== module « Explorateur »
+// =================================================================== « Explorateur » module
 
-/// Module « Explorateur » : le constructeur de vues. Reçoit les demandes du
-/// shell par [request] (vue à modifier, spec de départ avec titre/origine)
-/// et, en repli, celles du tableau de bord par [AnalyticsBus.pendingRequest].
-/// [onDone] montre le tableau de bord (« Voir sur le tableau de bord »).
+/// « Explorateur » module: the view builder. Receives requests from the
+/// shell via [request] (view to edit, starting spec with title/origin)
+/// and, as a fallback, those from the dashboard via [AnalyticsBus.pendingRequest].
+/// [onDone] shows the dashboard (« Voir sur le tableau de bord »).
 class AnalyticsExplorerScreen extends StatefulWidget {
   const AnalyticsExplorerScreen({super.key, required this.api, required this.session, required this.request, required this.onDone});
   final ApiClient api;
@@ -65,8 +65,8 @@ class _AnalyticsExplorerScreenState extends State<AnalyticsExplorerScreen> {
     });
   }
 
-  /// Ouvre une autre demande depuis l'explorateur lui-même (Mes vues,
-  /// Nouvelle vue) sans repasser par le shell.
+  /// Opens another request from the explorer itself (Mes vues,
+  /// Nouvelle vue) without going back through the shell.
   void _open(ExplorerRequest? r) {
     widget.request.removeListener(_onRequest);
     widget.request.value = r;
@@ -95,7 +95,7 @@ class _AnalyticsExplorerScreenState extends State<AnalyticsExplorerScreen> {
   }
 }
 
-// =================================================================== explorateur
+// =================================================================== explorer
 
 class ExplorerView extends StatefulWidget {
   const ExplorerView({super.key, required this.api, required this.session, required this.schema, this.request, required this.onOpen, required this.onShowDashboard});
@@ -110,10 +110,10 @@ class ExplorerView extends StatefulWidget {
   State<ExplorerView> createState() => _ExplorerViewState();
 }
 
-/// Sources mises en avant ; les autres sont sous « Plus ».
+/// Featured sources; the others are under « Plus ».
 const _kPrimarySources = ['sale_lines', 'stock_snapshot', 'purchase_lines', 'partner_ledger'];
 
-/// Mesure et découpage par défaut quand on change de sujet : jamais d'écran vide.
+/// Default measure and breakdown when the subject changes: never an empty screen.
 Map<String, dynamic>? _defaultMeasure(ASource s) {
   String? pick(List<String> keys) {
     for (final k in keys) {
@@ -145,7 +145,7 @@ List<String> _defaultDims(ASource s) => switch (s.key) {
 
 Map<String, dynamic> _defaultRange(ASource s) => s.dateField.isEmpty && s.key != 'product_performance' ? {'type': 'all'} : {'type': 'this_month'};
 
-/// Seau adapté à la période : jour ≤ 31 j, semaine ≤ 90 j, mois au-delà.
+/// Bucket suited to the period: day ≤ 31 d, week ≤ 90 d, month beyond.
 String _autoBucket(Map<String, dynamic> range) {
   final t = (range['type'] as String?) ?? 'this_month';
   final n = (range['n'] as num?)?.toInt() ?? 0;
@@ -191,7 +191,7 @@ String _autoBucket(Map<String, dynamic> range) {
   return 'day';
 }
 
-/// Une étape du chemin de détail (fil d'Ariane) : la vue AVANT le clic.
+/// One step of the drill-down path (breadcrumb): the view BEFORE the click.
 class _DrillStep {
   _DrillStep(this.label, this.spec, this.chartType);
   final String label;
@@ -199,10 +199,10 @@ class _DrillStep {
   final String? chartType;
 }
 
-/// Champs proposés en premier pour « détailler par… ».
+/// Fields offered first for « détailler par… ».
 const _kDrillFields = ['product_name', 'category_name', 'brand', 'partner_name', 'cashier_name', 'warehouse_name', 'payment_method', 'doc_type'];
 
-/// Périodes proposées quand le résultat est vide.
+/// Periods offered when the result is empty.
 const _kWiderRanges = <(String, Map<String, dynamic>)>[
   ('3 derniers mois', {'type': 'last_n_months', 'n': 3}),
   ('Cette année', {'type': 'this_year'}),
@@ -219,11 +219,11 @@ class _ExplorerViewState extends State<ExplorerView> with TickerProviderStateMix
   String? _compare; // null | previous_period | previous_year
   Map<String, int> _params = {};
   int _limit = 500;
-  Map<String, dynamic> _extra = {}; // clés de spec non éditées ici (sort, date_field, zero_fill)
-  Map<String, dynamic>? _comboSpec; // vue croisée (venue de l'IA ou d'une vue enregistrée) : non éditable ici
+  Map<String, dynamic> _extra = {}; // spec keys not edited here (sort, date_field, zero_fill)
+  Map<String, dynamic>? _comboSpec; // pivot view (from the AI or a saved view): not editable here
 
-  SavedReport? _report; // vue enregistrée en cours de modification
-  String? _title; // titre venu de la demande (autre module)
+  SavedReport? _report; // saved view being edited
+  String? _title; // title coming from the request (other module)
   String? _origin;
 
   AResult? _result;
@@ -238,7 +238,7 @@ class _ExplorerViewState extends State<ExplorerView> with TickerProviderStateMix
   bool _askCollapsed = false;
   bool _showGallery = false;
   bool _showLibrary = false;
-  bool _multiView = false; // après une réponse de l'IA : toutes les vues possibles, deux par ligne
+  bool _multiView = false; // after an AI answer: every possible view, two per row
   List<GalleryItem> _gallery = const [];
   List<_DrillStep> _drillPath = [];
 
@@ -321,7 +321,7 @@ class _ExplorerViewState extends State<ExplorerView> with TickerProviderStateMix
     _limit = s.key == 'product_performance' ? 20 : 500;
   }
 
-  /// Charge une spec (galerie, vue enregistrée, IA, autre module) dans le constructeur.
+  /// Loads a spec (gallery, saved view, AI, other module) into the builder.
   void _applySpec(Map<String, dynamic> spec, {bool silent = false}) {
     _extra = {
       for (final k in const ['sort', 'date_field', 'zero_fill'])
@@ -415,8 +415,8 @@ class _ExplorerViewState extends State<ExplorerView> with TickerProviderStateMix
     _schedule();
   }
 
-  /// Modification faite dans le constructeur : l'explication de l'IA ne
-  /// correspond plus, et un tri hérité pourrait viser une colonne disparue.
+  /// Change made in the builder: the AI explanation no longer
+  /// matches, and an inherited sort could target a column that is gone.
   void _edit(VoidCallback f) {
     _set(() {
       f();
@@ -425,7 +425,7 @@ class _ExplorerViewState extends State<ExplorerView> with TickerProviderStateMix
     });
   }
 
-  /// Change la période ; le seau de la dimension date suit (jour/semaine/mois).
+  /// Changes the period; the date dimension's bucket follows (day/week/month).
   void _setRange(Map<String, dynamic> r) {
     _set(() {
       _range = Map<String, dynamic>.from(r);
@@ -475,7 +475,7 @@ class _ExplorerViewState extends State<ExplorerView> with TickerProviderStateMix
     return chartTypeBlocker(t, r) == null ? t : 'table';
   }
 
-  // ---- libellés ------------------------------------------------------------------
+  // ---- labels ------------------------------------------------------------------
 
   String _fieldWord(String key) => (_source.field(key)?.labelFr ?? key).replaceAll(' (nom)', '');
 
@@ -485,7 +485,7 @@ class _ExplorerViewState extends State<ExplorerView> with TickerProviderStateMix
     return '${kAggLabels[m['agg'] ?? 'sum'] ?? m['agg']} · ${f?.labelFr ?? m['field']}';
   }
 
-  /// Nom proposé : celui de la vue, celui de la demande, celui de l'IA, ou
+  /// Suggested name: the view's, the request's, the AI's, or
   /// « Chiffre d'affaires TTC par jour ».
   String get _viewName {
     final n = _report?.name ?? _title ?? (_answer?.title.isNotEmpty == true ? _answer!.title : null);
@@ -498,7 +498,7 @@ class _ExplorerViewState extends State<ExplorerView> with TickerProviderStateMix
     return '$m par $by';
   }
 
-  // ---- détail (clic sur une ligne, une barre, une part) ----------------------------
+  // ---- drill-down (click on a row, a bar, a slice) ----------------------------
 
   Future<void> _drill(AColumn col, dynamic value) async {
     if (_comboSpec != null || value == null) return;
@@ -578,8 +578,8 @@ class _ExplorerViewState extends State<ExplorerView> with TickerProviderStateMix
     });
   }
 
-  /// Bornes (AAAA-MM-JJ) d'une valeur de seau : mois « 2026-09 », semaine
-  /// « 2026-09-07 » (premier jour), trimestre « 2026-Q3 », année « 2026 ».
+  /// Bounds (YYYY-MM-DD) of a bucket value: month « 2026-09 », week
+  /// « 2026-09-07 » (first day), quarter « 2026-Q3 », year « 2026 ».
   (String, String)? _bucketSpan(String bucket, String v) {
     switch (bucket) {
       case 'month':
@@ -643,7 +643,7 @@ class _ExplorerViewState extends State<ExplorerView> with TickerProviderStateMix
         _asking = false;
       });
       if (a.spec != null) {
-        _gen++; // annule toute requête en vol du constructeur
+        _gen++; // cancels any in-flight builder request
         setState(() {
           _applySpec(_deepCopy(a.spec!), silent: true);
           _chartType = a.chartType == 'auto' || a.chartType.isEmpty ? null : a.chartType;
@@ -694,7 +694,7 @@ class _ExplorerViewState extends State<ExplorerView> with TickerProviderStateMix
         }
         await Future.delayed(const Duration(milliseconds: 350));
         await _ask(q);
-        // laisse le temps de lire la réponse
+        // leaves time to read the answer
         for (var t = 0; t < 40 && mounted && _demo; t++) {
           await Future.delayed(const Duration(milliseconds: 100));
         }
@@ -704,7 +704,7 @@ class _ExplorerViewState extends State<ExplorerView> with TickerProviderStateMix
     }
   }
 
-  // ---- enregistrement ---------------------------------------------------------
+  // ---- saving ---------------------------------------------------------
 
   bool _canEdit(SavedReport? r) {
     if (r == null) return false;
@@ -814,7 +814,7 @@ class _ExplorerViewState extends State<ExplorerView> with TickerProviderStateMix
     } catch (_) {}
     if (!mounted) return;
     final editing = _canEditReport;
-    // tableaux de bord qui montrent déjà la vue modifiée (une copie n'y est pas)
+    // dashboards already showing the edited view (a copy is not on them)
     final onBoards = <String>{
       if (editing)
         for (final d in boards)
@@ -890,9 +890,9 @@ class _ExplorerViewState extends State<ExplorerView> with TickerProviderStateMix
     return exportResult(r, r.rows, _viewName, f);
   }
 
-  // ---- rendu -------------------------------------------------------------------
+  // ---- rendering -------------------------------------------------------------------
 
-  /// Un résultat « vide » : aucune ligne, ou un chiffre seul tout à zéro.
+  /// An « empty » result: no rows, or a single figure that is all zero.
   bool _isEmpty(AResult r) {
     if (r.rows.isEmpty) return true;
     if (r.dimensions.isNotEmpty) return false;
@@ -961,7 +961,7 @@ class _ExplorerViewState extends State<ExplorerView> with TickerProviderStateMix
             child: LayoutBuilder(
               builder: (context, box) {
                 final styleOpen = _showStyle && _result != null && !_showGallery && !_showLibrary && _effectiveChart != 'stat';
-                // petit écran : le panneau de style replie le constructeur pour laisser la place au résultat
+                // small screen: the style panel collapses the builder to make room for the result
                 final collapsed = _askCollapsed || (styleOpen && box.maxWidth < 1180);
                 return Row(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1070,9 +1070,9 @@ class _ExplorerViewState extends State<ExplorerView> with TickerProviderStateMix
     );
   }
 
-  /// Toutes les représentations possibles du résultat, deux par ligne. Un
-  /// clic sur l'une d'elles la met en pleine vue ; le bouton de la barre
-  /// d'outils ramène à la vue par défaut.
+  /// Every possible representation of the result, two per row. A
+  /// click on one makes it the full view; the toolbar button
+  /// brings back the default view.
   Widget _allChartsGrid(AResult r, String suggested) {
     final types = [
       for (final t in kChartTypes)
@@ -1153,7 +1153,7 @@ class _ExplorerViewState extends State<ExplorerView> with TickerProviderStateMix
     );
   }
 
-  /// Bandeau de la réponse de l'IA : ce qu'elle a compris, la période en mots.
+  /// AI answer banner: what it understood, the period in words.
   Widget? _answerBanner(AResult? r) {
     final a = _answer;
     if (a == null || a.spec == null || _answerHidden) return null;
@@ -1208,7 +1208,7 @@ class _ExplorerViewState extends State<ExplorerView> with TickerProviderStateMix
     );
   }
 
-  /// Résultat vide : on explique la période et on propose plus large.
+  /// Empty result: explain the period and suggest a wider one.
   Widget _emptyResult() {
     final hasPeriod = _comboSpec != null || _source.dateField.isNotEmpty || _source.key == 'product_performance';
     final noun = _comboSpec != null ? 'Aucune donnée' : emptyNoun(_source.key);
@@ -1319,7 +1319,7 @@ class _ExplorerViewState extends State<ExplorerView> with TickerProviderStateMix
         builder: (context, box) => Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // en-tête, affichages et messages : jamais plus de la moitié de la hauteur
+            // header, displays and messages: never more than half the height
             ConstrainedBox(
               constraints: BoxConstraints(maxHeight: box.maxHeight * 0.5),
               child: SingleChildScrollView(
@@ -1504,7 +1504,7 @@ class _ExplorerViewState extends State<ExplorerView> with TickerProviderStateMix
   }
 }
 
-// ------------------------------------------------------------------- aperçu d'une représentation
+// ------------------------------------------------------------------- preview of a representation
 
 class _ChartPreviewCard extends StatefulWidget {
   const _ChartPreviewCard({required this.type, required this.suggested, required this.onTap, required this.child});
@@ -1558,7 +1558,7 @@ class _ChartPreviewCardState extends State<_ChartPreviewCard> {
                 ],
               ),
               const SizedBox(height: 6),
-              // les aperçus sont en lecture seule : le clic sélectionne la vue
+              // previews are read-only: clicking selects the view
               Expanded(child: AbsorbPointer(child: widget.child)),
             ],
           ),
@@ -1568,7 +1568,7 @@ class _ChartPreviewCardState extends State<_ChartPreviewCard> {
   }
 }
 
-// ------------------------------------------------------------------- barre IA
+// ------------------------------------------------------------------- AI bar
 
 class _AiBar extends StatelessWidget {
   const _AiBar({
@@ -1596,8 +1596,8 @@ class _AiBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final a = answer;
-    // la réponse réussie s'affiche au-dessus du résultat ; ici seulement les
-    // demandes de précision et les échecs
+    // a successful answer is shown above the result; here only
+    // clarification requests and failures
     final note = a == null || asking
         ? null
         : a.clarification != null
@@ -1713,7 +1713,7 @@ class _AiBar extends StatelessWidget {
   }
 }
 
-/// Liseré lumineux tournant autour de la barre pendant que l'IA travaille.
+/// Glowing border running around the bar while the AI is working.
 class _GlowBorderPainter extends CustomPainter {
   _GlowBorderPainter({required this.progress, required this.active, required this.intensity});
   final double progress, intensity;

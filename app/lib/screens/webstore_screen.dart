@@ -27,9 +27,9 @@ import 'webstore/web_orders_tab.dart';
 
 export 'webstore/web_common.dart' show webField;
 
-/// « Boutique en ligne » — la vitrine `slug.shops.example.com` du magasin.
-/// Le catalogue part d'ici en SNAPSHOT (le site vit même PC éteint) et les
-/// commandes web reviennent ici en pull, comme les factures scannées.
+/// « Boutique en ligne » — the shop's `slug.shops.example.com` storefront.
+/// The catalogue leaves from here as a SNAPSHOT (the site lives on with the PC off) and
+/// web orders come back here by pull, like scanned invoices.
 ///
 /// Left: the module's own menu (sections grouped like Paramètres) with the
 /// two always-visible actions « Voir la boutique » and « Publier le

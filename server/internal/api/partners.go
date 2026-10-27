@@ -25,11 +25,11 @@ type Partner struct {
 	CreditLimit    *int64  `json:"credit_limit"`
 	Notes          *string `json:"notes"`
 	PriceLevel     string  `json:"price_level"`      // retail | wholesale
-	MinShelfDays   int64   `json:"min_shelf_days"`   // durée de vie restante minimale (jours)
-	OverReceiptPct int64   `json:"over_receipt_pct"` // tolérance de sur-réception, pct x100
+	MinShelfDays   int64   `json:"min_shelf_days"`   // minimum remaining shelf life (days)
+	OverReceiptPct int64   `json:"over_receipt_pct"` // over-receipt tolerance, pct x100
 	Active         bool    `json:"active"`
 	Balance        int64   `json:"balance"` // positive = the partner owes us
-	// Groupe de clients : tarif et remise appliqués quand le client est choisi.
+	// Customer group: price tier and discount applied when the customer is picked.
 	GroupID          *string `json:"group_id"`
 	GroupName        *string `json:"group_name"`
 	GroupPriceLevel  *string `json:"group_price_level"`  // retail | wholesale, nil = no group
@@ -229,9 +229,9 @@ func (s *Server) createPartner(w http.ResponseWriter, r *http.Request) {
 	if in.Active != nil {
 		active = *in.Active
 	}
-	// Plafond de crédit : un client sans plafond propre (NULL ou 0) suit le
-	// plafond par défaut du magasin (`default_credit_limit`, lu à la caisse) —
-	// changer ce réglage vaut donc pour tous ces clients, nouveaux compris.
+	// Credit limit: a customer without their own limit (NULL or 0) follows the
+	// shop's default limit (`default_credit_limit`, read at the till) —
+	// so changing that setting applies to all those customers, new ones included.
 	groupID, msg := s.partnerGroup(in.GroupID)
 	if msg != "" {
 		writeErr(w, http.StatusBadRequest, msg)

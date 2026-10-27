@@ -1,6 +1,6 @@
-// Modèles du module Analyses : schéma (liste blanche), spécification de
-// requête et résultat. La spec est un simple Map JSON envoyé tel quel au
-// serveur, qui est seul juge de sa validité.
+// Models of the Analyses module: schema (whitelist), query
+// specification and result. The spec is a plain JSON Map sent as-is to the
+// server, which alone decides whether it is valid.
 
 class AField {
   final String key, labelFr, labelAr, type, unit, format, group;
@@ -100,8 +100,8 @@ class ASchema {
 class AColumn {
   final String key, kind, field, label, format, unit, bucket, derived;
 
-  /// Le serveur peut dire si la colonne s'additionne (ligne « Total »). Absent
-  /// = deviné côté client d'après le format et le libellé ([isAdditive]).
+  /// The server may say whether the column is additive (« Total » row). Absent
+  /// = guessed client-side from the format and label ([isAdditive]).
   final bool? additive;
   AColumn.fromJson(Map<String, dynamic> j)
     : key = j['key'] as String,
@@ -115,12 +115,12 @@ class AColumn {
       additive = j['additive'] is bool ? j['additive'] as bool : null;
   bool get isDimension => kind == 'dimension';
   bool get isMeasure => kind == 'measure';
-  bool get isBase => derived.isEmpty; // ni prev/delta/share/cum
+  bool get isBase => derived.isEmpty; // nor prev/delta/share/cum
 
   static final _nonAdditive = RegExp(r'moyen|moyenne|min\b|max\b|distinct|unitaire|taux|%', caseSensitive: false);
   static final _countLike = RegExp(r'^(nombre|lignes)', caseSensitive: false);
 
-  /// Une somme de cette colonne a-t-elle un sens (ligne « Total ») ?
+  /// Does a sum of this column make sense (« Total » row)?
   bool get isAdditive {
     if (!isMeasure) return false;
     if (additive != null) return additive!;
@@ -176,7 +176,7 @@ class AResult {
 
   int colIndex(String key) => columns.indexWhere((c) => c.key == key);
 
-  /// Libellé d'une valeur de dimension (seau traduit si disponible).
+  /// Label of a dimension value (translated bucket if available).
   String labelOf(AColumn col, dynamic v) {
     if (v == null) return '—';
     final m = labels[col.key];
@@ -269,7 +269,7 @@ class Dashboard {
       globalRange = Map<String, dynamic>.from((j['global_range'] as Map?) ?? const {'type': 'this_month'});
 }
 
-/// Périodes relatives proposées dans l'interface (clé serveur → libellé).
+/// Relative periods offered in the UI (server key → label).
 const kRangeLabels = <String, String>{
   'today': "Aujourd'hui",
   'yesterday': 'Hier',
@@ -309,7 +309,7 @@ const kOpLabels = <String, String>{
   'is_not_null': 'est renseigné',
 };
 
-/// La période en mots simples, à placer dans une phrase : « ce mois-ci »,
+/// The period in plain words, to put in a sentence: « ce mois-ci »,
 /// « sur les 30 derniers jours », « du 2026-01-01 au 2026-03-31 ».
 String rangePhrase(Map<String, dynamic> r) {
   final t = (r['type'] as String?) ?? 'this_month';
@@ -335,14 +335,14 @@ String rangePhrase(Map<String, dynamic> r) {
 
 const _kMonthsShort = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
 
-/// « 2026-10-08 » → « 8 oct. 2026 » (laisse le texte tel quel s'il n'est pas une date).
+/// « 2026-10-08 » → « 8 oct. 2026 » (leaves the text as-is if it is not a date).
 String frDate(String iso) {
   final d = DateTime.tryParse(iso);
   if (d == null) return iso;
   return '${d.day} ${_kMonthsShort[d.month - 1]} ${d.year}';
 }
 
-/// Ce que la source compte, pour les messages vides : « Aucune vente ».
+/// What the source counts, for empty messages: « Aucune vente ».
 String emptyNoun(String source) => switch (source) {
   'sale_lines' || 'product_performance' => 'Aucune vente',
   'purchase_lines' => 'Aucun achat',

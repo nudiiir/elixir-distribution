@@ -51,7 +51,7 @@ class _PosSettingsSectionState extends State<PosSettingsSection> {
   String? _loadError;
 
   List<Warehouse> _warehouses = const [];
-  Partner? _customer; // client par défaut
+  Partner? _customer; // default customer
   String? _customerId;
   String? _warehouseId;
   Set<String> _payments = {};

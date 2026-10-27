@@ -228,7 +228,7 @@ class _ManagerCodeDialogState extends State<_ManagerCodeDialog> {
 }
 
 /// A 4–6 digit code entry: dots + numeric pad (mouse / touch) + keyboard
-/// digits, Retour arrière, Entrée.
+/// digits, Backspace, Enter.
 class PinPad extends StatefulWidget {
   const PinPad({
     super.key,

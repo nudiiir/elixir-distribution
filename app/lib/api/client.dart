@@ -134,7 +134,7 @@ class ApiClient {
     return User.fromJson(j);
   }
 
-  // ---- Rôles, code caisse, code du gérant (Users agent) ----
+  // ---- Roles, till code, manager code (Users agent) ----
 
   Future<List<Role>> roles() async {
     final j = await _get('/api/v1/roles');
@@ -154,20 +154,20 @@ class ApiClient {
   Future<Role> copyRole(String id) async =>
       Role.fromJson(await _post('/api/v1/roles/$id/copy') as Map<String, dynamic>);
 
-  /// Sets (4–6 digits) or removes ([pin] empty) a user's code caisse.
+  /// Sets (4–6 digits) or removes ([pin] empty) a user's till code.
   Future<User> setUserPin(String id, String pin) async =>
       User.fromJson(await _put('/api/v1/users/$id/pin', {'pin': pin}));
 
   /// Ends every session of that user (all machines).
   Future<void> logoutAll(String id) => _post('/api/v1/users/$id/logout-all');
 
-  /// Active users with a code caisse (« Changer de caissier »).
+  /// Active users with a till code (« Changer de caissier »).
   Future<List<PinUser>> pinUsers() async {
     final j = await _get('/api/v1/auth/pin-users');
     return [for (final e in j['items'] as List) PinUser.fromJson(e as Map<String, dynamic>)];
   }
 
-  /// Logs in with a code caisse; installs the new token on this client.
+  /// Logs in with a till code; installs the new token on this client.
   Future<Session> pinLogin(String userId, String pin) async {
     final j = await _post('/api/v1/auth/pin-login', {'user_id': userId, 'pin': pin});
     final session = Session(j['token'] as String, User.fromJson(j['user']));
@@ -225,7 +225,7 @@ class ApiClient {
     }
   }
 
-  // ---- Fiche produit + réception pro ----
+  // ---- Product record + pro reception ----
 
   Future<FicheData> ficheProduct(String id, {bool full = false}) async =>
       FicheData.fromJson(
@@ -237,7 +237,7 @@ class ApiClient {
       Product.fromJson(await _post('/api/v1/products/$id/split',
           {'warehouse_id': warehouseId, 'items': items}));
 
-  /// Dernier prix payé à ce fournisseur, par produit (centimes/unité de base).
+  /// Last price paid to this supplier, per product (centimes/base unit).
   Future<Map<String, int>> lastSupplierPrices(String partnerId) async {
     final j = await _get('/api/v1/purchases/last-prices', {'partner_id': partnerId});
     return {
@@ -246,17 +246,17 @@ class ApiClient {
     };
   }
 
-  /// Contrepassation d'un document validé (le numéro reste, l'erreur se voit).
+  /// Reversal of a posted document (the number stays, the error remains visible).
   Future<DocDetail> voidDocument(String id, {String reason = ''}) async =>
       DocDetail.fromJson(
           await _post('/api/v1/documents/$id/void', {'reason': reason}));
 
-  /// Clôture du reliquat d'un bon de commande.
+  /// Closes the backorder of a purchase order.
   Future<DocDetail> closeOrder(String id, {String reason = ''}) async =>
       DocDetail.fromJson(
           await _post('/api/v1/documents/$id/close', {'reason': reason}));
 
-  /// Écarts de rapprochement contre le document lié.
+  /// Reconciliation discrepancies against the linked document.
   Future<List<MatchExceptionRow>> matchDocument(String id) async {
     final j = await _get('/api/v1/documents/$id/match');
     return [
@@ -300,7 +300,7 @@ class ApiClient {
     return [for (final e in j['items'] as List) StockLevel.fromJson(e)];
   }
 
-  // ---- Écran Stock : journal, réapprovisionnement, documents de stock ----
+  // ---- Stock screen: ledger, replenishment, stock documents ----
 
   Future<StockLedger> stockLedger({
     String? from,
@@ -386,7 +386,7 @@ class ApiClient {
     return [for (final e in j['items'] as List) DocSummary.fromJson(e)];
   }
 
-  // ---- Pièces jointes des documents ----
+  // ---- Document attachments ----
 
   Future<List<DocAttachment>> documentAttachments(String docId) async {
     final j = await _get('/api/v1/documents/$docId/attachments');
@@ -396,7 +396,7 @@ class ApiClient {
     ];
   }
 
-  /// Envoie un fichier (5 Mo max) en pièce jointe d'un document.
+  /// Uploads a file (5 MB max) as an attachment to a document.
   Future<DocAttachment> addDocumentAttachment(
       String docId, String name, List<int> bytes) async {
     final res = await _client.post(
@@ -421,7 +421,7 @@ class ApiClient {
     await _delete('/api/v1/documents/$docId/attachments/$id');
   }
 
-  /// Échéancier d'un partenaire (FIFO) : factures ouvertes + avoir non affecté.
+  /// Partner payment schedule (FIFO): open invoices + unallocated credit.
   Future<PartnerOpenItems> partnerOpenItems(String partnerId) async =>
       PartnerOpenItems.fromJson(
           await _get('/api/v1/partners/$partnerId/open-items')
@@ -534,7 +534,7 @@ class ApiClient {
   Future<AResult> analyticsQuery(Map<String, dynamic> spec) async =>
       AResult.fromJson((await _post('/api/v1/analytics/query', spec)) as Map<String, dynamic>);
 
-  /// Retourne, par identifiant de tuile, soit un AResult soit un message d'erreur.
+  /// Returns, per tile id, either an AResult or an error message.
   Future<Map<String, Object>> analyticsBatch(List<MapEntry<String, Map<String, dynamic>>> queries,
       {Map<String, dynamic>? globalRange, String? globalWarehouseId}) async {
     final j = await _post('/api/v1/analytics/query/batch', {
@@ -562,9 +562,9 @@ class ApiClient {
     return [for (final e in j['items'] as List) GalleryItem.fromJson(e as Map<String, dynamic>)];
   }
 
-  /// Question en langage naturel → spec + résultat. Un 422 porte quand même
-  /// la réponse (spec proposée, clarification ou erreur) : on la rend telle
-  /// quelle plutôt que de lever.
+  /// Natural-language question → spec + result. A 422 still carries
+  /// the answer (proposed spec, clarification or error): we return it as
+  /// is rather than throwing.
   Future<AskAnswer> analyticsAsk(String question) async {
     final res = await _client.post(_u('/api/v1/analytics/ask'),
         headers: _headers, body: jsonEncode({'question': question}));
@@ -629,8 +629,8 @@ class ApiClient {
   }
 
   /// POS: creates AND posts a sale ticket in one call. Either one
-  /// [paymentMethod] or several [payments] rows (paiement mixte; the cash row
-  /// includes the timbre due on the cash part). A refused sale leaves no draft.
+  /// [paymentMethod] or several [payments] rows (mixed payment; the cash row
+  /// includes the stamp duty due on the cash part). A refused sale leaves no draft.
   Future<(DocDetail, List<PosPayment>)> posCheckout({
     required String warehouseId,
     required List<Map<String, dynamic>> lines,
@@ -657,7 +657,7 @@ class ApiClient {
     );
   }
 
-  /// POS: last tickets of the open caisse session (with their payment rows).
+  /// POS: last tickets of the open till session (with their payment rows).
   Future<List<PosRecentTicket>> posRecentTickets({int limit = 20}) async {
     final j = await _get('/api/v1/pos/recent', {'limit': '$limit'});
     return [
@@ -694,7 +694,7 @@ class ApiClient {
     await _post('/api/v1/gift-card-uses/$useId/refund');
   }
 
-  // ---- Caisse sessions ----
+  // ---- Till sessions ----
 
   Future<CaisseSession?> caisseCurrent() async {
     final j = await _get('/api/v1/caisse/current');
@@ -702,7 +702,7 @@ class ApiClient {
     return s == null ? null : CaisseSession.fromJson(s);
   }
 
-  /// Number of caisse sessions ever opened (the server returns the last 60).
+  /// Number of till sessions ever opened (the server returns the last 60).
   Future<int> caisseSessionCount() async {
     final j = await _get('/api/v1/caisse/sessions');
     return (j['items'] as List? ?? const []).length;
@@ -742,7 +742,7 @@ class ApiClient {
     return j['barcode'] as String;
   }
 
-  // ---- Produits : photos + modifications groupées ----
+  // ---- Products: photos + bulk edits ----
 
   /// Uploads a JPEG/PNG photo (max 2 Mo); returns the updated product.
   Future<Product> uploadProductImage(
@@ -910,7 +910,7 @@ class ApiClient {
     return [for (final e in j['items'] as List) AuditEntry.fromJson(e)];
   }
 
-  /// Journal d'activité with filters. [action] = exact key or a prefix
+  /// Activity log with filters. [action] = exact key or a prefix
   /// ending with '.' ("document."). [from]/[to] = UTC ISO timestamps
   /// ([to] exclusive) or YYYY-MM-DD (inclusive). Also returns the distinct
   /// action keys present in the journal.

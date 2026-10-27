@@ -5,11 +5,11 @@ import (
 	"fmt"
 )
 
-// Fidélité : 1 point par tranche de `loyalty_earn_per` centimes payés, gagné à
-// la validation d'une vente (ticket ou facture) avec un client ; un point vaut
-// `loyalty_point_value` centimes quand il est utilisé ; il en faut au moins
-// `loyalty_min_redeem` pour en utiliser. Le journal loyalty_ledger est
-// immuable : annuler une vente écrit une ligne inverse.
+// Loyalty: 1 point per `loyalty_earn_per` centimes paid, earned on
+// posting a sale (ticket or invoice) with a customer; a point is worth
+// `loyalty_point_value` centimes when redeemed; at least
+// `loyalty_min_redeem` are needed to redeem. The loyalty_ledger journal is
+// immutable: cancelling a sale writes a reversing line.
 
 // LoyaltyConfig is the shop's loyalty programme.
 type LoyaltyConfig struct {

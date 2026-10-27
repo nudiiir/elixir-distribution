@@ -17,7 +17,7 @@ class AppShortcut {
 /// Every shortcut of the app, grouped. Screens bind the ones of their group
 /// with [bindingsFor]; the « Raccourcis clavier » sheet lists them all.
 abstract final class AppShortcuts {
-  // Partout
+  // Everywhere
   static const search = AppShortcut('Partout', 'Ctrl+K', 'Recherche globale',
       SingleActivator(LogicalKeyboardKey.keyK, control: true));
   static const newDoc = AppShortcut('Partout', 'Ctrl+N', 'Nouveau (menu « + Nouveau »)',
@@ -35,7 +35,7 @@ abstract final class AppShortcuts {
       'Enregistrer et nouveau (fiche produit)',
       SingleActivator(LogicalKeyboardKey.enter, control: true, shift: true));
 
-  // Listes
+  // Lists
   static const listMove = AppShortcut('Listes', '↑ ↓', 'Changer de ligne', null);
   static const listOpen = AppShortcut('Listes', 'Entrée', 'Ouvrir la ligne', null);
   static const listSelect =
@@ -45,7 +45,7 @@ abstract final class AppShortcuts {
       'Produit suivant / précédent',
       SingleActivator(LogicalKeyboardKey.arrowDown, alt: true));
 
-  // Caisse
+  // Till
   static const posSearch = AppShortcut('Caisse', 'F3', 'Aller à la recherche',
       SingleActivator(LogicalKeyboardKey.f3));
   static const posHold = AppShortcut('Caisse', 'F4', 'Mettre le ticket en attente',

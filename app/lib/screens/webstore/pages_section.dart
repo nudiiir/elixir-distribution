@@ -5,7 +5,7 @@ import '../../util/feedback.dart';
 import '../../widgets/app_page.dart';
 import 'web_common.dart';
 
-/// « Pages » : content pages (À propos, Conditions de vente, Livraison…)
+/// « Pages » : content pages (« À propos », « Conditions de vente », « Livraison »…)
 /// shown in the menu and/or the footer.
 class PagesSection extends StatefulWidget {
   const PagesSection({super.key, required this.ctx});

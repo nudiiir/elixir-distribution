@@ -99,7 +99,7 @@ func rightLabel(key string) string {
 	return key
 }
 
-// ---- Approval (code du gérant) ----------------------------------------------
+// ---- Approval (manager code) ----------------------------------------------
 
 const approvalTTL = 2 * time.Minute
 
@@ -275,9 +275,9 @@ type SaleCheck struct {
 }
 
 // checkSaleRights runs the shared permission checks of a document (POS
-// checkout included): avoir → refund, date ≠ today → change_date, remises →
+// checkout included): credit note → refund, date ≠ today → change_date, discounts →
 // discount (+ max_discount_pct), stock adjustments → stock_adjust and, when
-// posting, crédit → credit_sale (+ max_credit, + the customer's own ceiling)
+// posting, credit → credit_sale (+ max_credit, + the customer's own ceiling)
 // and the approval_above amount. It writes the 403 (needs_approval when a
 // manager code can unlock it) and returns false when refused.
 func (s *Server) checkSaleRights(w http.ResponseWriter, r *http.Request, c SaleCheck) bool {
@@ -450,7 +450,7 @@ func applyWarehouseScope(r *http.Request) {
 	r.URL.RawQuery = q.Encode()
 }
 
-// ---- PIN (code caisse) --------------------------------------------------------
+// ---- PIN (till code) --------------------------------------------------------
 
 var pinRe = regexp.MustCompile(`^[0-9]{4,6}$`)
 

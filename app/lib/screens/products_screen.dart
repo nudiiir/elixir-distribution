@@ -67,11 +67,11 @@ class _ProductsScreenState extends State<ProductsScreen> {
   Set<String> _expiringSoon = const {};
   Map<String, String> _company = const {};
 
-  // Filtres mémorisés par utilisateur (UiPrefs).
+  // Filters remembered per user (UiPrefs).
   String? _warehouseFilter = UiPrefs.instance.get<String>(_pk, 'f_wh');
   String? _catFilter = UiPrefs.instance.get<String>(_pk, 'f_cat');
   String? _brandFilter = UiPrefs.instance.get<String>(_pk, 'f_brand');
-  String? _vatFilter = UiPrefs.instance.get<String>(_pk, 'f_vat'); // taux ×100 en texte
+  String? _vatFilter = UiPrefs.instance.get<String>(_pk, 'f_vat'); // rate ×100 as text
   String? _supplierFilter = UiPrefs.instance.get<String>(_pk, 'f_sup');
   String _status = UiPrefs.instance.get<String>(_pk, 'f_status') ?? 'active';
   String? _track = UiPrefs.instance.get<String>(_pk, 'f_track');
@@ -260,10 +260,10 @@ class _ProductsScreenState extends State<ProductsScreen> {
     } catch (_) {}
   }
 
-  // ---------------------------------------------------------------- calculs
+  // ---------------------------------------------------------------- calculations
 
-  // Cumuls par produit pour le dépôt filtré, recalculés seulement quand les
-  // niveaux ou le dépôt changent (les cellules et pastilles les lisent souvent).
+  // Per-product totals for the filtered depot, recomputed only when the
+  // levels or the depot change (cells and pills read them often).
   List<StockLevel>? _aggSrc;
   String? _aggWh;
   Map<String, int> _stockMap = const {};
@@ -294,20 +294,20 @@ class _ProductsScreenState extends State<ProductsScreen> {
     _aggWh = _warehouseFilter;
   }
 
-  /// Stock du produit pour le dépôt sélectionné (ou tous combinés).
+  /// Product stock for the selected depot (or all combined).
   int _stockOf(Product p) {
     _ensureAgg();
     return _stockMap[p.id] ?? 0;
   }
 
-  /// CMUP pour le dépôt sélectionné — moyenne pondérée quand « tous ». Tiret
-  /// (null) quand le stock est nul : une moyenne de rien n'est pas zéro.
+  /// Weighted average cost for the selected depot — weighted average when « tous ». Dash
+  /// (null) when stock is zero: an average of nothing is not zero.
   int? _cmupOf(Product p) {
     _ensureAgg();
     return _cmupMap[p.id];
   }
 
-  /// Marge sur PV_HT contre CMUP (spec §2.4) — en pct x100.
+  /// Margin on PV_HT against weighted average cost (spec §2.4) — in pct x100.
   int? _marginOf(Product p) {
     final cmup = _cmupOf(p);
     if (cmup == null || cmup <= 0) return null;
@@ -345,7 +345,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
         _ => false,
       };
 
-  /// Tous les filtres sauf la pastille rapide (sert aussi à compter les pastilles).
+  /// All filters except the quick pill (also used to count the pills).
   List<Product> get _base {
     final parents = _parentIds;
     final track = _track != null && _trackOn(_track!) ? _track : null;
@@ -379,7 +379,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
     return [for (final p in base) if (_quickMatch(_quick, p)) p];
   }
 
-  // ---------------------------------------------------------------- filtres
+  // ---------------------------------------------------------------- filters
 
   void _setPref(String key, Object? v) => UiPrefs.instance.set(_pk, key, v);
 
@@ -531,7 +531,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
               _setPref('f_brand', v);
             },
           ),
-        // Taux de Paramètres › Taxes.
+        // Rates from Paramètres › Taxes.
         if (_f.vatRates.length > 1)
           FilterField<String>(
             label: 'TVA',
@@ -1121,8 +1121,8 @@ class _ProductsScreenState extends State<ProductsScreen> {
               empty: _empty(),
               aggregates: (rows) {
                 if (!_viewCost) return const [];
-                // Valeur du stock + marge PONDÉRÉE par la valeur du stock —
-                // jamais une moyenne simple de pourcentages (spec §3.2).
+                // Stock value + margin WEIGHTED by stock value —
+                // never a plain average of percentages (spec §3.2).
                 var value = 0, weighted = 0;
                 for (final p in rows) {
                   final cmup = _cmupOf(p);
@@ -1150,7 +1150,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
   }
 }
 
-// ---------------- Dialogues des actions groupées ----------------
+// ---------------- Bulk action dialogs ----------------
 
 class _PickCategoryDialog extends StatefulWidget {
   const _PickCategoryDialog({required this.cats, required this.count});
@@ -1353,7 +1353,7 @@ class _PromoDialogState extends State<_PromoDialog> {
   }
 }
 
-/// Gestion des catégories (rayons) : ajouter, renommer, supprimer.
+/// Category (shelf) management: add, rename, delete.
 class _CategoriesDialog extends StatefulWidget {
   const _CategoriesDialog({required this.api});
   final ApiClient api;
@@ -1576,8 +1576,8 @@ class _CategoriesDialogState extends State<_CategoriesDialog> {
   }
 }
 
-/// Import CSV avec correspondance de colonnes et aperçu (spec §4.6, voie 3).
-/// Les produits avec quantité créent leur document « Stock initial ».
+/// CSV import with column mapping and preview (spec §4.6, path 3).
+/// Products with a quantity create their « Stock initial » document.
 class _ImportCsvDialog extends StatefulWidget {
   const _ImportCsvDialog({required this.api});
   final ApiClient api;
@@ -1589,7 +1589,7 @@ class _ImportCsvDialog extends StatefulWidget {
 class _ImportCsvDialogState extends State<_ImportCsvDialog> {
   List<List<String>> _rows = const [];
   String? _path;
-  // mapping: champ -> index de colonne (-1 = ignoré)
+  // mapping: field -> column index (-1 = ignored)
   final Map<String, int> _map = {
     'designation': -1,
     'barcode': -1,
@@ -1634,7 +1634,7 @@ class _ImportCsvDialogState extends State<_ImportCsvDialog> {
         _path = path;
         _rows = rows;
       });
-      // Auto-mapping par en-tête.
+      // Auto-mapping by header.
       if (rows.isNotEmpty) {
         final h = [for (final c in rows.first) c.toLowerCase()];
         void auto(String key, List<String> hints) {

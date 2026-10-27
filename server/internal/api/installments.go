@@ -9,9 +9,9 @@ import (
 	"elixir/server/internal/domain"
 )
 
-// Facilité de paiement: a plan splits a sale's total into monthly dues. The
+// Payment plan (« Facilité de paiement »): a plan splits a sale's total into monthly dues. The
 // debt itself lives in the partner ledger (the sale was posted on credit);
-// dues only schedule it, and each encaissement is a normal PAYMENT_IN the
+// dues only schedule it, and each collection is a normal PAYMENT_IN the
 // app posts alongside marking the due paid.
 
 type InstallmentDue struct {

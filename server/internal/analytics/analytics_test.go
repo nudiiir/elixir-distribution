@@ -14,7 +14,7 @@ import (
 	"elixir/server/internal/store"
 )
 
-// ---- base de test : schéma réel (migrations) + jeu minimal déterministe ----
+// ---- test database: real schema (migrations) + minimal deterministic data set ----
 
 func testDB(t *testing.T) (*sql.DB, *Engine) {
 	t.Helper()
@@ -40,8 +40,8 @@ func testDB(t *testing.T) (*sql.DB, *Engine) {
 	return rw, e
 }
 
-// Jeu : 2 produits, 1 dépôt, ventes en février et mars 2026 (mars = période
-// courante du test), un avoir, une réception avec lot.
+// Data set: 2 products, 1 depot, sales in February and March 2026 (March = current
+// period of the test), a credit note, a reception with a lot.
 func seedFixture(t *testing.T, db *sql.DB) {
 	t.Helper()
 	var wh string
@@ -70,7 +70,7 @@ func seedFixture(t *testing.T, db *sql.DB) {
 		exec(`INSERT INTO document_lines (id,document_id,position,product_id,description,qty_milli,unit_price,discount_pct,vat_rate,line_ht,line_vat,line_ttc,unit_cost,created_at)
 		      VALUES (?,?,0,?,?,?,?,0,0,?,0,?,?,?)`, id, doc, prod, prod, qty, price, ht, ht, cost, now)
 	}
-	// mars (période courante) : 3 ventes ARGAN + 1 retour ; février : 2 ventes
+	// March (current period): 3 ARGAN sales + 1 return; February: 2 sales
 	doc("S1", "SALE_TICKET", "2026-03-02", 10000, 8000, "Ali B")
 	line("L1", "S1", "P1", 2000, 5000, 4000, 10000)
 	doc("S2", "SALE_TICKET", "2026-03-02", 5000, 0, "Ali B")
@@ -83,7 +83,7 @@ func seedFixture(t *testing.T, db *sql.DB) {
 	line("L5", "F1", "P1", 1000, 5000, 4000, 5000)
 	doc("F2", "SALE_TICKET", "2026-02-20", 15000, 0, "Omar T")
 	line("L6", "F2", "P2", 1000, 15000, 10000, 15000)
-	// réception avec lot, stock
+	// reception with lot, stock
 	exec(`INSERT INTO documents (id,doc_type,number,status,doc_date,partner_id,warehouse_id,total_ht,total_ttc,posted_at,created_at,updated_at)
 	      VALUES ('B1','PURCHASE_RECEIPT','B1','posted','2026-02-01','SUP',?,40000,40000,'2026-02-01T08:00:00Z','2026-02-01T08:00:00Z','2026-02-01T08:00:00Z')`, wh)
 	line("L7", "B1", "P1", 10000, 4000, 4000, 40000)
@@ -119,7 +119,7 @@ func cell(r *Result, row int, key string) any {
 	return nil
 }
 
-// ---- tests dorés : SQL exact --------------------------------------------------
+// ---- golden tests: exact SQL --------------------------------------------------
 
 func TestGoldenSQL(t *testing.T) {
 	_, e := testDB(t)
@@ -143,13 +143,13 @@ func TestGoldenSQL(t *testing.T) {
 	if fmt.Sprint(args) != "[2026-03-01 2026-03-31 Alpha 100 11]" {
 		t.Fatalf("args: %v", args)
 	}
-	// l'alias client n'apparaît jamais dans le SQL
+	// the client alias never appears in the SQL
 	if strings.Contains(got, "Revenu") {
 		t.Fatal("alias client dans le SQL")
 	}
 }
 
-// ---- résultats dorés ----------------------------------------------------------------
+// ---- golden results ----------------------------------------------------------------
 
 func TestReturnsNetting(t *testing.T) {
 	_, e := testDB(t)
@@ -184,12 +184,12 @@ func TestZeroFillCardinality(t *testing.T) {
 	if len(r.Rows) != 24 {
 		t.Fatalf("hour = 24 seaux, %d", len(r.Rows))
 	}
-	// cartésien date × catégorie
+	// Cartesian date × category
 	r = run(t, e, Spec{Source: "sale_lines", Dimensions: []string{"doc_date:month", "doc_kind"}, Measures: []Measure{{Name: "ca_ttc"}}, Range: Range{Type: "last_n_months", N: 2}}, admin)
 	if len(r.Rows) != 4 {
 		t.Fatalf("2 mois × 2 doc_kind = 4, %d", len(r.Rows))
 	}
-	// une date non période (péremption) ne génère pas de domaine
+	// a non-period date (expiry) does not generate a domain
 	r = run(t, e, Spec{Source: "stock_snapshot", Dimensions: []string{"product_name", "nearest_expiry"}, Measures: []Measure{{Name: "references"}}, Range: Range{Type: "all"}}, admin)
 	if len(r.Rows) != 2 {
 		t.Fatalf("pas de remplissage sur une date attribut : %d lignes", len(r.Rows))
@@ -198,17 +198,17 @@ func TestZeroFillCardinality(t *testing.T) {
 
 func TestPreviousPeriodAlignment(t *testing.T) {
 	_, e := testDB(t)
-	// mars (31 j) vs février (28 j) : alignement par position, pas par date
+	// March (31 d) vs February (28 d): alignment by position, not by date
 	r := run(t, e, Spec{Source: "sale_lines", Dimensions: []string{"doc_date:day"}, Measures: []Measure{{Name: "ca_ttc"}},
 		Range: Range{Type: "this_month"}, Compare: "previous_period"}, admin)
 	if r.PrevRange == nil || r.PrevRange.From != "2026-01-29" || r.PrevRange.To != "2026-02-28" {
 		t.Fatalf("période précédente = 31 j finissant le 28/02, %v", r.PrevRange)
 	}
-	// 2 mars (position 1) doit être aligné sur la position 1 de la période précédente (30 janv.) : 0
+	// 2 March (position 1) must be aligned with position 1 of the previous period (30 Jan): 0
 	if toF(cell(r, 1, "m0")) != 15000 || cell(r, 1, "m0_prev") == nil || toF(cell(r, 1, "m0_prev")) != 0 {
 		t.Fatalf("alignement : cur=%v prev=%v", cell(r, 1, "m0"), cell(r, 1, "m0_prev"))
 	}
-	// total de la période précédente = 20000 (ventes de février)
+	// previous period total = 20000 (February sales)
 	var prevTotal float64
 	for i := range r.Rows {
 		prevTotal += toF(cell(r, i, "m0_prev"))
@@ -222,11 +222,11 @@ func TestUnitArithmetic(t *testing.T) {
 	_, e := testDB(t)
 	r := run(t, e, Spec{Source: "stock_snapshot", Dimensions: []string{"product_name"}, Measures: []Measure{{Name: "stock_value"}, {Name: "value_expiring"}},
 		Filters: []Filter{{Field: "product_name", Op: "eq", Value: "ARGAN SHAMPOOING"}}, Range: Range{Type: "all"}, Params: map[string]int{"expiry_days": 90}}, admin)
-	// 7 boîtes × 40,00 DA = 280,00 DA = 28000 centimes (pas 28 000 000)
+	// 7 boxes × 40.00 DA = 280.00 DA = 28000 centimes (not 28,000,000)
 	if toF(cell(r, 0, "m0")) != 28000 {
 		t.Fatalf("stock_value en centimes = 28000, %v", cell(r, 0, "m0"))
 	}
-	// lot A1 : 10 boîtes reçues, périme le 01/05 (< 15/03 + 90 j) → 10 × 40 DA = 40000 c
+	// lot A1: 10 boxes received, expires 01/05 (< 15/03 + 90 d) → 10 × 40 DA = 40000 c
 	if toF(cell(r, 0, "m1")) != 40000 {
 		t.Fatalf("value_expiring = %v", cell(r, 0, "m1"))
 	}
@@ -240,7 +240,7 @@ func TestProductPerformanceTemplate(t *testing.T) {
 	if len(r.Rows) != 2 {
 		t.Fatalf("2 produits, %d", len(r.Rows))
 	}
-	// ARGAN : vendu 3 (retour exclu par doc_kind='sale'), stock 7 → 3/(3+7) = 0.3
+	// ARGAN: sold 3 (return excluded by doc_kind='sale'), stock 7 → 3/(3+7) = 0.3
 	if toF(cell(r, 0, "m0")) != 3000 || toF(cell(r, 0, "m1")) != 7000 {
 		t.Fatalf("qty_sold=%v qty_on_hand=%v", cell(r, 0, "m0"), cell(r, 0, "m1"))
 	}
@@ -253,7 +253,7 @@ func TestProductPerformanceTemplate(t *testing.T) {
 
 func TestPermissions(t *testing.T) {
 	_, e := testDB(t)
-	// schéma : champs gardés absents
+	// schema: guarded fields absent
 	for _, s := range VisibleSchema(support) {
 		if s["key"] == "sale_lines" {
 			for _, f := range s["fields"].([]Field) {
@@ -268,24 +268,24 @@ func TestPermissions(t *testing.T) {
 			}
 		}
 	}
-	// mesure gardée dans la liste : retirée, signalée
+	// guarded measure in the list: removed, reported
 	r := run(t, e, Spec{Source: "sale_lines", Measures: []Measure{{Name: "ca_ttc"}, {Name: "margin"}}, Range: Range{Type: "this_month"}}, support)
 	if len(r.Columns) != 1 || len(r.Dropped) != 1 {
 		t.Fatalf("la marge doit être retirée et signalée : cols=%d dropped=%v", len(r.Columns), r.Dropped)
 	}
-	// HAVING sur une mesure gardée : refus, pas d'omission silencieuse
+	// HAVING on a guarded measure: refused, not silently dropped
 	_, err := e.Query(context.Background(), Spec{Source: "sale_lines", Measures: []Measure{{Name: "ca_ttc"}},
 		Having: []Having{{Measure: "margin_pct", Op: "lt", Value: 0}}, Range: Range{Type: "this_month"}}, support)
 	var ae *Error
 	if err == nil || !asErr(err, &ae) || ae.Code != "forbidden" {
 		t.Fatalf("HAVING gardé doit être refusé : %v", err)
 	}
-	// mesure gardée par view_cost : retirée pour le support, pas refusée
+	// measure guarded by view_cost: removed for support, not refused
 	r = run(t, e, Spec{Source: "sale_lines", Measures: []Measure{{Name: "margin"}, {Name: "ca_ttc"}}, Range: Range{Type: "this_month"}}, support)
 	if len(r.Columns) != 1 {
 		t.Fatal("margin doit être retirée pour le support")
 	}
-	// cache : deux rôles ne partagent jamais une entrée
+	// cache: two roles never share an entry
 	ra := run(t, e, Spec{Source: "sale_lines", Measures: []Measure{{Name: "ca_ttc"}, {Name: "margin"}}, Range: Range{Type: "this_month"}}, admin)
 	rs := run(t, e, Spec{Source: "sale_lines", Measures: []Measure{{Name: "ca_ttc"}, {Name: "margin"}}, Range: Range{Type: "this_month"}}, support)
 	if len(ra.Columns) == len(rs.Columns) {
@@ -301,7 +301,7 @@ func asErr(err error, target **Error) bool {
 	return ok
 }
 
-// ---- propriété : toute spec valide aléatoire s'exécute --------------------------
+// ---- property: any random valid spec runs --------------------------
 
 func TestPropertyRandomSpecs(t *testing.T) {
 	_, e := testDB(t)
@@ -364,14 +364,14 @@ func TestPropertyRandomSpecs(t *testing.T) {
 		if _, err := e.Query(context.Background(), sp, admin); err != nil {
 			var ae *Error
 			if asErr(err, &ae) {
-				continue // refus métier (ex. comparaison sans borne) : acceptable
+				continue // business refusal (e.g. comparison without bounds): acceptable
 			}
 			t.Fatalf("spec aléatoire #%d a échoué en SQL : %v\n%+v", i, err, sp)
 		}
 	}
 }
 
-// ---- injection : les chaînes client n'atteignent jamais le SQL ------------------
+// ---- injection: client strings never reach the SQL ------------------
 
 func TestInjectionNeverReachesSQL(t *testing.T) {
 	_, e := testDB(t)
@@ -394,7 +394,7 @@ func TestInjectionNeverReachesSQL(t *testing.T) {
 			Filters: []Filter{{Field: "product_name", Op: "contains", Value: p}}, Range: Range{Type: "all"}}, admin); err != nil {
 			t.Fatalf("exécution avec charge utile : %v", err)
 		}
-		// alias, tri, having, noms de source combo : refusés ou jamais dans le SQL
+		// alias, sort, having, combo source names: refused or never in the SQL
 		if _, err := e.Query(context.Background(), Spec{Source: "sale_lines", Measures: []Measure{{Name: "ca_ttc", As: p}}, Range: Range{Type: "all"}}, admin); err == nil {
 			t.Fatalf("alias %q accepté", p)
 		}
@@ -423,7 +423,7 @@ func TestInjectionNeverReachesSQL(t *testing.T) {
 			t.Fatalf("expression combinée %q acceptée", p)
 		}
 	}
-	// LIKE : % et _ tapés par l'utilisateur sont littéraux
+	// LIKE: % and _ typed by the user are literal
 	r := run(t, e, Spec{Source: "sale_lines", Measures: []Measure{{Name: "lines_count"}},
 		Filters: []Filter{{Field: "product_name", Op: "contains", Value: "%"}}, Range: Range{Type: "all"}}, admin)
 	if toF(cell(r, 0, "m0")) != 0 {
@@ -451,7 +451,7 @@ func TestComboSellThrough(t *testing.T) {
 	}
 	for _, row := range r.Rows {
 		if row[0] == "ARGAN SHAMPOOING" {
-			// vendu 4 (fév 1 + mars 3), acheté 10 → 0.4
+			// sold 4 (Feb 1 + Mar 3), bought 10 → 0.4
 			if v := toF(row[len(row)-1]); v < 0.39 || v > 0.41 {
 				t.Fatalf("écoulement ARGAN = %v", v)
 			}
@@ -480,7 +480,7 @@ func TestRelativeRanges(t *testing.T) {
 	now := time.Date(2026, 3, 15, 12, 0, 0, 0, time.Local)
 	cases := map[string][2]string{
 		"today": {"2026-03-15", "2026-03-15"}, "yesterday": {"2026-03-14", "2026-03-14"},
-		"this_week": {"2026-03-15", "2026-03-21"}, // 15/03/2026 est un dimanche, semaine débutant le dimanche
+		"this_week": {"2026-03-15", "2026-03-21"}, // 15/03/2026 is a Sunday, week starting on Sunday
 		"this_month": {"2026-03-01", "2026-03-31"}, "previous_month": {"2026-02-01", "2026-02-28"},
 		"this_quarter": {"2026-01-01", "2026-03-31"}, "previous_quarter": {"2025-10-01", "2025-12-31"},
 		"year_to_date": {"2026-01-01", "2026-03-15"},
@@ -495,12 +495,12 @@ func TestRelativeRanges(t *testing.T) {
 	if rs.From != "2026-01-30" {
 		t.Fatalf("last_45_days from %s", rs.From)
 	}
-	// semaine débutant le samedi (6) : le dimanche 15/03 appartient à la semaine du samedi 14/03
+	// week starting on Saturday (6): Sunday 15/03 belongs to the week of Saturday 14/03
 	rs, _ = Range{Type: "this_week"}.Resolve(now, 6)
 	if rs.From != "2026-03-14" {
 		t.Fatalf("this_week (samedi) from %s", rs.From)
 	}
-	// domaine dow tourné selon le début de semaine
+	// dow domain rotated according to the week start
 	dom := bucketDomain("dow", Resolved{}, 6, time.Local)
 	if dom[0] != int64(6) || dom[1] != int64(0) {
 		t.Fatalf("dow doit commencer au jour configuré : %v", dom)

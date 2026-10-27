@@ -20,7 +20,7 @@ import 'stock/reorder_tab.dart';
 import 'stock/stock_common.dart';
 import 'stock/stock_docs_tab.dart';
 
-/// Écran Stock : Niveaux de stock · Mouvements · Inventaire · Transferts ·
+/// Stock screen: Niveaux de stock · Mouvements · Inventaire · Transferts ·
 /// À commander · Dates de péremption · Ajustements. Each tab has its own
 /// labelled primary action in the page header. Remembers the last tab and
 /// depot (UiPrefs). Menu commands (see [ScreenCommand]): `tab:levels`,
@@ -101,7 +101,7 @@ class _StockScreenState extends State<StockScreen> {
         });
       }
     } catch (_) {
-      // les onglets affichent leur propre erreur de chargement
+      // the tabs show their own loading error
     }
     try {
       final s = await widget.api.settings();
@@ -273,7 +273,7 @@ class _StockScreenState extends State<StockScreen> {
     );
     if (f == null || !mounted) return;
     if (_tab != _Tab.levels) _select(_Tab.levels);
-    // la liste doit être construite (et chargée) avant d'être exportée
+    // the list must be built (and loaded) before it can be exported
     await WidgetsBinding.instance.endOfFrame;
     final st = _levelsKey.currentState;
     if (st == null) return;

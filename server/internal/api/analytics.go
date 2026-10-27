@@ -37,7 +37,7 @@ func writeAnalyticsErr(w http.ResponseWriter, err error) {
 	writeErr(w, http.StatusInternalServerError, err.Error())
 }
 
-// GET /analytics/schema — la liste blanche visible par le demandeur.
+// GET /analytics/schema — the whitelist visible to the requester.
 func (s *Server) analyticsSchema(w http.ResponseWriter, r *http.Request) {
 	if !s.can(r, "reports") {
 		forbid(w)
@@ -87,7 +87,7 @@ func (s *Server) analyticsBatch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"results": s.analytics.Batch(r.Context(), br, s.analyticsCaller(r))})
 }
 
-// ---- rapports enregistrés -------------------------------------------------------
+// ---- saved reports -------------------------------------------------------
 
 type savedReport struct {
 	ID          string          `json:"id"`
@@ -266,7 +266,7 @@ func (s *Server) deleteReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.db.Exec(`DELETE FROM saved_reports WHERE id = ?`, id)
-	// la vue disparaît aussi de tous les tableaux de bord qui l'affichaient
+	// the view also disappears from every dashboard that showed it
 	rows, err := s.db.Query(`SELECT id, layout_json FROM dashboards`)
 	if err == nil {
 		type upd struct{ id, layout string }
@@ -299,7 +299,7 @@ func (s *Server) deleteReport(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ---- tableaux de bord -----------------------------------------------------------
+// ---- dashboards -----------------------------------------------------------
 
 type dashboard struct {
 	ID                string          `json:"id"`

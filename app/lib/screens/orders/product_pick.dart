@@ -7,7 +7,7 @@ import '../../api/models.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/ui.dart';
 
-/// Search-and-pick a product (substitution, prix spécial, offre, quota…).
+/// Search-and-pick a product (substitution, special price, offer, quota…).
 Future<Product?> pickProduct(BuildContext context, ApiClient api, {String title = 'Choisir un produit'}) =>
     showDialog<Product>(context: context, builder: (_) => _ProductPickDialog(api: api, title: title));
 

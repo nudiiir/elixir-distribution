@@ -1,13 +1,13 @@
 part of '../analytics_screen.dart';
 
-// =================================================================== enregistrer la vue
+// =================================================================== save the view
 
 class _SaveChoice {
   _SaveChoice({required this.name, required this.shared, required this.target, required this.asCopy});
   final String name;
   final bool shared;
-  final String? target; // tableau de bord où ajouter la vue (null = ne pas ajouter)
-  final bool asCopy; // modification : enregistrer comme une nouvelle vue
+  final String? target; // dashboard to add the view to (null = do not add)
+  final bool asCopy; // editing: save as a new view
 }
 
 class _SaveDialog extends StatefulWidget {
@@ -15,7 +15,7 @@ class _SaveDialog extends StatefulWidget {
   final String initialName;
   final bool initialShared, editing;
   final List<Dashboard> boards;
-  final Set<String> onBoards; // tableaux de bord qui montrent déjà la vue
+  final Set<String> onBoards; // dashboards already showing the view
   final String? initialTarget;
   @override
   State<_SaveDialog> createState() => _SaveDialogState();
@@ -514,11 +514,11 @@ class _StylePanel extends StatelessWidget {
   }
 }
 
-// ------------------------------------------------------------------- couleurs conditionnelles
+// ------------------------------------------------------------------- conditional colours
 
-/// Éditeur des couleurs conditionnelles d'une colonne : échelle, barres,
-/// N premiers / derniers, règles de seuil. Tout est enregistré dans
-/// l'encodage de la vue (`cond`).
+/// Editor for a column's conditional colours: scale, bars,
+/// top / bottom N, threshold rules. Everything is saved in
+/// the view's encoding (`cond`).
 class _CondEditor extends StatefulWidget {
   const _CondEditor({required this.result, required this.encoding, required this.onChanged});
   final AResult result;
@@ -530,7 +530,7 @@ class _CondEditor extends StatefulWidget {
 
 class _CondEditorState extends State<_CondEditor> {
   String? _col;
-  int _gen = 0; // renouvelle les champs de saisie des règles après ajout/suppression
+  int _gen = 0; // refreshes the rule input fields after an add/remove
 
   List<AColumn> get _cols => [
     for (final c in widget.result.allMeasures)

@@ -44,10 +44,10 @@ type Product struct {
 	Barcodes        []string `json:"barcodes"`
 	BarcodesEx      []BarcodeEntry `json:"barcodes_ex"`
 	Packagings      []Packaging    `json:"packagings"`
-	// Kind: 'standard' | 'service' (un service ne bouge jamais le stock).
+	// Kind: 'standard' | 'service' (a service never moves stock).
 	Kind string `json:"kind"`
-	// ImageRev change à chaque ajout/suppression de photo (0 = aucune) ;
-	// le client s'en sert comme clé de cache (?v=rev).
+	// ImageRev changes on every photo add/delete (0 = none);
+	// the client uses it as a cache key (?v=rev).
 	ImageRev   int64  `json:"image_rev"`
 	ImageCount int64  `json:"image_count"`
 	CreatedAt  string `json:"created_at"`
@@ -61,7 +61,7 @@ type BarcodeEntry struct {
 	Label string `json:"label"`
 }
 
-// Packaging is a purchasing unit: carton = 24 pièces. Its own barcode, when
+// Packaging is a purchasing unit: carton = 24 pieces. Its own barcode, when
 // scanned at reception, selects the pack and its factor.
 type Packaging struct {
 	ID          string  `json:"id,omitempty"`
@@ -89,9 +89,9 @@ func scanProduct(row interface{ Scan(...any) error }) (Product, error) {
 		&p.DefaultSupplier, &p.Kind, &p.ImageRev, &p.ImageCount, &p.CreatedAt, &p.UpdatedAt)
 	p.IsWeighable, p.TrackLots, p.Active = weighable == 1, trackLots == 1, active == 1
 	p.TrackSerials, p.TrackExpiry = trackSerials == 1, trackExpiry == 1
-	// La colonne image_rev ne fait que croître (une photo supprimée puis une
-	// autre ajoutée ne réutilise jamais une clé de cache) ; le JSON dit 0
-	// quand il n'y a plus de photo.
+	// The image_rev column only ever grows (a deleted photo followed by
+	// another added one never reuses a cache key); the JSON says 0
+	// when there is no photo left.
 	if p.ImageCount == 0 {
 		p.ImageRev = 0
 	}
@@ -287,9 +287,9 @@ type productInput struct {
 	Barcodes        []string `json:"barcodes"`
 	BarcodesEx      []BarcodeEntry `json:"barcodes_ex"`
 	Packagings      []Packaging    `json:"packagings"`
-	// Kind: 'standard' (défaut) | 'service'. Absent à la mise à jour = inchangé.
+	// Kind: 'standard' (default) | 'service'. Absent on update = unchanged.
 	Kind *string `json:"kind"`
-	// Stock initial : crée et valide un document « Stock initial » à la création.
+	// Initial stock: creates and posts a « Stock initial » document on creation.
 	InitialQtyMilli    int64   `json:"initial_qty_milli"`
 	InitialWarehouseID *string `json:"initial_warehouse_id"`
 }
@@ -374,11 +374,11 @@ func (s *Server) createProduct(w http.ResponseWriter, r *http.Request) {
 		kind = *in.Kind
 	}
 	if kind == "service" {
-		// Un service n'a pas de stock : pas de stock initial.
+		// A service has no stock: no initial stock.
 		in.InitialQtyMilli = 0
 	}
-	// Le prix d'achat est obligatoire dès qu'une quantité initiale est saisie —
-	// un stock qui entre sans coût fausserait le CMUP dès le premier jour.
+	// The purchase price is mandatory as soon as an initial quantity is entered —
+	// stock coming in without a cost would skew the weighted average cost from day one.
 	if in.InitialQtyMilli > 0 && in.PurchasePrice <= 0 {
 		writeErr(w, http.StatusBadRequest,
 			"le prix d'achat est obligatoire quand une quantité initiale est saisie")
@@ -415,8 +415,8 @@ func (s *Server) createProduct(w http.ResponseWriter, r *http.Request) {
 	if in.Packagings != nil {
 		s.savePackagings(id, in.Packagings)
 	}
-	// Stock initial : un document, jamais une quantité posée à la main. Rien ne
-	// change le stock hors validation d'un document.
+	// Initial stock: a document, never a quantity set by hand. Nothing
+	// changes stock except posting a document.
 	if in.InitialQtyMilli > 0 {
 		if err := s.createInitialStock(r, id, in.Name, in.InitialQtyMilli,
 			in.PurchasePrice, in.InitialWarehouseID); err != nil {
@@ -455,8 +455,8 @@ func (s *Server) createInitialStock(r *http.Request, productID, name string,
 		docID, now[:10], whID, "Stock initial — "+name, now, now); err != nil {
 		return err
 	}
-	// La ligne d'un ajustement est signée ; unit_price porte le coût déclaré,
-	// que le posting valorise (ajustement entrant = entrée valorisée).
+	// An adjustment line is signed; unit_price carries the declared cost,
+	// which the posting values (incoming adjustment = valued receipt).
 	if _, err := tx.Exec(`INSERT INTO document_lines (id, document_id, position, product_id,
 			description, qty_milli, unit_price, discount_pct, vat_rate, pack_factor_milli, created_at)
 		VALUES (?, ?, 0, ?, ?, ?, ?, 0, 0, 1000, ?)`,
@@ -516,7 +516,7 @@ func (s *Server) updateProduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if in.Kind == nil {
-		// Ancien client : le type stocké reste.
+		// Old client: the stored kind is kept.
 		var k string
 		if s.db.QueryRow(`SELECT kind FROM products WHERE id = ?`, id).Scan(&k) == nil {
 			in.Kind = &k
@@ -529,9 +529,9 @@ func (s *Server) updateProduct(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, msg)
 		return
 	}
-	// Le prix d'achat n'est modifiable qu'à la création : ensuite seules les
-	// réceptions parlent (CMUP). On préserve la valeur stockée, quoi qu'envoie
-	// le client — même règle que la redaction view_cost.
+	// The purchase price can only be edited at creation: afterwards only
+	// receptions speak (weighted average cost). We keep the stored value, whatever
+	// the client sends — same rule as the view_cost redaction.
 	s.db.QueryRow(`SELECT purchase_price FROM products WHERE id = ?`, id).
 		Scan(&in.PurchasePrice)
 	// Price changes go to the journal.

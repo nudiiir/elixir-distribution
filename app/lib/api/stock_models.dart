@@ -101,12 +101,12 @@ class ReorderRow {
   final int minStockMilli;
   final int sold30Milli;
   final int avgDailyMilli;
-  final int? coverageDays; // null = aucune vente
+  final int? coverageDays; // null = no sales
   final String? supplierId;
   final String? supplierName;
-  final int lastUnitCost; // centimes HT / unité de base
+  final int lastUnitCost; // centimes excl. VAT / base unit
   final String? packName;
-  final int packFactorMilli; // 0 = pas de conditionnement
+  final int packFactorMilli; // 0 = no packaging
   final int targetMilli;
   final int suggestedMilli;
   final bool urgent;
@@ -149,7 +149,7 @@ class StockDoc {
   final int lineCount;
   final int inMilli;
   final int outMilli;
-  final int value; // valeur nette mouvementée dans le dépôt source
+  final int value; // net value moved in the source depot
   final String? createdBy;
   final String createdAt;
   final String updatedAt;

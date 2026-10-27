@@ -1,8 +1,8 @@
 part of '../analytics_screen.dart';
 
-// =================================================================== constructeur guidé
+// =================================================================== guided builder
 
-/// Opérateurs de filtre en mots simples.
+/// Filter operators in plain words.
 const _kOpWords = <String, String>{
   'eq': 'est',
   'ne': "n'est pas",
@@ -20,7 +20,7 @@ const _kOpWords = <String, String>{
   'is_not_null': 'est renseigné',
 };
 
-/// Facteur entre la valeur saisie (DA, quantité) et la valeur stockée.
+/// Factor between the typed value (DA, quantity) and the stored value.
 num _unitFactor(AField f) => switch (f.unit) {
   'centimes' => 100,
   'milli' => 1000,
@@ -41,7 +41,7 @@ String _numText(num v) {
 
 double? _parseNum(String s) => double.tryParse(s.trim().replaceAll(' ', '').replaceAll(' ', '').replaceAll(',', '.'));
 
-/// Format d'une mesure de la spec (pour convertir les seuils « Garder seulement… »).
+/// Format of a spec measure (to convert the « Garder seulement… » thresholds).
 String _measureFormat(ASource s, Map<String, dynamic> m) {
   if (m['name'] != null) return s.namedMeasure('${m['name']}')?.format ?? 'integer';
   final agg = '${m['agg'] ?? 'sum'}';
@@ -49,7 +49,7 @@ String _measureFormat(ASource s, Map<String, dynamic> m) {
   return s.field('${m['field']}')?.format ?? 'integer';
 }
 
-/// Valeur saisie (DA, quantité, %) → valeur du moteur (centimes, millièmes, ratio).
+/// Typed value (DA, quantity, %) → engine value (centimes, thousandths, ratio).
 double _toRaw(double v, String format) => switch (format) {
   'currency' => v * 100,
   'quantity' => v * 1000,
@@ -465,7 +465,7 @@ class _AskPanelState extends State<_AskPanel> {
     if (f == null) return;
     var key = f.key;
     if (f.isDate) {
-      // granularité automatique d'après la période ; modifiable en cliquant la puce
+      // automatic granularity from the period; changeable by clicking the chip
       key = '${f.key}:${f.key == source.dateField ? widget.autoBucket() : 'month'}';
     }
     widget.onChanged(() => widget.dims.add(key));
@@ -541,7 +541,7 @@ class _StepHeader extends StatelessWidget {
   }
 }
 
-/// Une étape numérotée du constructeur : titre, aide, puces, bouton « Ajouter ».
+/// A numbered step of the builder: title, help, chips, « Ajouter » button.
 class _Step extends StatelessWidget {
   const _Step({this.n, required this.title, this.help, required this.chips, required this.addLabel, this.onAdd});
   final int? n;
@@ -1054,7 +1054,7 @@ class _FilterDialogState extends State<_FilterDialog> {
 
 class _HavingDialog extends StatefulWidget {
   const _HavingDialog({required this.labels});
-  final List<(String, String, String)> labels; // ref, libellé, format
+  final List<(String, String, String)> labels; // ref, label, format
   @override
   State<_HavingDialog> createState() => _HavingDialogState();
 }

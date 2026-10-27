@@ -1,4 +1,4 @@
--- Serialized inventory (IMEI / N° de série), SAV repairs, installment plans,
+-- Serialized inventory (IMEI / serial no.), SAV repairs, installment plans,
 -- wholesale price tier, and DLC quantities on lots.
 
 ALTER TABLE products ADD COLUMN track_serials INTEGER NOT NULL DEFAULT 0;
@@ -13,7 +13,7 @@ CREATE TABLE product_units (
     serial          TEXT NOT NULL UNIQUE,
     status          TEXT NOT NULL DEFAULT 'in_stock'
                     CHECK (status IN ('in_stock','sold','returned','repair','scrapped')),
-    is_used         INTEGER NOT NULL DEFAULT 0,   -- trade-in / occasion
+    is_used         INTEGER NOT NULL DEFAULT 0,   -- trade-in / second-hand
     purchase_doc_id TEXT REFERENCES documents(id),
     sale_doc_id     TEXT REFERENCES documents(id),
     partner_id      TEXT REFERENCES partners(id), -- buyer, set at sale

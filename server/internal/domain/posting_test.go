@@ -153,14 +153,14 @@ func (f *fx) receive(prod string, qtyUnits, costCentimes int64) {
 
 func TestTimbreScale(t *testing.T) {
 	for _, c := range []struct{ ttc, want int64 }{
-		{30000, 0},           // 300 DA : exonéré
-		{30100, 500},         // 4 tranches → 4 DA → plancher 5 DA
+		{30000, 0},           // 300 DA: exempt
+		{30100, 500},         // 4 brackets → 4 DA → floor 5 DA
 		{100000, 1000},       // 1 000 DA → 10 DA
 		{3000000, 30000},     // 30 000 DA → 300 DA
-		{3000100, 45200},     // tranche à 1,5 DA : 301 × 1,5 = 451,5 → 452 DA
+		{3000100, 45200},     // 1.5 DA bracket: 301 × 1.5 = 451.5 → 452 DA
 		{10000000, 150000},   // 100 000 DA → 1 500 DA
-		{10000100, 200200},   // au-delà : 2 DA/tranche
-		{100000000, 1000000}, // plafond 10 000 DA
+		{10000100, 200200},   // beyond: 2 DA/bracket
+		{100000000, 1000000}, // ceiling 10 000 DA
 	} {
 		if got := domain.Timbre(c.ttc); got != c.want {
 			t.Errorf("Timbre(%d) = %d, want %d", c.ttc, got, c.want)
@@ -225,7 +225,7 @@ func TestCreditNoteCostAndSingleRefund(t *testing.T) {
 
 	tk := f.doc(dc{typ: domain.SaleTicket, partner: "C", method: "cash"}, ln{prod: "P", qty: 1000, price: 15000})
 	f.post(tk)
-	f.receive("P", 10, 20000) // CUMP moves on afterwards
+	f.receive("P", 10, 20000) // weighted average cost moves on afterwards
 
 	av := f.doc(dc{typ: domain.SaleCreditNote, partner: "C", method: "cash", ref: tk},
 		ln{prod: "P", qty: 1000, price: 15000})

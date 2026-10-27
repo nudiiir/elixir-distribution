@@ -20,10 +20,10 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-// OpenReadOnly ouvre un second pool, en lecture seule, sur le même fichier :
-// les analyses lisent en parallèle du writer (WAL) sans jamais se placer
-// devant une validation de vente. query_only interdit toute écriture même par
-// erreur de programmation.
+// OpenReadOnly opens a second, read-only pool on the same file:
+// analytics read in parallel with the writer (WAL) without ever getting
+// ahead of a sale posting. query_only forbids any write, even through a
+// programming error.
 func OpenReadOnly(path string, conns int) (*sql.DB, error) {
 	dsn := fmt.Sprintf(
 		"file:%s?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(5000)",

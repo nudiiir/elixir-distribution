@@ -42,7 +42,7 @@ class DocEditorConfig {
   bool get isSupplierInvoice => docType == 'PURCHASE_INVOICE';
   bool get isSaleInvoice => docType == 'SALE_INVOICE';
 
-  /// Transfert entre dépôts : pas de partenaire, quantités seulement.
+  /// Transfer between depots: no partner, quantities only.
   bool get isTransfer => docType == 'STOCK_TRANSFER';
 }
 
@@ -71,8 +71,8 @@ const purchaseOrderConfig = DocEditorConfig(
     partnerRequired: true,
     needsWarehouse: false,
     isPurchase: true);
-// Le fournisseur est obligatoire à la validation d'une réception : sans lui,
-// pas d'historique d'achat, pas de comparaison de prix, pas de compte.
+// The supplier is mandatory when posting a receipt: without it there is
+// no purchase history, no price comparison, no account.
 const purchaseReceiptConfig = DocEditorConfig(
     docType: 'PURCHASE_RECEIPT',
     title: 'Bon de réception',
@@ -90,8 +90,8 @@ const purchaseCreditNoteConfig = DocEditorConfig(
     title: 'Avoir fournisseur',
     partnerKind: 'supplier',
     isPurchase: true);
-// Transfert entre dépôts : pas de partenaire, dépôt source + destination,
-// quantités seulement (le coût suit le CMUP du dépôt source).
+// Transfer between depots: no partner, source + destination depot,
+// quantities only (the cost follows the source depot's weighted average cost).
 const stockTransferConfig = DocEditorConfig(
     docType: 'STOCK_TRANSFER',
     title: 'Transfert de stock',
@@ -127,7 +127,7 @@ class _EditLine {
             text: salePrice == null ? '' : editDA(salePrice));
 
   final String? productId;
-  final Product? product; // porte suivi lot/DLC, conditionnements, prix actuel
+  final Product? product; // carries lot/expiry tracking, packagings, current price
   final String description;
   final TextEditingController qtyCtrl;
   final TextEditingController priceCtrl;
@@ -136,10 +136,10 @@ class _EditLine {
   final TextEditingController lotCtrl;
   final TextEditingController saleCtrl;
   String? expiryDate; // YYYY-MM-DD
-  Packaging? packaging; // null = unité de base
+  Packaging? packaging; // null = base unit
   int vatRate;
 
-  /// Ligne libre (service, transport…) : pas de produit, pas de stock.
+  /// Free line (service, transport…): no product, no stock.
   bool get isFree => productId == null;
 
   int get qtyMilli => parseQty(qtyCtrl.text) ?? 0;
@@ -162,11 +162,11 @@ class _EditLine {
   int get lineVAT => roundDiv(lineHT * vatRate, 10000);
   int get lineTTC => lineHT + lineVAT;
 
-  /// Unités de base entrant en stock (qté + gratuit, converties par le pack).
+  /// Base units entering stock (qty + free units, converted by the pack).
   int get baseUnits => roundDiv((qtyMilli + qtyFreeMilli) * packFactor, 1000);
 
-  /// Coût effectif par unité de base : le net HT dilué par les gratuités.
-  /// C'est LE chiffre qui rend la marge honnête (79,17 et non 100).
+  /// Effective cost per base unit: the net excl. VAT diluted by the free units.
+  /// THE figure that keeps the margin honest (79.17, not 100).
   int? get effectiveCost {
     final u = baseUnits;
     if (u <= 0) return null;
@@ -200,19 +200,19 @@ class DocEditorScreen extends StatefulWidget {
   final DocEditorConfig config;
   final DocDetail? existing; // draft being edited
 
-  /// Bon de commande à réceptionner : pré-remplit les lignes avec le reliquat
-  /// et lie la réception (suivi des réceptions partielles).
+  /// Purchase order to receive: pre-fills the lines with the outstanding quantity
+  /// and links the receipt (tracking of partial receipts).
   final DocDetail? receiveFrom;
 
-  /// Nouveau document pré-rempli depuis un autre (Dupliquer, Convertir en…) :
-  /// partenaire, lignes et notes repris, date du jour.
+  /// New document pre-filled from another one (Dupliquer, Convertir en…):
+  /// partner, lines and notes carried over, today's date.
   final DocDetail? copyFrom;
 
-  /// Avec [copyFrom] : le nouveau document référence l'original
-  /// (devis → facture, BL → facture : le stock n'est pas sorti deux fois).
+  /// With [copyFrom]: the new document references the original
+  /// (quote → invoice, delivery note → invoice: stock does not go out twice).
   final bool linkToCopy;
 
-  /// Partenaire pré-sélectionné (« Nouvelle facture » depuis Partenaires).
+  /// Pre-selected partner (« Nouvelle facture » from Partners).
   final Partner? initialPartner;
 
   @override
@@ -230,10 +230,10 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
   Timer? _debounce;
   List<Product> _results = const [];
   bool _searching = false;
-  int _hi = -1; // résultat surligné au clavier
+  int _hi = -1; // result highlighted with the keyboard
 
   final List<_EditLine> _lines = [];
-  final List<_EditLine> _removed = []; // gardées pour « Annuler », libérées à la fin
+  final List<_EditLine> _removed = []; // kept for « Annuler », released at the end
   DateTime _date = DateTime.now();
   DateTime? _dueDate;
   Partner? _partner;
@@ -246,27 +246,27 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
   bool _busy = false;
   bool _showNotes = false;
 
-  /// Id du brouillon côté serveur, dès qu'il existe.
+  /// Server-side id of the draft, as soon as it exists.
   String? _docId;
   List<DocAttachment> _attachments = const [];
 
-  /// Erreurs par champ (partner, warehouse, dest, supplierRef, lines).
+  /// Errors per field (partner, warehouse, dest, supplierRef, lines).
   Map<String, String> _errors = const {};
 
-  /// Empreinte du document à l'ouverture : sert à détecter les modifications.
+  /// Fingerprint of the document when opened: used to detect changes.
   String? _initialSig;
 
-  /// Dernier prix payé à ce fournisseur, par produit (variance de coût).
+  /// Last price paid to this supplier, per product (cost variance).
   Map<String, int> _lastPrices = const {};
 
-  /// Stock et CMUP courants par produit — pour la marge « nouveau CMUP » live.
+  /// Current stock and weighted average cost per product — for the live « nouveau CMUP » margin.
   final Map<String, (int, int)> _stockNow = {}; // productId -> (qty, avg)
 
-  int _targetMarginPct = 3000; // marge cible (pct x100) pour le prix suggéré
+  int _targetMarginPct = 3000; // target margin (pct x100) for the suggested price
 
   DocEditorConfig get cfg => widget.config;
 
-  /// Échéance proposée : factures à crédit et factures fournisseur.
+  /// Proposed due date: credit invoices and supplier invoices.
   bool get _hasDueDate =>
       cfg.isSupplierInvoice ||
       (cfg.isSaleInvoice && cfg.hasPaymentMethod && _paymentMethod == 'credit');
@@ -276,7 +276,7 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
     super.initState();
     _docId = widget.existing?.id;
     _init();
-    // The page frame also autofocuses (for Échap): the scanner field wins.
+    // The page frame also autofocuses (for Escape): the scanner field wins.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _searchFocus.requestFocus();
     });
@@ -334,7 +334,7 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
       }
       _notesCtrl.text = ex.notes ?? '';
       _internalNotesCtrl.text = ex.internalNotes ?? '';
-      // Recharger les produits des lignes pour retrouver suivi lot/packagings.
+      // Reload the lines' products to recover lot tracking/packagings.
       final prods = <String, Product>{};
       for (final l in ex.lines) {
         if (l.productId != null && !prods.containsKey(l.productId)) {
@@ -377,7 +377,7 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
       if (!isCopy) _loadAttachments();
     }
 
-    // Réception d'un bon de commande : reliquat pré-rempli, lien conservé.
+    // Receiving a purchase order: outstanding quantity pre-filled, link kept.
     final from = widget.receiveFrom;
     if (from != null && widget.existing == null) {
       _refDocumentId = from.id;
@@ -410,7 +410,7 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
       _loadLastPrices();
     }
 
-    // Délai de paiement par défaut (Paramètres → payment_term_days).
+    // Default payment term (Paramètres → payment_term_days).
     if (widget.existing == null && _dueDate == null) {
       final days = Features.instance.paymentTermDays;
       if (days > 0) _termCtrl.text = '$days';
@@ -423,8 +423,8 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
 
     _showNotes = _notesCtrl.text.isNotEmpty || _internalNotesCtrl.text.isNotEmpty;
     if (mounted) setState(() {});
-    // Un document dupliqué/converti n'est pas encore enregistré : il compte
-    // comme modifié dès l'ouverture.
+    // A duplicated/converted document is not saved yet: it counts
+    // as modified from the moment it opens.
     _initialSig =
         widget.copyFrom != null || widget.receiveFrom != null ? '' : _signature();
   }
@@ -446,7 +446,7 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
       for (final l in levels) {
         if (_warehouseId != null && l.warehouseId != _warehouseId) continue;
         final prev = _stockNow[l.productId] ?? (0, 0);
-        // même dépôt : une seule ligne par produit, sinon on garde la première
+        // same depot: one line per product, otherwise keep the first one
         _stockNow[l.productId] = (prev.$1 + l.qtyMilli, l.avgCost);
       }
       if (mounted) setState(() {});
@@ -537,7 +537,7 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
   }
 
   Future<void> _onSearchSubmitted(String q) async {
-    // Entrée sur un résultat surligné : on l'ajoute.
+    // Enter on a highlighted result: add it.
     if (_searching && _hi >= 0 && _hi < _results.length) {
       _addProduct(_results[_hi]);
       return;
@@ -545,7 +545,7 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
     final raw = q.trim();
     if (raw.isEmpty) return;
 
-    // GS1-128 : un scan remplit produit, lot, DLC et quantité.
+    // GS1-128: one scan fills product, lot, expiry date and quantity.
     if (cfg.isReception) {
       final gs1 = parseGs1(raw);
       if (gs1 != null && gs1.gtin != null) {
@@ -566,7 +566,7 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
           ? exact.first
           : (items.length == 1 ? items.first : null);
       if (pick != null) {
-        // Le code du carton pré-sélectionne le conditionnement.
+        // The carton's barcode pre-selects the packaging.
         Packaging? pack;
         final hit = pick.packagings.where((k) => k.barcode == raw);
         if (hit.isNotEmpty) pack = hit.first;
@@ -575,8 +575,8 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
         return;
       }
       if (items.isEmpty && RegExp(r'^\d{6,14}$').hasMatch(raw)) {
-        // Code-barres inconnu : création en ligne, sans quitter la réception.
-        // Le moment le plus friction du flux entier — spec §7.2.
+        // Unknown barcode: inline creation, without leaving the receipt.
+        // The highest-friction moment of the whole flow — spec §7.2.
         await _quickCreate(raw);
         return;
       }
@@ -592,7 +592,7 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
 
   Future<void> _addFromGs1(Gs1Data gs1) async {
     try {
-      // On cherche par les 13 derniers chiffres significatifs du GTIN.
+      // Search by the last 13 significant digits of the GTIN.
       var code = gs1.gtin!;
       if (code.length == 14) code = code.substring(1);
       final items = await widget.api.products(q: code, limit: 5);
@@ -635,7 +635,7 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
     } catch (_) {}
   }
 
-  /// Création éclair d'un produit inconnu en pleine réception.
+  /// Quick creation of an unknown product in the middle of a receipt.
   Future<void> _quickCreate(String barcode,
       {String? lot, String? expiry, int? qty}) async {
     final created = await showDialog<Product>(
@@ -665,7 +665,7 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
   }
 
   void _addProduct(Product p, {Packaging? packaging}) {
-    // Vente à un client d'un groupe : tarif (demi-gros) et remise du groupe.
+    // Sale to a customer in a group: the group's price tier (semi-wholesale) and discount.
     final sale = !cfg.isPurchase && !cfg.isTransfer && cfg.partnerKind == 'customer';
     final wholesale = sale &&
         _partner?.effectivePriceLevel == 'wholesale' &&
@@ -700,7 +700,7 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
     _searchFocus.requestFocus();
   }
 
-  /// « + Ligne libre » : service, transport, frais… sans produit ni stock.
+  /// « + Ligne libre »: service, transport, fees… with no product or stock.
   Future<void> _addFreeLine() async {
     final r = await showDialog<_FreeLineResult>(
       context: context,
@@ -749,14 +749,14 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
   int get _totalTTC => _totalHT + _totalVAT + _timbre;
   int get _freight => parseDA(_freightCtrl.text) ?? 0;
 
-  /// Marge live d'une ligne de réception contre le NOUVEAU CMUP, gratuités et
-  /// frais compris — le chiffre qui fait réfléchir avant de valider.
+  /// Live margin of a receipt line against the NEW weighted average cost, free
+  /// units and fees included — the figure that makes you think before posting.
   ({int? newCmup, int? marginPct}) _lineMargin(_EditLine l) {
     var cost = l.effectiveCost;
     if (cost == null || l.productId == null) {
       return (newCmup: null, marginPct: null);
     }
-    // Frais d'approche au prorata de la valeur.
+    // Landed costs prorated by value.
     if (_freight > 0 && _totalHT > 0) {
       final alloc = roundDiv(_freight * l.lineHT, _totalHT);
       cost = roundDiv((l.lineHT + alloc) * 1000, l.baseUnits);
@@ -773,7 +773,7 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
     if (sale == null || sale <= 0 || newCmup <= 0) {
       return (newCmup: newCmup, marginPct: null);
     }
-    // PV_HT = PV_TTC / (1 + tva) — jamais de marge TTC contre un coût HT.
+    // PV_HT = PV_TTC / (1 + tva) — never a VAT-inclusive margin against a cost excl. VAT.
     final pvHT = roundDiv(sale * 10000, 10000 + l.vatRate);
     return (
       newCmup: newCmup,
@@ -781,14 +781,14 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
     );
   }
 
-  /// Prix suggéré : nouveau CMUP × (1 + marge cible) × (1 + TVA). Jamais
-  /// appliqué tout seul — un tap l'accepte.
+  /// Suggested price: new weighted average cost × (1 + target margin) × (1 + VAT). Never
+  /// applied on its own — one tap accepts it.
   int? _suggestedPrice(_EditLine l) {
     final m = _lineMargin(l);
     if (m.newCmup == null || m.newCmup! <= 0) return null;
     final ht = roundDiv(m.newCmup! * (10000 + _targetMarginPct), 10000);
     final ttc = roundDiv(ht * (10000 + l.vatRate), 10000);
-    // Arrondi du prix de vente des Paramètres (5 / 10 DA), sinon au dinar.
+    // Sale-price rounding from Settings (5 / 10 DA), otherwise to the dinar.
     if (Features.instance.priceRounding > 0) return Features.instance.roundPrice(ttc);
     return roundDiv(ttc, 100) * 100;
   }
@@ -905,7 +905,7 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
     return e;
   }
 
-  /// Un prix de vente sous le nouveau CMUP avertit, ne bloque pas.
+  /// A sale price below the new weighted average cost warns, does not block.
   Future<bool> _confirmBelowCost() async {
     if (!cfg.isReception) return true;
     final bad = <String>[];
@@ -951,7 +951,7 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
         final payload =
             _payload(acceptShort: acceptShort, acceptOver: acceptOver);
         if (!mounted) return;
-        // Remise / date / avoir hors droits → « Code du gérant » (approval.dart).
+        // Discount / date / credit note without the right → « Code du gérant » (approval.dart).
         final DocDetail draft = await withApproval(
             context,
             widget.api,
@@ -993,8 +993,8 @@ class _DocEditorScreenState extends State<DocEditorScreen> {
           nav.pop(true);
           return;
         } on ApiException catch (e) {
-          // Les acceptations explicites de la spec : courte durée de vie et
-          // sur-réception. Refus propre → confirmation → revalidation.
+          // The explicit acceptances of the spec: short shelf life and
+          // over-receipt. Clean refusal → confirmation → revalidation.
           if (!mounted) return;
           if (e.message.contains('durée de vie') && !acceptShort) {
             final ok = await confirmAction(context,
@@ -1871,7 +1871,7 @@ abstract final class _W {
   static const rTotal = 124.0;
 }
 
-/// Human file size (« 1,2 Mo »).
+/// Human-readable file size (« 1,2 Mo »).
 String fmtFileSize(int bytes) {
   if (bytes < 1024) return '$bytes o';
   if (bytes < 1024 * 1024) return '${(bytes / 1024).round()} Ko';
@@ -1966,7 +1966,7 @@ class _HeaderField extends StatelessWidget {
   }
 }
 
-/// TVA selectable per line: 19 / 9 / 0 % (plus the line's own rate if other).
+/// VAT selectable per line: 19 / 9 / 0 % (plus the line's own rate if other).
 class _VatDropdown extends StatelessWidget {
   const _VatDropdown({required this.line, required this.onChanged});
   final _EditLine line;
@@ -1974,7 +1974,7 @@ class _VatDropdown extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Taux de Paramètres › Taxes (+ celui de la ligne s'il n'y est plus).
+    // Rates from Paramètres › Taxes (+ the line's own if no longer listed there).
     final rates = {...Features.instance.vatRates, line.vatRate}.toList();
     return DropdownButtonHideUnderline(
       child: DropdownButton<int>(
@@ -2090,8 +2090,8 @@ class _TransferLineRow extends StatelessWidget {
   }
 }
 
-/// Ligne de réception sur deux étages : quantités/coûts en haut, lot/DLC et
-/// prix de vente + marge live en bas — la marge inclut gratuités et frais.
+/// Two-tier receipt line: quantities/costs on top, lot/expiry and
+/// sale price + live margin below — the margin includes free units and fees.
 class _ReceptionLineRow extends StatelessWidget {
   const _ReceptionLineRow({
     required this.line,
@@ -2218,7 +2218,7 @@ class _ReceptionLineRow extends StatelessWidget {
               ),
             ]),
           ),
-          // Date de péremption
+          // Expiry date
           InkWell(
             onTap: onPickExpiry,
             child: Container(
@@ -2258,8 +2258,8 @@ class _ReceptionLineRow extends StatelessWidget {
               ),
             ),
           const Spacer(),
-          // Prix de vente TTC — pré-rempli, jamais vide ; s'applique à TOUT le
-          // stock de ce produit dans ce dépôt (logique un-seul-prix).
+          // Sale price incl. VAT — pre-filled, never empty; applies to ALL the
+          // stock of this product in this depot (single-price logic).
           const MicroLabel('Prix de vente TTC'),
           const SizedBox(width: 8),
           SizedBox(
@@ -2490,8 +2490,8 @@ class _FreeLineDialogState extends State<_FreeLineDialog> {
   }
 }
 
-/// Création éclair d'un produit inconnu scanné en pleine réception : deux
-/// champs essentiels, le reste se complète plus tard sur la fiche.
+/// Quick creation of an unknown product scanned mid-receipt: two
+/// essential fields, the rest is completed later on the product page.
 class _QuickCreateDialog extends StatefulWidget {
   const _QuickCreateDialog({required this.api, required this.barcode});
   final ApiClient api;
@@ -2622,7 +2622,7 @@ class _QuickCreateDialogState extends State<_QuickCreateDialog> {
 
 // ---------------- Partner picker ----------------
 
-/// Shared partner picker dialog (search + list, ↑ ↓ Entrée, « + Nouveau
+/// Shared partner picker dialog (search + list, ↑ ↓ Enter, « + Nouveau
 /// client / fournisseur »). Returns the chosen — or just created — partner.
 Future<Partner?> showPartnerPicker(BuildContext context, ApiClient api,
     {String? kind}) {

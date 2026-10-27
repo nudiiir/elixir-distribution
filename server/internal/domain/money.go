@@ -31,10 +31,10 @@ func LineDiscount(unitPrice, qtyMilli, discountPct int64) int64 {
 	return gross - net
 }
 
-// Timbre computes the droit de timbre de quittance on a cash-paid sale, using
+// Timbre computes the stamp duty (droit de timbre de quittance) on a cash-paid sale, using
 // the progressive scale of the Code du timbre (art. 100-I as reworked by the
 // finance law that introduced art. 258 quinquies): nothing up to 300 DA, then
-// per started tranche of 100 DA — 1 DA up to 30 000 DA, 1,5 DA from 30 000 to
+// per started bracket of 100 DA — 1 DA up to 30 000 DA, 1.5 DA from 30 000 to
 // 100 000 DA, 2 DA beyond — rounded up to a whole DA, floor 5 DA, ceiling
 // 10 000 DA. Exempt for electronic payments (the caller decides by method).
 // TODO(fiscal): confirm the ceiling and the 5 DA floor against the current LF.

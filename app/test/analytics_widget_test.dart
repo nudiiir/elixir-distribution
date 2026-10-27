@@ -149,7 +149,7 @@ void main() {
     expect(find.text('1 sur 6 lignes'), findsOneWidget);
     await t.enterText(find.widgetWithText(TextField, 'Rechercher dans le tableau…'), '');
     await settle(t, 3);
-    // détail
+    // detail
     await t.tap(find.text('Produit 3'));
     await settle(t, 4);
     expect(find.text('Détailler « Produit 3 »'), findsOneWidget);
@@ -264,17 +264,17 @@ void main() {
     await t.pumpWidget(MaterialApp(home: Scaffold(body: AnalyticsDashboardScreen(api: api, session: session, onEdit: (_) {}, onNew: () {}))));
     await settle(t);
     expect(find.text('A'), findsOneWidget);
-    // l'explorateur ajoute C sur le serveur sans prévenir
+    // the explorer adds C on the server without notice
     await api.saveReport({'name': 'C', 'spec': {'source': 'sale_lines', 'dimensions': [], 'measures': [{'name': 'ca_ttc'}]}, 'chart_type': 'stat'});
     api.layout = [...api.layout, {'report_id': 'r3', 'x': 0, 'y': 4, 'w': 3, 'h': 2}];
-    // on retire A : la sauvegarde doit garder C
+    // we remove A: the save must keep C
     await t.tap(find.text('Actions').first);
     await settle(t, 4);
     await t.tap(find.text('Retirer du tableau de bord'));
     await settle(t, 8);
     expect([for (final x in api.layout) x['report_id']], unorderedEquals(['r2', 'r3']));
     expect(find.text('C'), findsWidgets);
-    // un bump recharge
+    // a bump reloads
     await api.saveReport({'name': 'D', 'spec': {'source': 'sale_lines', 'dimensions': [], 'measures': [{'name': 'ca_ttc'}]}, 'chart_type': 'stat'});
     api.layout = [...api.layout, {'report_id': 'r4', 'x': 0, 'y': 8, 'w': 3, 'h': 2}];
     AnalyticsBus.bump();

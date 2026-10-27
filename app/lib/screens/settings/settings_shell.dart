@@ -57,7 +57,7 @@ class SettingsEntry {
 }
 
 final settingsEntries = <SettingsEntry>[
-  // ---- Mon magasin
+  // ---- My shop
   SettingsEntry(
       id: 'company', group: 'Mon magasin', title: 'Entreprise', icon: Icons.storefront_outlined,
       subtitle: 'Nom, logo, NIF, coordonnées, mentions',
@@ -72,7 +72,7 @@ final settingsEntries = <SettingsEntry>[
       subtitle: 'Fonctions utilisées par votre commerce', adminOnly: true,
       keywords: 'modules fonctions lots péremption série imei poids variantes emballage demi-gros services boutique',
       builder: (c) => ProfileSection(ctx: c)),
-  // ---- Utilisateurs
+  // ---- Users
   SettingsEntry(
       id: 'users', group: 'Utilisateurs', title: 'Utilisateurs', icon: Icons.people_alt_outlined,
       subtitle: 'Comptes, mots de passe, code caisse', adminOnly: true,
@@ -83,7 +83,7 @@ final settingsEntries = <SettingsEntry>[
       subtitle: 'Qui peut faire quoi', adminOnly: true,
       keywords: 'rôle droits permissions accès remise crédit gérant code gérant approbation',
       builder: (c) => RolesSection(ctx: c)),
-  // ---- Ventes et documents
+  // ---- Sales and documents
   SettingsEntry(
       id: 'pos', group: 'Ventes et documents', title: 'Caisse', icon: Icons.point_of_sale_rounded,
       subtitle: 'Paiements, fond de caisse, ticket, arrondi',
@@ -104,7 +104,7 @@ final settingsEntries = <SettingsEntry>[
       subtitle: 'Modèles WhatsApp, SMS, e-mail ; envoi des e-mails',
       keywords: 'message whatsapp sms email e-mail modèle smtp relance suivi commande',
       builder: (c) => MessagesSection(ctx: c)),
-  // ---- Produits
+  // ---- Products
   SettingsEntry(
       id: 'products', group: 'Produits', title: 'Produits et stock', icon: Icons.inventory_2_outlined,
       subtitle: 'Prix, péremption, unités, marques, codes-barres',
@@ -114,7 +114,7 @@ final settingsEntries = <SettingsEntry>[
       id: 'taxes', group: 'Produits', title: 'Taxes', icon: Icons.percent_rounded,
       subtitle: 'Taux de TVA, timbre fiscal',
       keywords: 'tva taxe timbre fiscal taux', builder: (c) => TaxesSection(ctx: c)),
-  // ---- Matériel et connexions
+  // ---- Hardware and connections
   SettingsEntry(
       id: 'hardware', group: 'Matériel et connexions', title: 'Impression et matériel', icon: Icons.print_outlined,
       subtitle: 'Imprimantes, tiroir-caisse, balance (ce poste)',
@@ -125,7 +125,7 @@ final settingsEntries = <SettingsEntry>[
       subtitle: 'Connexion du magasin, téléphones, boutique en ligne', adminOnly: true,
       keywords: 'cloud relais téléphone mobile appairage qr boutique en ligne',
       builder: (c) => CloudSection(ctx: c)),
-  // ---- Données
+  // ---- Data
   SettingsEntry(
       id: 'backups', group: 'Données', title: 'Sauvegardes', icon: Icons.backup_outlined,
       subtitle: 'Sauvegarder, restaurer', adminOnly: true,
@@ -143,7 +143,7 @@ final settingsEntries = <SettingsEntry>[
       id: 'updates', group: 'Données', title: 'Mise à jour', icon: Icons.system_update_alt_rounded,
       subtitle: 'Version installée, rechercher une mise à jour',
       keywords: 'version mise à jour', builder: (c) => UpdatesSection(ctx: c)),
-  // ---- Moi
+  // ---- Me
   SettingsEntry(
       id: 'preferences', group: 'Moi', title: 'Mes préférences', icon: Icons.person_outline_rounded,
       subtitle: 'Taille du texte, page d’accueil, raccourcis',

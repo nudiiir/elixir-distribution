@@ -6,10 +6,10 @@ import (
 	"elixir/server/internal/domain"
 )
 
-// Fiche client distribution / CRM (0016) : champs ajoutés à partners, lus et
-// écrits par GET/POST/PUT /partners. Les champs absents d'un PUT restent
-// inchangés, pour que les écrans existants (qui ne les envoient pas) ne les
-// effacent pas.
+// Distribution / CRM customer record (0016): fields added to partners, read and
+// written by GET/POST/PUT /partners. Fields missing from a PUT stay
+// unchanged, so that existing screens (which do not send them) do not
+// erase them.
 
 var clientTypes = map[string]string{
 	"supermarket": "Supérette", "restaurant": "Restaurant", "hotel": "Hôtel", "wholesaler": "Grossiste",

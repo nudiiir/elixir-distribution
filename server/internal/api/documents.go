@@ -26,7 +26,7 @@ type DocumentLine struct {
 	LineVAT     int64   `json:"line_vat"`
 	LineTTC     int64   `json:"line_ttc"`
 	UnitCost    *int64  `json:"unit_cost"`
-	// Réception pro (spécification septembre 2026)
+	// Pro receiving (September 2026 specification)
 	QtyFreeMilli      int64   `json:"qty_free_milli"`
 	LotNumber         *string `json:"lot_number"`
 	ExpiryDate        *string `json:"expiry_date"`
@@ -34,7 +34,7 @@ type DocumentLine struct {
 	NewSalePrice      *int64  `json:"new_sale_price"`
 	QtyReceivedMilli  int64   `json:"qty_received_milli"`
 	QtyCancelledMilli int64   `json:"qty_cancelled_milli"`
-	// Inventaire : quantité théorique affichée au moment du comptage
+	// Inventory: theoretical quantity shown at counting time
 	ExpectedMilli *int64 `json:"expected_milli,omitempty"`
 }
 
@@ -68,8 +68,8 @@ type Document struct {
 	AcceptShort     bool    `json:"accept_short_dated"`
 	AcceptOver      bool    `json:"accept_over_receipt"`
 	InternalNotes   *string `json:"internal_notes"`
-	// Règlement dérivé (FIFO sur le compte partenaire) : '' quand le document
-	// ne crée ni créance ni dette.
+	// Derived settlement (FIFO on the partner account): '' when the document
+	// creates neither a receivable nor a payable.
 	Paid          int64          `json:"paid"`
 	Remaining     int64          `json:"remaining"`
 	PaymentStatus string         `json:"payment_status"`
@@ -766,7 +766,7 @@ func (s *Server) matchDocument(w http.ResponseWriter, r *http.Request) {
 			items = append(items, MatchException{Kind: "qty", ProductID: pid, Product: a.name,
 				This: a.qty, Ref: b.qty, Detail: "écart de quantité"})
 		}
-		// Prix unitaire effectif : valeur / quantité, en centimes par unité.
+		// Effective unit price: value / quantity, in centimes per unit.
 		if a.qty > 0 && b.qty > 0 {
 			pa := a.value * 1000 / a.qty
 			pb := b.value * 1000 / b.qty

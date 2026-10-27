@@ -181,7 +181,7 @@ class _DocDetailPageState extends State<DocDetailPage> {
         icon: Icons.task_alt_rounded);
     if (!ok || !mounted) return;
     await _run(() async {
-      // Sans « Valider » (ou au-delà d'une limite) : code du gérant.
+      // Without « Valider » (or beyond a limit): manager code.
       final posted = await withApproval(
           context, widget.api, () => widget.api.postDocument(widget.docId));
       _changed = true;
@@ -227,7 +227,7 @@ class _DocDetailPageState extends State<DocDetailPage> {
     if (saved && mounted) Navigator.of(context).pop(true);
   }
 
-  /// Clôture du reliquat : la fin normale de la plupart des bons de commande.
+  /// Closing the outstanding quantity: the normal end of most purchase orders.
   Future<void> _closeOrder() async {
     final reason = TextEditingController();
     final ok = await showDialog<bool>(
@@ -275,8 +275,8 @@ class _DocDetailPageState extends State<DocDetailPage> {
     });
   }
 
-  /// Différences contre le document lié (facture vs bon de réception, bon de
-  /// réception vs commande).
+  /// Differences against the linked document (invoice vs goods receipt, goods
+  /// receipt vs order).
   Future<void> _match() async {
     List<MatchExceptionRow> items = const [];
     await _run(() async {
@@ -348,7 +348,7 @@ class _DocDetailPageState extends State<DocDetailPage> {
     });
   }
 
-  /// One "bon de garantie" per product of the document sold with a warranty.
+  /// One "bon de garantie" (warranty slip) per product of the document sold with a warranty.
   Future<void> _printWarranty() async {
     final d = _doc;
     if (d == null || _busy) return;

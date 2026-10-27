@@ -41,8 +41,8 @@ class RunStatusChip extends StatelessWidget {
   }
 }
 
-/// « Livraisons » : tournées du jour (planning, feuille de route, résultats,
-/// clôture de caisse), tournées types, véhicules.
+/// « Livraisons »: today's delivery runs (planning, route sheet, results,
+/// cash closing), template routes, vehicles.
 /// Menu commands: `runs` · `new` · `routes` · `vehicles`.
 class DeliveriesScreen extends StatefulWidget {
   const DeliveriesScreen({super.key, required this.api, required this.user, this.command});

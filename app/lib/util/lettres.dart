@@ -19,13 +19,13 @@ String _under100(int n) {
     return '${tens[t]!}-${_units[u]}';
   }
   if (n < 80) {
-    // 60–79 : soixante, soixante et onze, soixante-douze…
+    // 60–79: soixante, soixante et onze, soixante-douze…
     final u = n - 60;
     if (u == 11) return 'soixante et onze';
     if (u == 1) return 'soixante et un';
     return u == 0 ? 'soixante' : 'soixante-${_units[u]}';
   }
-  // 80–99 : quatre-vingts, quatre-vingt-un, quatre-vingt-onze…
+  // 80–99: quatre-vingts, quatre-vingt-un, quatre-vingt-onze…
   final u = n - 80;
   if (u == 0) return 'quatre-vingts';
   return 'quatre-vingt-${_units[u]}';
@@ -64,7 +64,7 @@ String nombreEnLettres(int n) {
     if (milliers == 1) {
       parts.add('mille');
     } else {
-      // "cent" et "quatre-vingt" perdent leur s devant "mille".
+      // "cent" and "quatre-vingt" lose their s before "mille".
       var head = _under1000(milliers);
       if (head.endsWith('cents') || head.endsWith('vingts')) {
         head = head.substring(0, head.length - 1);

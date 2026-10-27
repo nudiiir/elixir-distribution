@@ -1,22 +1,22 @@
 part of '../analytics_screen.dart';
 
-// =================================================================== bus partagé
+// =================================================================== shared bus
 
-/// Signal partagé entre l'explorateur et le tableau de bord (deux modules qui
-/// restent vivants dans l'IndexedStack du shell). Chaque enregistrement,
-/// suppression ou ajout de vue appelle [bump] ; le tableau de bord écoute
-/// [revision] et se recharge, et relit avant toute modification si la
-/// révision a changé.
+/// Signal shared between the explorer and the dashboard (two modules that
+/// stay alive in the shell's IndexedStack). Every save,
+/// deletion or view addition calls [bump]; the dashboard listens to
+/// [revision] and reloads, and re-reads before any change if the
+/// revision has changed.
 class AnalyticsBus {
   AnalyticsBus._();
 
   static final revision = ValueNotifier<int>(0);
 
-  /// Tableau de bord affiché (ou demandé : « Voir sur le tableau de bord »).
+  /// Dashboard shown (or requested: « Voir sur le tableau de bord »).
   static final currentDashboardId = ValueNotifier<String?>(null);
 
-  /// Repli quand le shell ne fournit pas `onExplore` : le tableau de bord
-  /// dépose ici une demande « ouvrir une copie » que l'explorateur applique.
+  /// Fallback when the shell does not provide `onExplore`: the dashboard
+  /// drops an « ouvrir une copie » request here that the explorer applies.
   static final pendingRequest = ValueNotifier<ExplorerRequest?>(null);
 
   static int bump() => ++revision.value;
@@ -29,28 +29,28 @@ class AnalyticsBus {
   static String? get lastDashboardId => currentDashboardId.value ?? UiPrefs.instance.get<String>('analytics', 'dashboard');
 }
 
-/// Demande d'ouverture dans l'explorateur : une vue enregistrée à modifier
-/// ([report]) ou une spécification de départ ([seed], copie). [title] est le
-/// titre affiché et le nom proposé à l'enregistrement ; [origin] dit d'où
-/// vient la demande (« Depuis la fiche produit »).
+/// Request to open in the explorer: a saved view to edit
+/// ([report]) or a starting spec ([seed], copy). [title] is the
+/// displayed title and the name proposed when saving; [origin] says where
+/// the request comes from (« Depuis la fiche produit »).
 class ExplorerRequest {
   ExplorerRequest({this.report, this.seed, this.title, this.origin, this.chartType, this.encoding});
-  final SavedReport? report; // vue existante à modifier
-  final Map<String, dynamic>? seed; // spec de départ (copie)
-  final String? title; // titre affiché + nom proposé à l'enregistrement
+  final SavedReport? report; // existing view to edit
+  final Map<String, dynamic>? seed; // starting spec (copy)
+  final String? title; // displayed title + name proposed when saving
   final String? origin; // « Depuis la fiche produit »
-  final String? chartType; // affichage de départ d'une copie ('bar', 'table'…)
-  final Map<String, dynamic>? encoding; // style de départ d'une copie
+  final String? chartType; // starting display of a copy ('bar', 'table'…)
+  final Map<String, dynamic>? encoding; // starting style of a copy
 }
 
-/// Copie profonde d'une spec JSON (listes et maps imbriquées).
+/// Deep copy of a JSON spec (nested lists and maps).
 Map<String, dynamic> _deepCopy(Map<String, dynamic> m) => Map<String, dynamic>.from(jsonDecode(jsonEncode(m)) as Map);
 
 String _errText(Object e) => e is ApiException ? e.message : '$e';
 
-/// Ajoute la vue [reportId] en bas du tableau de bord [dashboardId] (relu
-/// juste avant pour ne rien écraser). Retourne le tableau de bord à jour,
-/// ou null s'il n'existe plus. Ne fait rien si la vue y est déjà.
+/// Appends view [reportId] at the bottom of dashboard [dashboardId] (re-read
+/// just before so nothing is overwritten). Returns the updated dashboard,
+/// or null if it no longer exists. Does nothing if the view is already there.
 Future<Dashboard?> _addTileToDashboard(ApiClient api, String dashboardId, String reportId, {bool small = false}) async {
   final ds = await api.dashboards();
   Dashboard? d;
@@ -71,7 +71,7 @@ Future<Dashboard?> _addTileToDashboard(ApiClient api, String dashboardId, String
 
 String _chartWord(String t) => t == 'auto' ? 'Automatique' : (kChartLabels[t] ?? t);
 
-// =================================================================== période
+// =================================================================== period
 
 class RangePicker extends StatelessWidget {
   const RangePicker({super.key, required this.value, required this.onChanged, this.allowAll = true});
@@ -184,8 +184,8 @@ class _DateButton extends StatelessWidget {
   }
 }
 
-/// Champ numérique entier : applique la valeur à la frappe (si valide) et
-/// suit la valeur reçue quand elle change ailleurs.
+/// Integer numeric field: applies the value as you type (if valid) and
+/// follows the incoming value when it changes elsewhere.
 class _NumField extends StatefulWidget {
   const _NumField({required this.value, required this.onChanged});
   final int value;
@@ -235,7 +235,7 @@ class _NumFieldState extends State<_NumField> {
   }
 }
 
-// =================================================================== petits dialogues
+// =================================================================== small dialogs
 
 Future<String?> _askName(BuildContext context, String title, {String initial = '', String confirm = 'Créer'}) {
   return showDialog<String>(
@@ -301,7 +301,7 @@ class _NameDialogState extends State<_NameDialog> {
   }
 }
 
-/// Choisir une vue enregistrée (pour l'ajouter à un tableau de bord).
+/// Pick a saved view (to add it to a dashboard).
 Future<SavedReport?> _pickSavedView(BuildContext context, List<SavedReport> reports, {Set<String> exclude = const {}, VoidCallback? onCreate}) {
   return showDialog<SavedReport>(
     context: context,

@@ -216,6 +216,6 @@ Future<void> webOrdersHeartbeat(ApiClient api, {required bool canManage}) async 
     }
     await syncWebOrderStatuses(api, c);
   } catch (_) {
-    // Hors ligne, pas de boutique… le prochain battement réessaiera.
+    // Offline, no store… the next heartbeat will retry.
   }
 }

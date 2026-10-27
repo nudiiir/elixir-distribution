@@ -106,7 +106,7 @@ abstract class _FormState<W extends StatefulWidget> extends State<W> {
 }
 
 // ---------------------------------------------------------------------------
-// Prix spécial
+// Special price
 // ---------------------------------------------------------------------------
 
 class SpecialPriceFormPage extends StatefulWidget {
@@ -254,7 +254,7 @@ class _SpecialPriceFormPageState extends _FormState<SpecialPriceFormPage> {
 }
 
 // ---------------------------------------------------------------------------
-// Offre / UG
+// Offer / free units
 // ---------------------------------------------------------------------------
 
 class PromoFormPage extends StatefulWidget {

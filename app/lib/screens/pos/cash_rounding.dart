@@ -1,17 +1,17 @@
 import '../../theme/tokens.dart';
 import '../../util/features.dart';
 
-/// Arrondi des espèces (Paramètres › Caisse) — exact mirror of the server's
+/// Cash rounding (Paramètres › Caisse) — exact mirror of the server's
 /// `cashRoundingDelta` (server/internal/api/ux_pos.go).
 ///
 /// The server records the rounding as a ticket line « Arrondi » (VAT 0): the
 /// ticket total is then exactly the cash that went into the drawer, so the
 /// X/Z reports and the sales figures stay exact.
 
-/// Whether the timbre is due on cash sales in this shop.
+/// Whether the stamp duty is due on cash sales in this shop.
 bool get posTimbreOn => Features.instance.timbreEnabled;
 
-/// Timbre on a cash amount, honouring the shop's timbre setting.
+/// Stamp duty on a cash amount, honouring the shop's stamp duty setting.
 int posTimbre(int cashGoods) =>
     posTimbreOn && cashGoods > 0 ? timbreFor(cashGoods) : 0;
 
@@ -22,7 +22,7 @@ int cashDueOf(int cashGoods, {bool? timbre}) {
 }
 
 /// The « Arrondi » amount (centimes, may be negative) to add to the goods
-/// paid in cash so that goods + arrondi + timbre is a multiple of [step],
+/// paid in cash so that goods + rounding + stamp duty is a multiple of [step],
 /// nearest to the unrounded amount. 0 when no rounding applies.
 int cashRoundingDelta(int cashGoods, int step, {bool? timbre}) {
   final on = timbre ?? posTimbreOn;

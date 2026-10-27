@@ -76,12 +76,12 @@ class _PosScreenState extends State<PosScreen> {
   int _parkedCount = 0;
   // « Rendu : X DA » of the last sale, shown until the next scan.
   int? _lastChange;
-  // Paramètres › Caisse : client proposé à chaque nouveau ticket.
+  // Paramètres › Caisse: customer suggested on each new ticket.
   Partner? _defaultClient;
-  // Groupe (tarif + remise) et points fidélité du client choisi.
+  // Group (price list + discount) and loyalty points of the chosen customer.
   PosCustomerInfo _clientInfo = const PosCustomerInfo();
   String? _clientInfoFor; // partner id _clientInfo belongs to
-  // Points fidélité utilisés sur ce ticket (ligne « Points fidélité »).
+  // Loyalty points used on this ticket (« Points fidélité » line).
   PosLoyaltyUse? _pointsUse;
   // Manager code already typed on this ticket (price change): sent with the
   // checkout so the manager is not asked twice.
@@ -113,7 +113,7 @@ class _PosScreenState extends State<PosScreen> {
     });
   }
 
-  /// The group's remise follows every line (lines with their own remise
+  /// The group's discount follows every line (lines with their own discount
   /// keep it).
   void _syncGroupDiscount() {
     final g = _clientInfo.groupDiscountPct;
@@ -220,7 +220,7 @@ class _PosScreenState extends State<PosScreen> {
     _searchFocus.requestFocus();
   }
 
-  // ---- Vider / retirer avec « Annuler » ----
+  // ---- Clear / remove with « Annuler » ----
 
   void _clearTicket() {
     if (_cart.isEmpty) return;
@@ -258,7 +258,7 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
-  // ---- Tickets en attente ----
+  // ---- Tickets on hold ----
 
   Future<void> _hold() async {
     if (_cart.isEmpty) {
@@ -322,7 +322,7 @@ class _PosScreenState extends State<PosScreen> {
     _searchFocus.requestFocus();
   }
 
-  // ---- Derniers tickets ----
+  // ---- Recent tickets ----
 
   Future<void> _showRecent() async {
     await showSidePanel<void>(
@@ -362,7 +362,7 @@ class _PosScreenState extends State<PosScreen> {
     _searchFocus.requestFocus();
   }
 
-  // ---- Clavier ----
+  // ---- Keyboard ----
 
   void _focusSearch() {
     _searchFocus.requestFocus();
@@ -410,13 +410,13 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   Future<void> _init() async {
-    // The caisse settings may have changed on another PC since start.
+    // The till settings may have changed on another PC since start.
     await _f.load(widget.api);
     try {
       final whs = await widget.api.warehouses();
       if (whs.isNotEmpty && mounted) {
         // A cashier limited to his depots sells from his own depot; else the
-        // dépôt de la caisse (Paramètres › Caisse), else the default depot.
+        // till's depot (Paramètres › Caisse), else the default depot.
         final own = widget.user.scope == 'warehouse'
             ? widget.user.defaultWarehouseId
             : null;
@@ -660,9 +660,9 @@ class _PosScreenState extends State<PosScreen> {
         _searchCtrl.clear();
         _search('');
       } else if (items.isEmpty && RegExp(r'^\d{6,14}$').hasMatch(q)) {
-        // Démarrage progressif : un code inconnu scanné au comptoir ouvre une
-        // création éclair — après trois semaines, les produits qui se vendent
-        // vraiment existent, sans jamais avoir bloqué une vente.
+        // Gradual start: an unknown code scanned at the counter opens a
+        // quick creation — after three weeks, the products that actually sell
+        // exist, without ever having blocked a sale.
         final created = await _quickCreateAtTill(q);
         if (created != null) {
           _addToCart(created);
@@ -676,7 +676,7 @@ class _PosScreenState extends State<PosScreen> {
     _searchFocus.requestFocus();
   }
 
-  /// Création éclair au comptoir : deux champs, la vente continue.
+  /// Quick creation at the counter: two fields, the sale goes on.
   Future<Product?> _quickCreateAtTill(String barcode) async {
     final name = TextEditingController();
     final price = TextEditingController();
@@ -859,7 +859,7 @@ class _PosScreenState extends State<PosScreen> {
     });
   }
 
-  /// Weight entry for "produit au poids" — returns milli-kg.
+  /// Weight entry for "produit au poids" (sold by weight) — returns milli-kg.
   Future<int?> _askWeight(Product p) async {
     final ctrl = TextEditingController();
     final result = await showDialog<int>(
@@ -955,7 +955,7 @@ class _PosScreenState extends State<PosScreen> {
     });
   }
 
-  /// Line editor: quantity, remise (right `discount`) and unit price (right
+  /// Line editor: quantity, discount (right `discount`) and unit price (right
   /// `price_edit`, else the manager's code).
   Future<void> _editQty(CartLine line) async {
     final ctrl = TextEditingController(text: fmtQty(line.qtyMilli));
@@ -1098,7 +1098,7 @@ class _PosScreenState extends State<PosScreen> {
     _searchFocus.requestFocus();
   }
 
-  /// Whole-ticket remise: same percentage on every line.
+  /// Whole-ticket discount: same percentage on every line.
   Future<void> _ticketDiscount() async {
     if (!_canDiscount || _cart.isEmpty) return;
     final ctrl = TextEditingController();
@@ -1178,7 +1178,7 @@ class _PosScreenState extends State<PosScreen> {
 
   /// Return flow: pick the original sale, choose the lines, refund in cash.
   Future<void> _startReturn({String? initialDocId}) async {
-    // Right `refund` (retour / avoir), else the manager's code.
+    // Right `refund` (return / credit note), else the manager's code.
     final grant = await posRequireRight(context, widget.api, _rights, 'refund');
     if (grant == null || !mounted) return;
     final refunded = await showDialog<DocDetail>(
@@ -1402,7 +1402,7 @@ class _PosScreenState extends State<PosScreen> {
             'discount_pct': l.effectiveDiscountPct,
             'vat_rate': l.product.vatRate,
           },
-        // Points fidélité: their value comes off the ticket as a line.
+        // Loyalty points: their value comes off the ticket as a line.
         if (points != null)
           {
             'product_id': null,
@@ -1413,7 +1413,7 @@ class _PosScreenState extends State<PosScreen> {
             'vat_rate': 0,
           },
       ];
-      // Remise above the cashier's limit, sale on credit beyond his rights
+      // Discount above the cashier's limit, sale on credit beyond his rights
       // or the customer's ceiling: the server asks for the manager's code.
       final pre = _pendingApproval;
       _pendingApproval = null;
@@ -1423,7 +1423,7 @@ class _PosScreenState extends State<PosScreen> {
         preApproved: pre,
         () => widget.api.posCheckout(
           warehouseId: _warehouseId!,
-          // A gift-card sale is not cash in the drawer: no method, no timbre —
+          // A gift-card sale is not cash in the drawer: no method, no stamp duty —
           // it is recorded as one « gift » payment row.
           paymentMethod: payments != null || _paymentMethod == 'gift'
               ? null
@@ -1809,7 +1809,7 @@ class _PosScreenState extends State<PosScreen> {
       return const Center(child: CircularProgressIndicator(color: T.mint));
     }
     if (_session == null) {
-      // Caisse fermée — gate before selling.
+      // Till closed — gate before selling.
       return Center(
         child: Container(
           width: 400,
@@ -2068,7 +2068,7 @@ class _PosScreenState extends State<PosScreen> {
                   ],
                 ),
                 const SizedBox(height: 12),
-                // Every caisse action, visible and labelled. Shortcuts stay
+                // Every till action, visible and labelled. Shortcuts stay
                 // as extras (shown as small key hints).
                 Wrap(
                   spacing: 8,
@@ -2448,7 +2448,7 @@ class _PosScreenState extends State<PosScreen> {
                   ),
                 ),
               ),
-              // Groupe du client (tarif + remise) et points fidélité.
+              // Customer group (price list + discount) and loyalty points.
               if (_client != null &&
                   (_clientInfo.groupName != null ||
                       (_f.loyaltyEnabled && _clientInfo.loyaltyEnabled)))
@@ -2815,7 +2815,7 @@ class _ProductTileState extends State<_ProductTile> {
   @override
   Widget build(BuildContext context) {
     final p = widget.product;
-    // A service is never « en rupture »: it does not live in stock.
+    // A service is never « en rupture » (out of stock): it does not live in stock.
     final out = widget.stockMilli <= 0 && !p.isService;
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
@@ -3263,7 +3263,7 @@ class _SerialDialogState extends State<_SerialDialog> {
   }
 }
 
-/// Cash-refund return: pick the sale, tick the lines, post the avoir.
+/// Cash-refund return: pick the sale, tick the lines, post the credit note.
 class _ReturnDialog extends StatefulWidget {
   const _ReturnDialog({
     required this.api,
@@ -3711,12 +3711,12 @@ class _PayChoice extends StatelessWidget {
   }
 }
 
-// ================= Caisse session dialogs =================
+// ================= Till session dialogs =================
 
 class _OpenCaisseDialog extends StatefulWidget {
   const _OpenCaisseDialog({required this.api, this.initialFloat = 0});
   final ApiClient api;
-  final int initialFloat; // fond de caisse proposé (Paramètres › Caisse)
+  final int initialFloat; // suggested opening float (Paramètres › Caisse)
 
   @override
   State<_OpenCaisseDialog> createState() => _OpenCaisseDialogState();

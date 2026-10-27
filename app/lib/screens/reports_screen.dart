@@ -29,7 +29,7 @@ const _paymentNames = {
   'autre': 'Autre (cadeau…)',
 };
 
-/// Rapports: CA, marges, TVA et ventilations sur une période.
+/// Reports: revenue, margins, VAT and breakdowns over a period.
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key, required this.api, required this.session});
   final ApiClient api;
@@ -201,7 +201,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         const SizedBox(height: 16),
         // ---- Summary cards ----
         Row(children: [
-          // net : avoirs déduits, timbre exclu (taxe, pas du chiffre d'affaires)
+          // net: credit notes deducted, stamp duty excluded (a tax, not revenue)
           _SumCard(label: 'CA net TTC', value: fmtDA(_num('net_ca_ttc')), loading: _loading),
           const SizedBox(width: 12),
           _SumCard(label: 'Tickets / factures', value: '${_num('tickets')}', loading: _loading),

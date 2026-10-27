@@ -1,7 +1,7 @@
--- Clients et fidélité (réglages « Clients et fidélité »).
+-- Customers and loyalty (« Clients et fidélité » settings).
 --
--- Groupes de clients : un tarif (détail / demi-gros) et une remise par défaut
--- appliqués quand le client est choisi sur une vente.
+-- Customer groups: a price tier (retail / semi-wholesale) and a default discount
+-- applied when the customer is picked on a sale.
 CREATE TABLE customer_groups (
   id           TEXT PRIMARY KEY,
   name         TEXT NOT NULL UNIQUE,
@@ -14,12 +14,12 @@ CREATE TABLE customer_groups (
 ALTER TABLE partners ADD COLUMN group_id TEXT REFERENCES customer_groups(id);
 CREATE INDEX idx_partners_group ON partners(group_id);
 
--- Points de fidélité : journal immuable, comme tout autre mouvement. Le solde
--- d'un client est la somme de ses lignes.
---   earn   : points gagnés à la validation d'une vente (positif)
---   redeem : points utilisés à la caisse (négatif)
---   void   : annulation (document annulé, ou utilisation annulée via ref_id)
---   adjust : correction manuelle
+-- Loyalty points: immutable ledger, like any other movement. A customer's
+-- balance is the sum of their rows.
+--   earn   : points earned when a sale is posted (positive)
+--   redeem : points spent at the till (negative)
+--   void   : cancellation (document cancelled, or redemption cancelled via ref_id)
+--   adjust : manual correction
 CREATE TABLE loyalty_ledger (
   id          TEXT PRIMARY KEY,
   partner_id  TEXT NOT NULL REFERENCES partners(id),

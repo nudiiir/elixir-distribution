@@ -1,12 +1,12 @@
--- 0013: rôles éditables (permissions + limites + périmètre) et fiche
--- utilisateur complète (téléphone, email, dépôts, code caisse, sessions).
+-- 0013: editable roles (permissions + limits + scope) and full
+-- user record (phone, email, depots, till code, sessions).
 --
--- Les clés de permission : <module>.view|create|edit|cancel|validate|export|print
--- et les droits particuliers (view_cost, discount, credit_sale…). Le serveur
--- dérive l'ancienne clé de module (« sales ») de « sales.view ».
--- Limites (limits_json) : max_discount_pct (×100), max_credit (centimes),
--- approval_above (centimes) — 0 = pas de limite.
--- Le rôle Administrateur (role-admin) a TOUT, quoi que contienne perms_json.
+-- Permission keys: <module>.view|create|edit|cancel|validate|export|print
+-- and the special rights (view_cost, discount, credit_sale…). The server
+-- derives the old module key (« sales ») from « sales.view ».
+-- Limits (limits_json): max_discount_pct (×100), max_credit (centimes),
+-- approval_above (centimes) — 0 = no limit.
+-- The Administrateur role (role-admin) has EVERYTHING, whatever perms_json contains.
 
 CREATE TABLE roles (
   id          TEXT PRIMARY KEY,

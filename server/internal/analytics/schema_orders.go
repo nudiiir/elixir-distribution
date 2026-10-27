@@ -1,8 +1,8 @@
 package analytics
 
-// Source « Commandes clients » (distribution, migration 0016) : une ligne par
-// ligne de commande, vue v_customer_order_lines. Enregistrée après les
-// sources historiques (le fichier suit schema.go dans l'ordre d'init).
+// « Commandes clients » source (distribution, migration 0016): one row per
+// order line, view v_customer_order_lines. Registered after the
+// historical sources (this file follows schema.go in init order).
 func init() {
 	register(&Source{
 		Key: "customer_orders", LabelFR: "Commandes clients", LabelAR: "طلبيات الزبائن", Icon: "assignment",
