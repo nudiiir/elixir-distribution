@@ -8,7 +8,9 @@ import 'package:http/http.dart' as http;
 const kAppVersion = '0.4.0';
 
 /// Dépôt public qui porte les installateurs (GitHub Releases).
-const kReleaseRepo = 'OWNER/elixir-gestion-releases';
+/// GitHub "owner/name" of the releases repository. Empty in the public
+/// build, which turns the update check off.
+const kReleaseRepo = '';
 
 class UpdateInfo {
   UpdateInfo({required this.version, required this.clientUrl, this.serverUrl});
@@ -33,6 +35,7 @@ bool isNewer(String remote, String local) {
 
 /// Interroge GitHub ; renvoie null si on est à jour (ou hors ligne).
 Future<UpdateInfo?> checkForUpdate() async {
+  if (kReleaseRepo.isEmpty) return null;
   try {
     final r = await http.get(
       Uri.parse('https://api.github.com/repos/$kReleaseRepo/releases/latest'),

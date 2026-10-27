@@ -8,6 +8,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -17,14 +18,14 @@ import (
 	"elixir/server/internal/domain"
 )
 
-// Where the cloud lives. Baked into the build on purpose: a shopkeeper should
-// never type a service URL, and support should never have to ask what someone
-// pasted. Overridable by environment for development only.
-const (
-	defaultRelayURL   = "https://relay.example.com"
-	defaultLLMURL     = "https://llm.example.com"
-	defaultInvoiceURL = "https://invoice.example.com"
-	defaultWebURL     = "https://web.example.com"
+// Where the cloud services live. Not baked in for this public build: point
+// them at your own deployment with these environment variables (or the
+// matching settings rows). Left empty, the cloud features stay off.
+var (
+	defaultRelayURL   = os.Getenv("STOCK_RELAY_BASE")
+	defaultLLMURL     = os.Getenv("STOCK_LLM_URL")
+	defaultInvoiceURL = os.Getenv("STOCK_INVOICE_URL")
+	defaultWebURL     = os.Getenv("STOCK_WEB_URL")
 )
 
 func settingOr(cfg map[string]string, key, fallback string) string {
