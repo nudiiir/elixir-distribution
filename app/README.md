@@ -1,3 +1,3 @@
-# elixir_app
+# Elixir Distribution app
 
-A new Flutter project.
+Flutter client for Elixir Distribution: Windows desktop and Android from one codebase. See the [main README](../README.md).
